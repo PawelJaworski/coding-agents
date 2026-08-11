@@ -65,6 +65,32 @@ function parseMd(file) {
   return items;
 }
 
+// ---------------------------------------------------------------------------
+// 1b. Field consistency helpers
+// ---------------------------------------------------------------------------
+
+// A field wrapped in [...] is an explicitly-documented deviation (calculated
+// or system-generated, not a direct passthrough from upstream) — see
+// "Diagram consistency" in SKILL.md. It is exempt from the match check below.
+function isBracketedField(f) {
+  const t = String(f).trim();
+  return t.startsWith('[') && t.endsWith(']');
+}
+
+// Normalize a field for comparison: trim, strip an enclosing [...] wrapper
+// (so "[policy number]" and "policy number" are considered the same field),
+// lowercase. Simple case-insensitive exact-string match — no fuzzy matching.
+function normalizeField(f) {
+  let t = String(f).trim();
+  if (isBracketedField(t)) t = t.slice(1, -1).trim();
+  return t.toLowerCase();
+}
+
+function hasMatchingField(field, upstreamFieldsList) {
+  const target = normalizeField(field);
+  return upstreamFieldsList.some((fields) => (fields || []).some((f) => normalizeField(f) === target));
+}
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -101,6 +127,41 @@ function buildModel(inputDir) {
       `Orphan event(s) with no Produces: link — ${orphanEvents.map((e) => e.id).join(', ')}`
     );
   }
+
+  // Sanity: every non-bracketed event field must trace back to the same
+  // field on its producing command (canonical rule, see SKILL.md — "Diagram
+  // consistency"). Bracketed fields ([...]) are exempt (calculated/system-
+  // generated, intentionally not a direct passthrough).
+  events.forEach((e) => {
+    const cmd = eventProducer[e.id];
+    if (!cmd) return; // already reported as an orphan event above
+    (e.fields || []).forEach((f) => {
+      if (isBracketedField(f)) return;
+      if (!hasMatchingField(f, [cmd.fields])) {
+        throw new Error(
+          `Consistency error: event '${e.id}' field "${f.trim()}" has no matching field in producing command '${cmd.id}'. ` +
+          `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.trim()}]". ` +
+          `Otherwise add the field to the command's payload.`
+        );
+      }
+    });
+  });
+
+  // Sanity: every non-bracketed read-model field must trace back to the same
+  // field on at least one of its subscribed events.
+  readmodels.forEach((rm) => {
+    const subEvents = (rm.subscribes || []).map((id) => events.find((e) => e.id === id)).filter(Boolean);
+    (rm.fields || []).forEach((f) => {
+      if (isBracketedField(f)) return;
+      if (!hasMatchingField(f, subEvents.map((e) => e.fields))) {
+        throw new Error(
+          `Consistency error: read model '${rm.id}' field "${f.trim()}" has no matching field in any subscribed event. ` +
+          `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.trim()}]". ` +
+          `Otherwise add the field to the source event's payload.`
+        );
+      }
+    });
+  });
 
   // columns: one per event initially, in chronological (file) order.
   let columns = events.map((e) => ({ type: 'event', eventId: e.id }));

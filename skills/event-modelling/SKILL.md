@@ -262,6 +262,11 @@ After running the generator:
   transcription error.
 - No event is an orphan (the generator already throws on this — if it ran
   without error, this is satisfied).
+- No field-consistency violation (the generator already throws on this too —
+  see "Diagram consistency" below; if it ran without error, this is
+  satisfied). If it does throw, the fix is either to add the missing field to
+  the upstream element (command for an event, event for a read model), or to
+  wrap the field in `[...]` if it's genuinely calculated/system-generated.
 - If a headless browser is available, render the file and confirm cards are
   visually centered in their cells and arrows land on card edges — this is
   the standard regression to watch for if the CSS/geometry constants in
@@ -270,3 +275,30 @@ After running the generator:
 If the user specified an output path, write there; otherwise the default is
 `eventmodel.html` beside the input files. Report the written path and a
 short summary of the elements drawn.
+
+# Diagram consistency
+Dataflow should be consistent. Attributes of read model should be derivated from related events.
+The same for events. They should be derived from commands. If some attributes are missing in the backward flow (read models -> events -> commands) please add them.
+If attribute is not mapped directly (eg. calculated from two sources) then sorround this element with '[...]', eg. [balance calculation]
+
+**This is enforced by the generator, not just a manual convention.** During
+`buildModel()` (`scripts/generate.js`), for every event with a producing
+command, each non-bracketed event field must have a case-insensitive exact
+match (after trimming, and after stripping any `[...]` wrapper) among the
+producing command's fields; for every read model, each non-bracketed field
+must match a field on at least one subscribed event. A field wrapped in
+`[...]` (e.g. `[policy number]`) is exempt from this check — it's the
+documented way to mark a calculated or system-generated field with no direct
+upstream passthrough — and still renders normally (brackets included) in the
+HTML output. On a mismatch the script throws and exits non-zero, in the same
+style as the existing "no orphan events" check, e.g.:
+
+```
+Consistency error: event 'policy-accepted' field "policy number" has no
+matching field in producing command 'accept-policy'. If this field is
+system-generated or calculated (not a direct passthrough), wrap it in [...],
+e.g. "[policy number]". Otherwise add the field to the command's payload.
+```
+
+Read models get the equivalent message, substituting "read model" /
+"any subscribed event".

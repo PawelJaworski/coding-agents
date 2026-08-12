@@ -8,5 +8,6 @@ Name: Order List
 Subscribes: order-created, order-shipped, order-cancelled
 
 ## stock-levels
+id:Inventory
 Name: Stock Levels
 Subscribes: inventory-reserved

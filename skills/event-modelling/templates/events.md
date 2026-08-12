@@ -5,17 +5,21 @@ flows left to right in the diagram. Use `Subprocess:` to group related events
 into the same horizontal band. One heading per event.
 
 ## order-created
+id:Order
 Name: Order Created
 Subprocess: Order
 
 ## inventory-reserved
+id:Inventory
 Name: Inventory Reserved
 Subprocess: Inventory
 
 ## order-shipped
+id:Order
 Name: Order Shipped
 Subprocess: Order
 
 ## order-cancelled
+id:Order
 Name: Order Cancelled
 Subprocess: Order

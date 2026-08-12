@@ -48,6 +48,7 @@ function parseMd(file) {
         case 'produces': cur.produces = val; break;
         case 'observes': cur.observes = val; break;
         case 'subprocess': cur.subprocess = val; break;
+        case 'id': cur.aggregateId = val; break;
         case 'subscribes':
           cur.subscribes = val.split(',').map((s) => s.trim()).filter(Boolean);
           break;
@@ -100,6 +101,58 @@ function escapeHtml(s) {
 }
 
 // ---------------------------------------------------------------------------
+// 1c. Ubiquitous-language check against docs/business-definitions.html
+// ---------------------------------------------------------------------------
+
+// Walk up from inputDir looking for docs/business-definitions.html — this
+// lets the generator find the project's docs regardless of how deep
+// inputDir is nested.
+function findBusinessDefinitions(startDir) {
+  let dir = path.resolve(startDir);
+  for (;;) {
+    const candidate = path.join(dir, 'docs', 'business-definitions.html');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+// Extracts every defined term name, lowercased, from the definitions page's
+// `data-name="..."` attributes.
+function loadDefinedTerms(inputDir) {
+  const file = findBusinessDefinitions(inputDir);
+  if (!file) return null; // no docs found — skip the check rather than guess
+  const html = fs.readFileSync(file, 'utf8');
+  const terms = new Set();
+  const re = /data-name="([^"]+)"/g;
+  let m;
+  while ((m = re.exec(html))) terms.add(m[1].trim().toLowerCase());
+  return terms;
+}
+
+// Non-blocking: warn (don't throw) about actors used in commands.md that
+// aren't documented in docs/business-definitions.html. Ubiquitous-language
+// drift here is a business-intent question, not something the generator
+// should silently accept or silently block on — surface it and require a
+// human to confirm before it's treated as final.
+function checkActorsAgainstDefinitions(commands, inputDir) {
+  const terms = loadDefinedTerms(inputDir);
+  if (!terms) return;
+  const actors = new Set();
+  commands.forEach((c) => { if (c.actor && c.actor !== 'System') actors.add(c.actor); });
+  const undefinedActors = [...actors].filter((a) => !terms.has(a.toLowerCase()));
+  if (undefinedActors.length) {
+    console.warn(
+      `Warning: actor(s) not found in docs/business-definitions.html — ${undefinedActors.join(', ')}. ` +
+      `This may be intended (e.g. a role not worth documenting) or a ubiquitous-language mismatch — ` +
+      `please confirm before treating the model as final.`
+    );
+  }
+}
+
+
+// ---------------------------------------------------------------------------
 // 2. Build the model: columns, mid-row occupancy, swimlanes
 // ---------------------------------------------------------------------------
 
@@ -108,14 +161,14 @@ function buildModel(inputDir) {
   const events = parseMd(path.join(inputDir, 'events.md'));
   const readmodels = parseMd(path.join(inputDir, 'readmodels.md'));
 
-  commands.forEach((c) => { if (!c.name) c.name = c.id; c._h = cardHeight(CMD_H, c.fields); });
+  commands.forEach((c) => { if (!c.name) c.name = c.id; c._h = cardHeight(c.aggregateId ? CMD_H + AGG_ID_H : CMD_H, c.fields); });
   const defaultSubprocess = (events[0] && events[0].subprocess) || 'Default';
   events.forEach((e) => {
     if (!e.name) e.name = e.id;
     if (!e.subprocess) e.subprocess = defaultSubprocess;
     e._h = cardHeight(EVT_H, e.fields);
   });
-  readmodels.forEach((r) => { if (!r.name) r.name = r.id; r._h = cardHeight(VIEW_H, r.fields); });
+  readmodels.forEach((r) => { if (!r.name) r.name = r.id; r._h = cardHeight(r.aggregateId ? VIEW_H + AGG_ID_H : VIEW_H, r.fields); });
 
   const eventProducer = {}; // eventId -> command
   commands.forEach((c) => { if (c.produces) eventProducer[c.produces] = c; });
@@ -127,6 +180,21 @@ function buildModel(inputDir) {
       `Orphan event(s) with no Produces: link — ${orphanEvents.map((e) => e.id).join(', ')}`
     );
   }
+
+  // Sanity: every event must declare its owning aggregate via id:{Type}
+  // (see SKILL.md "Diagram consistency" — mandatory id attribute). This is
+  // a hard blocker, same tier as the orphan-event check.
+  const eventsMissingId = events.filter((e) => !e.aggregateId);
+  if (eventsMissingId.length) {
+    throw new Error(
+      `Event(s) missing mandatory "id:{Aggregate}" — ${eventsMissingId.map((e) => e.id).join(', ')}. ` +
+      `Add e.g. "id:Policy" to declare which aggregate the event belongs to.`
+    );
+  }
+
+  // Ubiquitous-language check (non-blocking warning, not a hard failure —
+  // whether to formally document a term is a business-intent decision).
+  checkActorsAgainstDefinitions(commands, inputDir);
 
   // Sanity: every non-bracketed event field must trace back to the same
   // field on its producing command (canonical rule, see SKILL.md — "Diagram
@@ -216,7 +284,8 @@ const GUT = 180, COL = 360;
 const TIME_H = 40, ROLE_H = 130, SYS_H = 130, MID_H = 120, PROC_H = 150;
 const UI_W = 210, UI_H = 76;
 const CMD_W = 200, CMD_H = 56;
-const EVT_W = 220, EVT_H = 60;
+const AGG_ID_H = 14; // extra height to fit an optional/mandatory "id:{Aggregate}" line
+const EVT_W = 220, EVT_H = 60 + AGG_ID_H; // events always carry the mandatory aggregate-id line
 const VIEW_W = 220, VIEW_H = 60;
 const RADIUS = 8; // card border-radius; inset corner-ish endpoints by this along the straight edge they touch
 
@@ -329,10 +398,10 @@ function renderTable(model, geo) {
     if (occ && occ.type === 'cmd') {
       const cmd = commands.find((cc) => cc.id === occ.id);
       const isSystem = cmd.actor === 'System';
-      content = `<div class="card cmd-card${isSystem ? ' system-cmd' : ''}" style="height:${cmd._h}px" data-element="${cmd.id}" data-type="cmd" title="${cmd.id} — click to focus, click again to clear">${isSystem ? '<div class="sys-badge">⚙ SYSTEM</div>' : ''}<div class="title">${escapeHtml(cmd.name)}</div>${fieldsHtml(cmd.fields)}</div>`;
+      content = `<div class="card cmd-card${isSystem ? ' system-cmd' : ''}" style="height:${cmd._h}px" data-element="${cmd.id}" data-type="cmd" title="${cmd.id} — click to focus, click again to clear">${isSystem ? '<div class="sys-badge">⚙ SYSTEM</div>' : ''}<div class="title">${escapeHtml(cmd.name)}</div>${cmd.aggregateId ? `<div class="agg-id">id:${escapeHtml(cmd.aggregateId)}</div>` : ''}${fieldsHtml(cmd.fields)}</div>`;
     } else if (occ && occ.type === 'view') {
       const rm = readmodels.find((rr) => rr.id === occ.id);
-      content = `<div class="card view-card" style="height:${rm._h}px" data-element="${rm.id}" data-type="view" title="${rm.id} — click to focus, click again to clear"><div class="title">${escapeHtml(rm.name)}</div>${fieldsHtml(rm.fields)}</div>`;
+      content = `<div class="card view-card" style="height:${rm._h}px" data-element="${rm.id}" data-type="view" title="${rm.id} — click to focus, click again to clear"><div class="title">${escapeHtml(rm.name)}</div>${rm.aggregateId ? `<div class="agg-id">id:${escapeHtml(rm.aggregateId)}</div>` : ''}${fieldsHtml(rm.fields)}</div>`;
     }
     midCells += `<td class="lane-cell mid-cell">${content}</td>`;
   });
@@ -345,7 +414,7 @@ function renderTable(model, geo) {
       if (c.type === 'event') {
         const ev = events.find((e) => e.id === c.eventId);
         if (ev.subprocess === sp) {
-          content = `<div class="card evt-card" style="height:${ev._h}px" data-element="${ev.id}" data-type="evt" title="${ev.id} — click to focus, click again to clear"><div class="title">${escapeHtml(ev.name)}</div>${fieldsHtml(ev.fields)}</div>`;
+          content = `<div class="card evt-card" style="height:${ev._h}px" data-element="${ev.id}" data-type="evt" title="${ev.id} — click to focus, click again to clear"><div class="title">${escapeHtml(ev.name)}</div><div class="agg-id">id:${escapeHtml(ev.aggregateId)}</div>${fieldsHtml(ev.fields)}</div>`;
         }
       }
       cells += `<td class="lane-cell" style="background:${procColor(g)}">${content}</td>`;
@@ -488,6 +557,7 @@ svg [data-from].dim{opacity:.08}
 .view-card{width:${VIEW_W}px;background:var(--view);color:#35681f}
 .title{font-size:13px;font-weight:700;padding:0 8px;text-align:center;flex-shrink:0}
 .caption{font-size:10px;opacity:.8;text-transform:uppercase;letter-spacing:.04em}
+.agg-id{font-size:10px;font-weight:700;text-align:center;flex-shrink:0}
 .fields{width:100%;margin-top:4px;padding:5px 10px 5px;border-top:1px solid rgba(0,0,0,.15)}
 .fields ul{list-style:none;margin:0;padding:0}
 .fields li{font-size:10px;line-height:14px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

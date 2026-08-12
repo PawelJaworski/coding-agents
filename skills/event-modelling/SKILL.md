@@ -189,7 +189,7 @@ no two read models ever share a column.
 ```
 GUT = 180, COL = 360           // gutter + per-column width
 TIME_H=40, ROLE_H=130, SYS_H=130, MID_H=120, PROC_H=150
-UI 210x76, Command 200x56, Event 220x60, Read model 220x60, Time badge 26x26
+UI 210x76, Command 200x56, Event 220x74 (+14 for the bold `id:{Aggregate}` line), Read model 220x60, Time badge 26x26
 ```
 
 `width = GUT + T*COL` where `T` = events + inserted read-model columns.
@@ -280,6 +280,30 @@ short summary of the elements drawn.
 Dataflow should be consistent. Attributes of read model should be derivated from related events.
 The same for events. They should be derived from commands. If some attributes are missing in the backward flow (read models -> events -> commands) please add them.
 If attribute is not mapped directly (eg. calculated from two sources) then sorround this element with '[...]', eg. [balance calculation]
+
+For events the id attribute is mandatory:
+id:{Type}, eg. 'id:Shipmnent'. It means that it belongs to 'shipment' aggregate.
+**This is enforced as a hard blocker**: the generator throws (like the
+orphan-event check) if any event is missing `id:`.
+
+`id:{Aggregate}` is **optional on commands and read models**, but if present
+it's rendered the same way as on events: a bold `id:{Aggregate}` line
+(`.agg-id` CSS class) directly under the card's title, above its field list.
+Any card (command, event, or read model) that declares `id:` grows 14px
+taller (`AGG_ID_H` in `scripts/generate.js`) to make room for this line
+without shrinking the title or field list; cards without an `id:` stay at
+their normal base height.
+
+## Ubiquitous language check (non-blocking)
+The generator also cross-checks every command's `Actor:` (excluding
+`System`) against the term names in `docs/business-definitions.html`
+(matched via that page's `data-name="..."` attributes, walking up from the
+input directory to find `docs/`). An actor not found there prints a
+**warning**, not a hard failure — introducing a new actor may be intentional
+(and simply undocumented), so this requires human confirmation rather than
+blocking generation outright. If `docs/business-definitions.html` can't be
+found, the check is skipped silently.
+
 
 **This is enforced by the generator, not just a manual convention.** During
 `buildModel()` (`scripts/generate.js`), for every event with a producing

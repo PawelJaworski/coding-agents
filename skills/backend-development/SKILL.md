@@ -18,6 +18,8 @@ templates/FooRepository.java
 templates/FooInMemoryRepository.java
 templates/FooJpaRepository.java
 
+templates/FooAbility.java
+
 # Code update hooks
 1. When new event appears then StateProjector should be updated.
 2. When new command appears then add new Command handler in the same package
@@ -25,3 +27,4 @@ templates/FooJpaRepository.java
 * interface FooRepository in same package where entity is located
 * FooInMemoryRepository
 * FooJpaRepository
+4. When any spring component, service or repository is added then create adequate test Ability (FooAbility template)

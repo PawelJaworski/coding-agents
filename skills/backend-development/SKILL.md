@@ -9,6 +9,7 @@ description: >
 
 # Code templates
 templates/DoSomethingOnFooCmd.java
+templates/DoSomethingOnFooHandler.java
 templates/SomethingHappenToFooEvent.java
 templates/StateProjector.java
 

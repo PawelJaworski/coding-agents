@@ -9,3 +9,9 @@ description: >
 
 # Code templates
 templates/DoSomethingOnFooCmd.java
+templates/SomethingHappenToFooEvent.java
+templates/StateProjector.java
+
+# Code update hooks
+1. When new event appears then StateProjector should be updated.
+2. When new command appears then add new Command handler in the same package

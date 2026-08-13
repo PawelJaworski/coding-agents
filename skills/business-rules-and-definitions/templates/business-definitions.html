@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Business Definitions</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 2rem;
+    background: #f7f8fa;
+    color: #222;
+  }
+  h1 {
+    margin-bottom: 1rem;
+  }
+  .search-bar {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  .search-bar input {
+    flex: 1;
+    min-width: 220px;
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  thead th {
+    background: #2c3e50;
+    color: #fff;
+    text-align: left;
+    padding: 0.75rem 1rem;
+    position: sticky;
+    top: 0;
+  }
+  tbody td {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) {
+    background: #f3f5f7;
+  }
+  tbody tr:hover {
+    background: #eaf1fb;
+  }
+  td.name-col {
+    font-weight: 600;
+    white-space: nowrap;
+    width: 220px;
+  }
+  ul.def-list {
+    margin: 0.25rem 0 0 0;
+    padding-left: 1.1rem;
+  }
+  ul.def-list li {
+    margin-bottom: 0.35rem;
+  }
+  .no-results {
+    text-align: center;
+    padding: 1.5rem;
+    color: #777;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+<h1>Business Definitions</h1>
+
+<div class="search-bar">
+  <input type="text" id="searchName" placeholder="Search by name..." />
+  <input type="text" id="searchDescription" placeholder="Search by description..." />
+</div>
+
+<table id="definitionsTable">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr data-name="transit time" data-description="is the time from the pick up to the arrival. no delivery working hours included. calculation geois (ptv) driver rule non ferry calculation ferry calculation algorithm finds fastest routes transit time shows transit time in days rounded down workdays mo-fr are only considered no driving no pick-up no delivery on sat and sun border waiting time increases transit time business rules driver capacity transit time in scheduling is based on calendar working days working days exclude saturdays sundays and holidays in delivery country holiday">
+      <td class="name-col">transit time</td>
+      <td>
+        Is the time from the pick up to the arrival. No delivery working hours included.
+        <ul class="def-list">
+          <li>Calculated using GeoIS (PTV), applying the Driver rule</li>
+          <li>Driver rule (1 driver): 2:30h driving &rarr; 45 min break &rarr; 4:30h driving &rarr; 11h break &rarr; 4:30h driving &rarr; 45 min break &rarr; 4:30h driving &rarr; 11h break &rarr; (repeat 4:30h driving &rarr; 45 min break &rarr; 4:30h driving &rarr; 11h break)</li>
+          <li>Driver rule (2 drivers): 16h driving &rarr; 9h break &rarr; 18h driving &rarr; 9h break &rarr; (repeat 18h driving &rarr; 9h break)</li>
+          <li>Counting from the delivery date, the 2:30h driving segment is the first counted (last driving event on the time range)</li>
+          <li>Non-ferry calculation:
+            <ul class="def-list">
+              <li>For countries with a shared border: A to B calculation</li>
+              <li>For countries without a shared border: A to A/border &rarr; A/border to B (e.g. Warsaw to Brussels = Warsaw to Polish/German border + Polish/German border to Brussels)</li>
+            </ul>
+          </li>
+          <li>Ferry calculation: distance time from start to departure ferry port (incl. driver rule) + waiting time to port arrival time on departure ferry port + ferry operation time to "ready to go" on arrival ferry port + distance time from arrival ferry port to destination (incl. driver rule)
+            <ul class="def-list">
+              <li>Note: the driver rule is reset on arrival ferry port</li>
+            </ul>
+          </li>
+          <li>The algorithm finds the fastest routes</li>
+          <li>Transit time shows the transit time in days, rounded down</li>
+          <li>Only workdays (Mon&ndash;Fri) are considered</li>
+          <li>If pick up and/or delivery falls on a non-workday, extra days are added to the delivery date</li>
+          <li>No driving, pick-up, or delivery on Saturdays and Sundays (global rule, overridable by a business rule &mdash; see "driver capacity")</li>
+          <li>Border waiting time increases the transit time</li>
+          <li>Business rule reference: <em>driver capacity</em></li>
+          <li>Transit time in scheduling is based on calendar working days</li>
+          <li>Working days exclude Saturdays, Sundays and holidays in the delivery country</li>
+          <li>When calculating transit time and there is a holiday, the time until midnight is added to the calculation</li>
+        </ul>
+      </td>
+    </tr>
+    <tr data-name="driver capacity" data-description="driver is after all necessary breaks while starting a new trip. ferry, train or driving restriction resets the driver rule. driver rule. the rule determines and explains driver work, breaks and how it applies to transit time calculation. driving time for one driver, driving time for two drivers. the driver starts the travel from 7h driving time increased to 9h after the second driving break. any ferry, train, driving restriction, holiday or working hours are treated as a driver's break.">
+      <td class="name-col">driver capacity</td>
+      <td>
+        Driver is after all necessary breaks while starting a new trip.
+        <ul class="def-list">
+          <li>A ferry, train, or driving restriction resets the driver rule</li>
+          <li>To be confirmed: should a ferry/train/driving restriction &gt;11h (1 driver) or &gt;9h (2 drivers) count as the driver having made a long break (11h for 1 driver / 9h for 2 drivers)?</li>
+          <li>Driver rule: determines and explains driver work, breaks, and how they apply to transit time calculation</li>
+          <li>Driving time for one driver: 2:30h driving &rarr; 45 min break &rarr; 4:30h driving &rarr; 11h break &rarr; 4:30h driving &rarr; 45 min break &rarr; 4:30h driving &rarr; 11h break &rarr; (repeat 4:30h driving &rarr; 45 min break &rarr; 4:30h driving &rarr; 11h break)</li>
+          <li>Driving time for two drivers: 16h driving &rarr; 9h break &rarr; 18h driving &rarr; 9h break &rarr; (repeat 18h driving &rarr; 9h break)</li>
+          <li>The driver starts the travel from 7h driving time; this is increased to 9h after the second driving break, and applies to the end of the travel</li>
+          <li>Any ferry, train, driving restriction, holiday, or working hours (delivery working hours) are treated as a driver's break, regardless of duration</li>
+          <li>Note: the driver starts the travel from 7h driving time because 2h is the required time spent at the terminal on travel preparation (papers, loading preparation, loading) &mdash; the driver is 2h ahead of the pick-up time</li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<p id="noResults" class="no-results" style="display:none;">No matching definitions found.</p>
+
+<script>
+  const nameInput = document.getElementById('searchName');
+  const descInput = document.getElementById('searchDescription');
+  const rows = Array.from(document.querySelectorAll('#definitionsTable tbody tr'));
+  const noResults = document.getElementById('noResults');
+
+  function filterRows() {
+    const nameQuery = nameInput.value.trim().toLowerCase();
+    const descQuery = descInput.value.trim().toLowerCase();
+    let visibleCount = 0;
+
+    rows.forEach(row => {
+      const name = row.getAttribute('data-name') || '';
+      const description = row.getAttribute('data-description') || '';
+      const matchesName = name.includes(nameQuery);
+      const matchesDescription = description.includes(descQuery);
+      const visible = matchesName && matchesDescription;
+      row.style.display = visible ? '' : 'none';
+      if (visible) visibleCount++;
+    });
+
+    noResults.style.display = visibleCount === 0 ? 'block' : 'none';
+  }
+
+  nameInput.addEventListener('input', filterRows);
+  descInput.addEventListener('input', filterRows);
+</script>
+</body>
+</html>
+</content>

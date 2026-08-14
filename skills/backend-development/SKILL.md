@@ -48,6 +48,10 @@ templates/FooAbility.java
    - Use the exact business term in class and field names where practical.
    - Only fall back to `String`, `UUID`, `Long`, etc. when the business model truly has no named concept yet.
 2. Objects should correspond to business-definitions.html as far as possible.
+   - Prefer reading `docs/business-definitions-raw.md` over `docs/business-definitions.html`
+     when looking up business definitions — it's the same content as plain markdown
+     without the HTML/CSS/JS wrapper, so it's cheaper to read and doesn't need stripping.
+     Only fall back to the `.html` file if the raw markdown is missing or out of sync.
    - Treat every named definition there as a candidate code type, command field, event field, or read-model field.
    - If a concept is present in the business definitions and doesn't exist yet then ALWAYS create domain object mapping business definition.
      It doesn't matter that it looks flat in diagrams (diagrams don't have show all details)

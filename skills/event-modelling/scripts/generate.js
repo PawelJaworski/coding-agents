@@ -45,12 +45,16 @@ function parseMd(file) {
       switch (key) {
         case 'name': cur.name = val; break;
         case 'actor': cur.actor = val; break;
+        case 'type': cur.uiType = val; break;
         case 'produces': cur.produces = val; break;
         case 'observes': cur.observes = val; break;
         case 'subprocess': cur.subprocess = val; break;
         case 'id': cur.aggregateId = val; break;
         case 'subscribes':
           cur.subscribes = val.split(',').map((s) => s.trim()).filter(Boolean);
+          break;
+        case 'consistsof':
+          cur.consistsOf = val.split(',').map((s) => s.trim()).filter(Boolean);
           break;
         default: break; // unknown "key: value" — ignore
       }
@@ -131,16 +135,16 @@ function loadDefinedTerms(inputDir) {
   return terms;
 }
 
-// Non-blocking: warn (don't throw) about actors used in commands.md that
-// aren't documented in docs/business-definitions.html. Ubiquitous-language
-// drift here is a business-intent question, not something the generator
-// should silently accept or silently block on — surface it and require a
-// human to confirm before it's treated as final.
+// Non-blocking: warn (don't throw) about commands' effective actors (from
+// uis.md) that aren't documented in docs/business-definitions.html.
+// Ubiquitous-language drift here is a business-intent question, not
+// something the generator should silently accept or silently block on —
+// surface it and require a human to confirm before it's treated as final.
 function checkActorsAgainstDefinitions(commands, inputDir) {
   const terms = loadDefinedTerms(inputDir);
   if (!terms) return;
   const actors = new Set();
-  commands.forEach((c) => { if (c.actor && c.actor !== 'System') actors.add(c.actor); });
+  commands.forEach((c) => { if (c.actor) actors.add(c.actor); });
   const undefinedActors = [...actors].filter((a) => !terms.has(a.toLowerCase()));
   if (undefinedActors.length) {
     console.warn(
@@ -160,6 +164,65 @@ function buildModel(inputDir) {
   const commands = parseMd(path.join(inputDir, 'commands.md'));
   const events = parseMd(path.join(inputDir, 'events.md'));
   const readmodels = parseMd(path.join(inputDir, 'readmodels.md'));
+  const uisFile = path.join(inputDir, 'uis.md');
+  const uis = fs.existsSync(uisFile) ? parseMd(uisFile) : [];
+
+  // uis.md links to a command or a read model(s) by sharing its id, or via
+  // an explicit `ConsistsOf:` list:
+  //  - a UI whose id matches a command  -> the human trigger for that command
+  //    (input UI, rendered above the command, in the role row of `Actor:`).
+  //  - a UI whose id matches a read model, and/or lists read model ids in
+  //    `ConsistsOf:` -> the rendered output of that view (or views), e.g. a
+  //    pdf/html screen composed from several projections. Rendered in the
+  //    row of `Actor:` — the person who receives/reads it — placed in the
+  //    rightmost source read model's column, with one arrow per source.
+  // `Type:` (html, pdf, ...) is a display hint only; linkage is by id.
+  const uiById = {};
+  uis.forEach((u) => { uiById[u.id] = u; });
+  const commandIds = new Set(commands.map((c) => c.id));
+  const readmodelIds = new Set(readmodels.map((r) => r.id));
+
+  // Sanity: every `ConsistsOf:` entry must reference a real read model id.
+  uis.forEach((u) => {
+    const bad = (u.consistsOf || []).filter((id) => !readmodelIds.has(id));
+    if (bad.length) {
+      throw new Error(
+        `UI "${u.id}" ConsistsOf: references unknown read model id(s) — ${bad.join(', ')}.`
+      );
+    }
+  });
+
+  // The set of read models an output UI is projected from: itself (if its id
+  // matches a read model) plus everything in ConsistsOf, deduped.
+  const uiSources = {}; // uiId -> [readmodel ids]
+  uis.forEach((u) => {
+    const set = new Set();
+    if (readmodelIds.has(u.id)) set.add(u.id);
+    (u.consistsOf || []).forEach((id) => set.add(id));
+    if (set.size) uiSources[u.id] = [...set];
+  });
+
+  const orphanUis = uis.filter((u) => !commandIds.has(u.id) && !uiSources[u.id]);
+  if (orphanUis.length) {
+    throw new Error(
+      `UI(s) in uis.md with no matching command or read model id — ${orphanUis.map((u) => u.id).join(', ')}. ` +
+      `Each "## heading" in uis.md must match a command id (input UI), or match/list read model id(s) ` +
+      `via its own id or ConsistsOf: (output UI).`
+    );
+  }
+
+  // Commands no longer carry `Actor:` themselves — that's a hard error now,
+  // to keep a single source of truth. Human commands get their actor from a
+  // matching uis.md entry; automated commands are identified by `Observes:`
+  // (see hasSystem below), not by an actor label.
+  const commandsWithInlineActor = commands.filter((c) => c.actor);
+  if (commandsWithInlineActor.length) {
+    throw new Error(
+      `Command(s) with an inline "Actor:" in commands.md — ${commandsWithInlineActor.map((c) => c.id).join(', ')}. ` +
+      `Commands no longer carry Actor: directly; move it to a matching "## ${commandsWithInlineActor[0].id}" entry in uis.md instead.`
+    );
+  }
+  commands.forEach((c) => { c.actor = uiById[c.id] ? uiById[c.id].actor : undefined; });
 
   commands.forEach((c) => { if (!c.name) c.name = c.id; c._h = cardHeight(c.aggregateId ? CMD_H + AGG_ID_H : CMD_H, c.fields); });
   const defaultSubprocess = (events[0] && events[0].subprocess) || 'Default';
@@ -264,16 +327,40 @@ function buildModel(inputDir) {
     midRow[naturalIdx] = { type: 'view', id: rm.id };
   });
 
+  const colIndexForView = (viewId) => columns.findIndex((c) => c.type === 'view' && c.viewId === viewId);
+
+  // Placement column for an output UI: the rightmost column among its source
+  // read models (a UI can only be drawn in one column, so composite/multi-
+  // view UIs land next to their last-produced input, same convention as
+  // read-model placement itself).
+  const uiPlacementCol = {};
+  Object.keys(uiSources).forEach((uiId) => {
+    let bestIdx = -1;
+    uiSources[uiId].forEach((rmId) => {
+      const idx = colIndexForView(rmId);
+      if (idx > bestIdx) bestIdx = idx;
+    });
+    uiPlacementCol[uiId] = bestIdx;
+  });
+
   const roles = [];
   commands.forEach((c) => {
-    if (c.actor && c.actor !== 'System' && !roles.includes(c.actor)) roles.push(c.actor);
+    if (c.actor && !roles.includes(c.actor)) roles.push(c.actor);
   });
-  const hasSystem = commands.some((c) => c.actor === 'System');
+  uis.forEach((ui) => {
+    if (uiSources[ui.id] && ui.actor && !roles.includes(ui.actor)) roles.push(ui.actor);
+  });
+  // A command is automated ("System") when it declares `Observes:` — that's
+  // the sole signal now that commands no longer carry an `Actor:` label.
+  const hasSystem = commands.some((c) => !!c.observes);
 
   const subprocesses = [];
   events.forEach((e) => { if (!subprocesses.includes(e.subprocess)) subprocesses.push(e.subprocess); });
 
-  return { commands, events, readmodels, eventProducer, columns, midRow, colIndexForEvent, roles, hasSystem, subprocesses };
+  return {
+    commands, events, readmodels, uis, uiById, uiSources, uiPlacementCol,
+    eventProducer, columns, midRow, colIndexForEvent, colIndexForView, roles, hasSystem, subprocesses,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +440,7 @@ function fieldsHtml(fields) {
 }
 
 function renderTable(model, geo) {
-  const { commands, events, readmodels, eventProducer, columns, midRow, roles, hasSystem, subprocesses } = model;
+  const { commands, events, readmodels, uiById, uis, uiPlacementCol, eventProducer, columns, midRow, roles, hasSystem, subprocesses } = model;
 
   const colgroup = `<col style="width:${GUT}px">` + columns.map(() => `<col style="width:${COL}px">`).join('');
 
@@ -371,12 +458,25 @@ function renderTable(model, geo) {
 
   const roleRows = roles.map((role, r) => {
     let cells = `<td class="gutter role-gutter" style="background:${roleColor(r)}">${escapeHtml(role)}</td>`;
-    columns.forEach((c) => {
+    columns.forEach((c, i) => {
       let content = '';
       if (c.type === 'event') {
         const cmd = eventProducer[c.eventId];
         if (cmd && cmd.actor === role) {
-          content = `<div class="card ui-card" data-element="ui-${cmd.id}" data-type="ui" title="ui-${cmd.id} — click to focus, click again to clear"><div class="ui-label">UI</div><div class="title">${escapeHtml(cmd.name)}</div></div>`;
+          const ui = uiById[cmd.id];
+          const label = ui && ui.uiType ? ui.uiType.toUpperCase() : 'UI';
+          content = `<div class="card ui-card" data-element="ui-${cmd.id}" data-type="ui" title="ui-${cmd.id} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml((ui && ui.name) || cmd.name)}</div></div>`;
+        }
+      }
+      // Output UI (e.g. a pdf/html screen projected from one or more read
+      // models — see ConsistsOf:), placed by column index rather than by
+      // matching a single read model's column, so it also works when its
+      // own id doesn't equal any read model id (a purely composite UI).
+      if (!content) {
+        const outUi = uis.find((u) => uiPlacementCol[u.id] === i && u.actor === role);
+        if (outUi) {
+          const label = outUi.uiType ? outUi.uiType.toUpperCase() : 'UI';
+          content = `<div class="card ui-card" data-element="ui-${outUi.id}" data-type="ui" title="ui-${outUi.id} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(outUi.name || outUi.id)}</div></div>`;
         }
       }
       cells += `<td class="lane-cell" style="background:${roleColor(r)}">${content}</td>`;
@@ -397,7 +497,7 @@ function renderTable(model, geo) {
     let content = '';
     if (occ && occ.type === 'cmd') {
       const cmd = commands.find((cc) => cc.id === occ.id);
-      const isSystem = cmd.actor === 'System';
+      const isSystem = !!cmd.observes;
       content = `<div class="card cmd-card${isSystem ? ' system-cmd' : ''}" style="height:${cmd._h}px" data-element="${cmd.id}" data-type="cmd" title="${cmd.id} — click to focus, click again to clear">${isSystem ? '<div class="sys-badge">⚙ SYSTEM</div>' : ''}<div class="title">${escapeHtml(cmd.name)}</div>${cmd.aggregateId ? `<div class="agg-id">id:${escapeHtml(cmd.aggregateId)}</div>` : ''}${fieldsHtml(cmd.fields)}</div>`;
     } else if (occ && occ.type === 'view') {
       const rm = readmodels.find((rr) => rr.id === occ.id);
@@ -430,7 +530,7 @@ function renderTable(model, geo) {
 // ---------------------------------------------------------------------------
 
 function renderArrows(model, geo) {
-  const { commands, events, readmodels, eventProducer, columns, roles, subprocesses, colIndexForEvent } = model;
+  const { commands, events, readmodels, uiById, uis, uiSources, uiPlacementCol, eventProducer, columns, roles, subprocesses, colIndexForEvent, colIndexForView } = model;
   const arrows = [];
   const roleIndex = (actor) => roles.indexOf(actor);
 
@@ -444,11 +544,11 @@ function renderArrows(model, geo) {
     const midTop = geo.midCenterY() - cmd._h / 2;
     const midBottom = geo.midCenterY() + cmd._h / 2;
 
-    if (cmd.actor !== 'System') {
+    if (!cmd.observes) {
       const r = roleIndex(cmd.actor);
       const roleBottom = geo.roleCenterY(r) + UI_H / 2;
       arrows.push({ x1: cx, y1: roleBottom, x2: cx, y2: midTop, from: `ui-${cmd.id}`, to: cmd.id, marker: 'arrow' });
-    } else if (cmd.observes) {
+    } else {
       const obsIdx = colIndexForEvent(cmd.observes);
       const obsEv = events.find((e) => e.id === cmd.observes);
       const obsGroup = subprocesses.indexOf(obsEv.subprocess);
@@ -468,6 +568,7 @@ function renderArrows(model, geo) {
     const rmIdx = columns.findIndex((c) => c.type === 'view' && c.viewId === rm.id);
     const rmCx = geo.colCenterX(rmIdx);
     const rmCy = geo.midCenterY();
+
     const entries = { left: [], right: [], bottom: [] };
     (rm.subscribes || []).forEach((evId) => {
       const idx = colIndexForEvent(evId);
@@ -499,6 +600,38 @@ function renderArrows(model, geo) {
           from: ev.id, to: rm.id, purpleNoMarker: true,
         });
       });
+    });
+  });
+
+  // Read model(s) -> output UI (e.g. a pdf document, or one composed from
+  // several views via ConsistsOf:). Mirrors the UI -> command arrow, but
+  // reversed: flows from each source view up into the role row of the actor
+  // who reads it. The UI card sits in its rightmost source's column
+  // (`uiPlacementCol`); a source in that same column gets a straight
+  // vertical arrow, any other source is routed sideways into it first.
+  uis.forEach((ui) => {
+    const srcs = uiSources[ui.id];
+    if (!srcs || !ui.actor) return;
+    const r = roles.indexOf(ui.actor);
+    if (r === -1) return;
+    const placementIdx = uiPlacementCol[ui.id];
+    const uiCx = geo.colCenterX(placementIdx);
+    const roleBottom = geo.roleCenterY(r) + UI_H / 2;
+    srcs.forEach((rmId) => {
+      const rm = readmodels.find((rr) => rr.id === rmId);
+      const idx = colIndexForView(rmId);
+      const rmCx = geo.colCenterX(idx);
+      const rmTop = geo.midCenterY() - rm._h / 2;
+      if (idx === placementIdx) {
+        arrows.push({ x1: rmCx, y1: rmTop, x2: uiCx, y2: roleBottom, from: rm.id, to: `ui-${ui.id}`, marker: 'arrow' });
+      } else {
+        const exitX = idx < placementIdx ? rmCx + VIEW_W / 2 - RADIUS : rmCx - VIEW_W / 2 + RADIUS;
+        const bandY = roleBottom + 15; // card-free band just below the role row
+        arrows.push({
+          polyline: [[exitX, rmTop], [exitX, bandY], [uiCx, bandY], [uiCx, roleBottom]],
+          from: rm.id, to: `ui-${ui.id}`, marker: 'arrow',
+        });
+      }
     });
   });
 

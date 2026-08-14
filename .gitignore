@@ -35,3 +35,10 @@ replay_pid*
 .opencode
 
 node_modules/
+
+## github Copilot
+session-store.db
+session-store.db-shm
+session-store.db-wal
+
+session-state/

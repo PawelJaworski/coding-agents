@@ -1,5 +1,5 @@
 ---
-description: 
+description: >
   # Owns application architecture decisions. 
 
   # Requirements gathering

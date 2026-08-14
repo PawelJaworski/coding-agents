@@ -1,12 +1,23 @@
 ---
 name: event-modelling
-description: Generate or update an Event Modeling diagram (Dymitruk style) as a single self-contained, clickable HTML document from three markdown inputs (commands.md, events.md, readmodels.md). Use when the user asks to draw, create, regenerate, or update an event modelling / event model / event storming diagram, or references commands.md/events.md/readmodels.md and wants an editable, interactive diagram.
+description: >
+  # Description
+  Generate or update an Event Modeling diagram (Dymitruk style) as a single self-contained, clickable HTML document from four markdown inputs (commands.md, events.md, readmodels.md, uis.md). Use when the user asks to draw, create, regenerate, or update an event modelling / event model / event storming diagram, or references commands.md/events.md/readmodels.md/uis.md and wants an editable, interactive diagram.
+  
+  # Flow
+  Event modeling diagram is updated with other docs before implementation. Implementation is done based on it.
+
+  # When to use
+  Use it when there is a need for update Event Modeling diagram.
+
+  # When NOT to use
+  Code generation is not the case for this skill.
 ---
 
 # Event Modeling Diagram (HTML, interactive)
 
 Produce a **single self-contained HTML document** rendering an Event Modeling
-diagram from three markdown files (a swimlane `<table>` with an absolutely
+diagram from four markdown files (a swimlane `<table>` with an absolutely
 positioned `<svg>` arrow overlay, no external assets).
 
 **This is a generator, not a hand-drawing task.** All layout math (column
@@ -19,10 +30,11 @@ teaching to the generator.
 
 ## Workflow
 
-1. Locate the three input files. Paths are given by the user per use; if not,
+1. Locate the four input files. Paths are given by the user per use; if not,
    look in the current/target directory for `commands.md`, `events.md`,
-   `readmodels.md`. Ready-to-edit templates live in `templates/` if the user
-   is starting from scratch.
+   `readmodels.md`, `uis.md`. `uis.md` is the only source of `Actor:` — a
+   command never carries `Actor:` itself (see Parsing rules). Ready-to-edit
+   templates live in `templates/` if the user is starting from scratch.
 2. Run the generator:
 
    ```bash
@@ -30,7 +42,7 @@ teaching to the generator.
    ```
 
    `<inputDir>` defaults to `.`, `<outputFile>` defaults to
-   `<inputDir>/eventmodel.html`. The script reads the three markdown files
+   `<inputDir>/eventmodel.html`. The script reads the markdown files
    from `<inputDir>`.
 3. Read back the script's stdout summary (columns produced, T/R/P counts,
    viewBox dimensions) and sanity-check it against the input files (see
@@ -50,12 +62,10 @@ teaching to the generator.
 
 ## create-order
 Name: Create Order
-Actor: Customer
 Produces: order-created
 
 ## reserve-inventory
 Name: Reserve Inventory
-Actor: System
 Observes: order-created
 Produces: inventory-reserved
 ```
@@ -85,6 +95,28 @@ Name: Order List
 Subscribes: order-created, order-cancelled
 ```
 
+`uis.md` — user interface:
+
+```markdown
+# UIs
+
+## create-order
+Type: html
+Name: Create Order
+Actor: Customer
+
+## order-document
+Type: pdf
+Name: Order Document
+Actor: System
+
+## order-dashboard
+Type: html
+Name: Order Dashboard
+Actor: Ops Manager
+ConsistsOf: order-summary, stock-levels
+```
+
 ### Parsing rules (implemented in `scripts/generate.js`)
 
 - An `## heading` starts a new element; the heading is its id.
@@ -92,11 +124,21 @@ Subscribes: order-created, order-cancelled
 - `Subprocess:` groups events into process/subdomain swimlanes. Missing → the
   event shares the band of the first event with no subprocess.
 - `Produces:` (one id) links a command to the event it triggers.
-- `Actor:` links a person/actor/role to a command. The special actor `System`
-  marks an **automated command**.
-- `Observes:` (one event id, only on `System` commands) marks that the
-  automated command is triggered by watching that event.
+- `Actor:` (`uis.md` only) links a person/actor/role to a UI — and, through
+  it, to whichever command or read model that UI is linked to (see `uis.md`
+  linkage below). Commands **never** carry `Actor:` themselves — the script
+  throws if `commands.md` has one (see "No inline command Actor" below).
+- `Observes:` (one event id) marks a command as **automated**: the sole
+  signal that a command is a `System` command is having `Observes:` — there
+  is no explicit `Actor: System` anymore. A command is either automated
+  (`Observes:`) or human-triggered (a matching `uis.md` entry); a command
+  with neither just renders with no UI card and no swimlane.
 - `Subscribes:` (comma-separated ids) links a read model to its source events.
+- `Type:` (`uis.md` only) is a display hint (`html`, `pdf`, ...) shown as a
+  small uppercase label on the UI card; it does not affect linkage.
+- `ConsistsOf:` (`uis.md` only, comma-separated read model ids) — for a UI
+  that's projected from **more than one** read model (e.g. a dashboard
+  combining several views). See `uis.md` linkage below.
 - Accept `- key: value` bullets as an alternative to `key: value`.
 - A bare bullet with **no colon** (`* field name` / `- field name`) is a
   **field/parameter** of that element (command payload, event payload, or
@@ -115,13 +157,58 @@ Subscribes: order-created, order-cancelled
   Works the same way on commands and events, not just read models.
 - Ignore anything else (descriptions, prose, `#` title lines).
 - **No orphan events**: the script throws if an event has no `Produces:` link.
+- **No inline command Actor**: the script throws if any command in
+  `commands.md` has an `Actor:` line — move it to a matching `## <id>` entry
+  in `uis.md` instead (see `uis.md` linkage below).
+
+### `uis.md` linkage (id-based, plus optional `ConsistsOf:` for multi-view UIs)
+
+`uis.md` has no `Produces:`/`Observes:`-style linking field of its own —
+**each `## heading` id must equal the id of an existing command or read
+model** (its own id is the default link), optionally extended by
+`ConsistsOf:` for a UI projected from several views:
+
+- A UI whose id matches a **command** id is that command's human **trigger**
+  (input UI): rendered as a card above the command, in the swimlane row of
+  its `Actor:`. Its card title is the UI's `Name:` (falls back to the
+  command's own name).
+- A UI whose id matches a **read model** id, and/or lists read model ids in
+  `ConsistsOf:`, is that view's (or views') rendered **output** (e.g. a pdf
+  document, or a dashboard combining several projections): rendered as a
+  card in the swimlane row of its `Actor:` — the person who reads/receives
+  it — with one solid arrow per source read model into that card (the
+  reverse direction of the UI→command arrow). A UI's own id and its
+  `ConsistsOf:` list are merged and de-duplicated into one source set — e.g.
+  `## order-dashboard` with `ConsistsOf: order-summary, stock-levels` draws
+  two incoming arrows, from `order-summary` and `stock-levels`, even though
+  `order-dashboard` itself isn't a read model id.
+- The output UI card is placed in the column of its **rightmost** source
+  read model (same "never left of an event/view it depends on" convention
+  as read-model placement itself). A source in that same column gets a
+  straight vertical arrow; any other source is routed sideways into a
+  card-free band just below the role row, then up into the card.
+- Every id in `ConsistsOf:` must be a real read model id — the script throws
+  if not (same tier as the orphan-event check).
+- A UI id matching neither a command nor a read model, and with no (or an
+  invalid) `ConsistsOf:`, is a **hard error** — fix the id, add the missing
+  command/read model, or add `ConsistsOf:`.
+- A command or read model with no matching `uis.md` entry has no UI card and
+  no swimlane row — an automated (`Observes:`) command needs no `uis.md`
+  entry at all; a read model with no UI entry just has no output card.
+- `Actor:` in `uis.md` is what actually builds the swimlane list (`roles`) —
+  it is collected from **both** command-linked and read-model-linked (single
+  or composite) UI entries, in the order first encountered, so a read model
+  can introduce a brand-new swimlane (e.g. "Ops Manager") that no command
+  uses.
 
 ## Patterns (canonical, per eventmodeling.org cheat sheet)
 
 Every diagram is built from slices of the four canonical patterns:
 
 - **Command Pattern** `Trigger → Command → Event(s)` — a human via UI.
-- **View Pattern** `Event(s) → View` — read models drawn from events.
+- **View Pattern** `Event(s) → View` — read models drawn from events. When the
+  view is rendered back to a person (e.g. a pdf document), a `uis.md` entry
+  extends this to `Event(s) → View → UI`, landing in that person's swimlane.
 - **Automation Pattern** `Event(s) → View → Automated Trigger → Command → Event(s)` —
   a **robot/system** replaces the human trigger. A robot holds no business
   logic; it only watches a view and calls one use case per row.
@@ -138,7 +225,9 @@ Every diagram is built from slices of the four canonical patterns:
 - **No dashed actor → command lines.** The swimlane row already communicates
   ownership.
 - **One card stack per event column** (UI above command). Read models never
-  share a cell with a command (see Layout — read-model placement).
+  share a cell with a command (see Layout — read-model placement). A read
+  model *can* share its column with an output UI card, but that card lives
+  in a different row (the actor's swimlane), never the mid-row.
 
 ## Field lists / card sizing is responsive
 
@@ -157,10 +246,10 @@ fields a card has.
 
 ### Structure
 
-Rows top→bottom: time badges → one swimlane per non-System actor → System
-swimlane (only if any `Actor: System` command exists) → a single free-space
-**mid-row** holding every command *and* every read-model card → one swimlane
-per `Subprocess`.
+Rows top→bottom: time badges → one swimlane per human actor (from `uis.md`
+`Actor:` on command- or read-model-linked entries) → System swimlane (only
+if any command has `Observes:`) → a single free-space **mid-row** holding
+every command *and* every read-model card → one swimlane per `Subprocess`.
 
 Columns left→right: one per event in `events.md` order, plus one **inserted**
 column per read model that couldn't get its natural column (see below).
@@ -194,8 +283,8 @@ UI 210x76, Command 200x56, Event 220x74 (+14 for the bold `id:{Aggregate}` line)
 
 `width = GUT + T*COL` where `T` = events + inserted read-model columns.
 `height = TIME_H + R*ROLE_H + (hasSystem ? SYS_H : 0) + MID_H + P*PROC_H`.
-The System row is fully omitted (not just hidden) when no `Actor: System`
-command exists — don't reserve its band.
+The System row is fully omitted (not just hidden) when no command has
+`Observes:` — don't reserve its band.
 
 Card corners are rounded (`border-radius: 8px`); any arrow endpoint that
 would otherwise land on a corner (e.g. an event's top-right/top-left corner)
@@ -206,6 +295,14 @@ meets a flat edge, not the rounded notch.
 
 - **UI → command**, **command → event**: vertical arrows, bottom edge to
   top edge, black, `marker-end`.
+- **Read model(s) → output UI**: black, `marker-end`. The source read model
+  in the UI's own placement column gets a straight vertical arrow, same
+  shape as UI → command but reversed (its top edge up into the UI card's
+  bottom edge). Any other source (via `ConsistsOf:`) exits that read model's
+  inset top corner nearest the UI's column, runs sideways through a
+  card-free band just below the role row, then up into the same card edge.
+  Only drawn for read models with a matching `uis.md` entry (by id or
+  `ConsistsOf:`).
 - **Automation**: purple dashed arrow from the observed event's inset
   top-right corner, up the column's right edge to the System row, across,
   then down into the automated command's top edge. Never routed up the
@@ -252,7 +349,7 @@ After running the generator:
 - Re-read `scripts/generate.js`'s stdout: column order should read
   chronologically, with `[view:...]` entries landing right after the event
   they subscribe to (never before it, never past a later slice).
-- Every element id from the three markdown files appears as a
+- Every element id from the markdown files appears as a
   `data-element` in the output HTML; every `data-from`/`data-to` resolves to
   one of them (`grep -o 'data-element="[^"]*"'` / `data-from=...` on the
   output file).
@@ -262,6 +359,10 @@ After running the generator:
   transcription error.
 - No event is an orphan (the generator already throws on this — if it ran
   without error, this is satisfied).
+- No `uis.md` entry with an id that doesn't match a command or read model
+  (unless it has a valid `ConsistsOf:`), and no `ConsistsOf:` referencing an
+  unknown read model id (the generator throws on both — if it ran without
+  error, this is satisfied).
 - No field-consistency violation (the generator already throws on this too —
   see "Diagram consistency" below; if it ran without error, this is
   satisfied). If it does throw, the fix is either to add the missing field to
@@ -295,8 +396,8 @@ without shrinking the title or field list; cards without an `id:` stay at
 their normal base height.
 
 ## Ubiquitous language check (non-blocking)
-The generator also cross-checks every command's `Actor:` (excluding
-`System`) against the term names in `docs/business-definitions.html`
+The generator also cross-checks every command's effective actor (from its
+`uis.md` entry) against the term names in `docs/business-definitions.html`
 (matched via that page's `data-name="..."` attributes, walking up from the
 input directory to find `docs/`). An actor not found there prints a
 **warning**, not a hard failure — introducing a new actor may be intentional

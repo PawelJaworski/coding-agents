@@ -9,5 +9,8 @@ mode: subagent
 permission:
   task: allow
   bash: allow
+  edit: allow
+  read: allow
+  external_directory: allow
 model: claude-sonnet-5
 ---

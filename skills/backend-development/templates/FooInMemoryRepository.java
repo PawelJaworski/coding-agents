@@ -1,4 +1,4 @@
-package {base}.infrastructure;
+package {where entity is located};
 
 import java.util.Set;
 

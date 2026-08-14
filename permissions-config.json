@@ -1,6 +1,6 @@
 {
   "locations": {
-    "/Users/paweljaworski/projects/github/insurance-company-service": {
+    "../insurance-company-service": {
       "tool_approvals": [
         {
           "kind": "commands",

@@ -42,3 +42,4 @@ session-store.db-shm
 session-store.db-wal
 
 session-state/
+sidebar-sessions-state/

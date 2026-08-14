@@ -1,6 +1,8 @@
 package pl.pjaworski.insurance_company.eventstream;
 
 import java.util.Collection;
+import {base}.domain.events.FooEvent;
+improt {base}.domain.events.BarEvent;
 
 public interface StateProjector<S> {
     default S hydrate(S state, Collection<DomainEvent> events) {
@@ -9,11 +11,16 @@ public interface StateProjector<S> {
 
     private S apply(S state, DomainEvent event) {
         return switch (event.eventType()) {
-            case POLICY_ISSUED -> apply(state, (PolicyIssued) event);
+            case FOO -> apply(state, (FooEvent) event);
+            case BAR -> apply(state, (BarEvent) event);
         };
     }
 
-    default S apply(S state, PolicyIssued event) {
+    default S apply(S state, FooEvent event) {
+        return state;
+    }
+
+    default S apply(S state, BarEvent event) {
         return state;
     }
 }

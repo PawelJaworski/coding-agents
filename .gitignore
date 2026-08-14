@@ -43,3 +43,4 @@ session-store.db-wal
 
 session-state/
 sidebar-sessions-state/
+config.json

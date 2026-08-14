@@ -56,6 +56,7 @@ templates/FooAbility.java
    - If type doesn't exist at the time don't ask and create as corresponding to business definition.
 3. Do not invent structure and logic. If something is not clear ask questions in file. When the questions are answered then delete the file.
 4. Event modeling atttributes are abstractions. They don't have to have all details. Prefer business-definitions over event modeling for objects attributes. 
+5. If class template exists NEVER invent your own pattern. Use code templates as much as possible. NEVER create controllers, helpers, services if pattern exists in templates.
 
 # Event modeling notation mapping
 1. `id:{Aggregate}` on an event/command/read model names the **aggregate id**

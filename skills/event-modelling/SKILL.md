@@ -131,8 +131,12 @@ ConsistsOf: order-summary, stock-levels
 - `Observes:` (one event id) marks a command as **automated**: the sole
   signal that a command is a `System` command is having `Observes:` — there
   is no explicit `Actor: System` anymore. A command is either automated
-  (`Observes:`) or human-triggered (a matching `uis.md` entry); a command
-  with neither just renders with no UI card and no swimlane.
+  (`Observes:`) or human-triggered (a matching `uis.md` entry, by id or
+  `Triggers:`); a command with neither just renders with no UI card and no
+  swimlane.
+- `Triggers:` (`uis.md` only, one command id) — lets an input UI's heading
+  use its own descriptive id instead of matching the command id exactly.
+  See `uis.md` linkage below.
 - `Subscribes:` (comma-separated ids) links a read model to its source events.
 - `Type:` (`uis.md` only) is a display hint (`html`, `pdf`, ...) shown as a
   small uppercase label on the UI card; it does not affect linkage.
@@ -161,17 +165,26 @@ ConsistsOf: order-summary, stock-levels
   `commands.md` has an `Actor:` line — move it to a matching `## <id>` entry
   in `uis.md` instead (see `uis.md` linkage below).
 
-### `uis.md` linkage (id-based, plus optional `ConsistsOf:` for multi-view UIs)
+### `uis.md` linkage (id-based, plus `Triggers:`/`ConsistsOf:` overrides)
 
 `uis.md` has no `Produces:`/`Observes:`-style linking field of its own —
 **each `## heading` id must equal the id of an existing command or read
 model** (its own id is the default link), optionally extended by
-`ConsistsOf:` for a UI projected from several views:
+`Triggers:` (input UIs) or `ConsistsOf:` (output UIs projected from several
+views):
 
 - A UI whose id matches a **command** id is that command's human **trigger**
   (input UI): rendered as a card above the command, in the swimlane row of
   its `Actor:`. Its card title is the UI's `Name:` (falls back to the
   command's own name).
+- `Triggers: <command-id>` lets an input UI use its **own** descriptive id
+  instead of having to match the command id exactly — e.g. `##
+  order-intake-form` with `Triggers: create-order` triggers the
+  `create-order` command even though the heading id differs. Only one UI may
+  declare `Triggers:` for a given command — the script throws if two UIs
+  target the same command (whether via `Triggers:` or same-id matching).
+  Without `Triggers:`, same-id matching is still the default and keeps
+  working unchanged.
 - A UI whose id matches a **read model** id, and/or lists read model ids in
   `ConsistsOf:`, is that view's (or views') rendered **output** (e.g. a pdf
   document, or a dashboard combining several projections): rendered as a

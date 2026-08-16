@@ -48,6 +48,7 @@ function parseMd(file) {
         case 'type': cur.uiType = val; break;
         case 'produces': cur.produces = val; break;
         case 'observes': cur.observes = val; break;
+        case 'triggers': cur.triggers = val; break;
         case 'subprocess': cur.subprocess = val; break;
         case 'id': cur.aggregateId = val; break;
         case 'subscribes':
@@ -182,6 +183,31 @@ function buildModel(inputDir) {
   const commandIds = new Set(commands.map((c) => c.id));
   const readmodelIds = new Set(readmodels.map((r) => r.id));
 
+  // Which UI triggers which command. By default a UI's own id is the
+  // trigger link (its id equals the command's id), same as before. An
+  // explicit `Triggers: <command-id>` overrides this — it lets the UI
+  // heading use its own descriptive id (e.g. "order-intake-form") instead
+  // of having to match the command id exactly, while still wiring it to
+  // that command as its human trigger.
+  const triggerUiForCommand = {}; // commandId -> ui
+  uis.forEach((u) => {
+    if (u.triggers) {
+      if (!commandIds.has(u.triggers)) {
+        throw new Error(
+          `UI "${u.id}" Triggers: references unknown command id "${u.triggers}".`
+        );
+      }
+      if (triggerUiForCommand[u.triggers] && triggerUiForCommand[u.triggers] !== u) {
+        throw new Error(
+          `Command "${u.triggers}" has more than one triggering UI — "${triggerUiForCommand[u.triggers].id}" and "${u.id}". Only one UI may trigger a given command.`
+        );
+      }
+      triggerUiForCommand[u.triggers] = u;
+    } else if (commandIds.has(u.id) && !triggerUiForCommand[u.id]) {
+      triggerUiForCommand[u.id] = u;
+    }
+  });
+
   // Sanity: every `ConsistsOf:` entry must reference a real read model id.
   uis.forEach((u) => {
     const bad = (u.consistsOf || []).filter((id) => !readmodelIds.has(id));
@@ -202,12 +228,12 @@ function buildModel(inputDir) {
     if (set.size) uiSources[u.id] = [...set];
   });
 
-  const orphanUis = uis.filter((u) => !commandIds.has(u.id) && !uiSources[u.id]);
+  const orphanUis = uis.filter((u) => !u.triggers && !commandIds.has(u.id) && !uiSources[u.id]);
   if (orphanUis.length) {
     throw new Error(
       `UI(s) in uis.md with no matching command or read model id — ${orphanUis.map((u) => u.id).join(', ')}. ` +
-      `Each "## heading" in uis.md must match a command id (input UI), or match/list read model id(s) ` +
-      `via its own id or ConsistsOf: (output UI).`
+      `Each "## heading" in uis.md must match a command id (input UI), declare "Triggers: <command-id>" ` +
+      `(input UI with its own id), or match/list read model id(s) via its own id or ConsistsOf: (output UI).`
     );
   }
 
@@ -222,7 +248,7 @@ function buildModel(inputDir) {
       `Commands no longer carry Actor: directly; move it to a matching "## ${commandsWithInlineActor[0].id}" entry in uis.md instead.`
     );
   }
-  commands.forEach((c) => { c.actor = uiById[c.id] ? uiById[c.id].actor : undefined; });
+  commands.forEach((c) => { c.actor = triggerUiForCommand[c.id] ? triggerUiForCommand[c.id].actor : undefined; });
 
   commands.forEach((c) => { if (!c.name) c.name = c.id; c._h = cardHeight(c.aggregateId ? CMD_H + AGG_ID_H : CMD_H, c.fields); });
   const defaultSubprocess = (events[0] && events[0].subprocess) || 'Default';
@@ -358,7 +384,7 @@ function buildModel(inputDir) {
   events.forEach((e) => { if (!subprocesses.includes(e.subprocess)) subprocesses.push(e.subprocess); });
 
   return {
-    commands, events, readmodels, uis, uiById, uiSources, uiPlacementCol,
+    commands, events, readmodels, uis, uiById, triggerUiForCommand, uiSources, uiPlacementCol,
     eventProducer, columns, midRow, colIndexForEvent, colIndexForView, roles, hasSystem, subprocesses,
   };
 }
@@ -440,7 +466,7 @@ function fieldsHtml(fields) {
 }
 
 function renderTable(model, geo) {
-  const { commands, events, readmodels, uiById, uis, uiPlacementCol, eventProducer, columns, midRow, roles, hasSystem, subprocesses } = model;
+  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiPlacementCol, eventProducer, columns, midRow, roles, hasSystem, subprocesses } = model;
 
   const colgroup = `<col style="width:${GUT}px">` + columns.map(() => `<col style="width:${COL}px">`).join('');
 
@@ -463,9 +489,10 @@ function renderTable(model, geo) {
       if (c.type === 'event') {
         const cmd = eventProducer[c.eventId];
         if (cmd && cmd.actor === role) {
-          const ui = uiById[cmd.id];
+          const ui = triggerUiForCommand[cmd.id];
           const label = ui && ui.uiType ? ui.uiType.toUpperCase() : 'UI';
-          content = `<div class="card ui-card" data-element="ui-${cmd.id}" data-type="ui" title="ui-${cmd.id} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml((ui && ui.name) || cmd.name)}</div></div>`;
+          const uiId = ui ? ui.id : cmd.id;
+          content = `<div class="card ui-card" data-element="ui-${uiId}" data-type="ui" title="ui-${uiId} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml((ui && ui.name) || cmd.name)}</div></div>`;
         }
       }
       // Output UI (e.g. a pdf/html screen projected from one or more read
@@ -530,7 +557,7 @@ function renderTable(model, geo) {
 // ---------------------------------------------------------------------------
 
 function renderArrows(model, geo) {
-  const { commands, events, readmodels, uiById, uis, uiSources, uiPlacementCol, eventProducer, columns, roles, subprocesses, colIndexForEvent, colIndexForView } = model;
+  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiSources, uiPlacementCol, eventProducer, columns, roles, subprocesses, colIndexForEvent, colIndexForView } = model;
   const arrows = [];
   const roleIndex = (actor) => roles.indexOf(actor);
 
@@ -547,7 +574,9 @@ function renderArrows(model, geo) {
     if (!cmd.observes) {
       const r = roleIndex(cmd.actor);
       const roleBottom = geo.roleCenterY(r) + UI_H / 2;
-      arrows.push({ x1: cx, y1: roleBottom, x2: cx, y2: midTop, from: `ui-${cmd.id}`, to: cmd.id, marker: 'arrow' });
+      const ui = triggerUiForCommand[cmd.id];
+      const uiId = ui ? ui.id : cmd.id;
+      arrows.push({ x1: cx, y1: roleBottom, x2: cx, y2: midTop, from: `ui-${uiId}`, to: cmd.id, marker: 'arrow' });
     } else {
       const obsIdx = colIndexForEvent(cmd.observes);
       const obsEv = events.find((e) => e.id === cmd.observes);

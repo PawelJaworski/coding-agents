@@ -8,6 +8,9 @@ description: >
   Use when there is request for backend code generation.
 ---
 
+# How to proceed this instructions
+* Do not read all code templates and other referenced files at start. You should read them on demand. Filename should show it's context.
+
 # Code templates
 templates/DoSomethingOnFooCmd.java
 templates/DoSomethingOnFooHandler.java

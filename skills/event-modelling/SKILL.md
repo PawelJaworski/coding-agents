@@ -134,9 +134,10 @@ ConsistsOf: order-summary, stock-levels
   (`Observes:`) or human-triggered (a matching `uis.md` entry, by id or
   `Triggers:`); a command with neither just renders with no UI card and no
   swimlane.
-- `Triggers:` (`uis.md` only, one command id) — lets an input UI's heading
-  use its own descriptive id instead of matching the command id exactly.
-  See `uis.md` linkage below.
+- `Triggers:` (`uis.md` only, one or more comma-separated command ids) — lets
+  an input UI's heading use its own descriptive id instead of matching the
+  command id exactly, and/or fan out a single UI entry into multiple visual
+  UI boxes, one per listed command. See `uis.md` linkage below.
 - `Subscribes:` (comma-separated ids) links a read model to its source events.
 - `Type:` (`uis.md` only) is a display hint (`html`, `pdf`, ...) shown as a
   small uppercase label on the UI card; it does not affect linkage.
@@ -180,11 +181,34 @@ views):
 - `Triggers: <command-id>` lets an input UI use its **own** descriptive id
   instead of having to match the command id exactly — e.g. `##
   order-intake-form` with `Triggers: create-order` triggers the
-  `create-order` command even though the heading id differs. Only one UI may
-  declare `Triggers:` for a given command — the script throws if two UIs
-  target the same command (whether via `Triggers:` or same-id matching).
-  Without `Triggers:`, same-id matching is still the default and keeps
-  working unchanged.
+  `create-order` command even though the heading id differs.
+- **Multiple UIs may legitimately trigger the same command — fan-in.** This
+  is not an error: it represents two (or more) different scenarios/entry
+  points that both end up issuing the same command. It can happen via any
+  combination of an id-match candidacy (a UI whose own id equals the command
+  id) and/or explicit `Triggers:` claims from other UIs. For every command,
+  the generator collects **all** UIs with a real claim on it — the markdown
+  stays however many `## heading` entries the user wrote — and the generated
+  diagram renders **one visual UI box per triggering UI**, side by side in
+  that command's role/column cell, each with its own trigger arrow
+  converging into the same command card. Example: `## policy-proposal`
+  with `Triggers: create-policy-proposal, issue-policy` and a separate `##
+  issue-policy` entry (matching `issue-policy` by id) both legitimately
+  trigger the `issue-policy` command — the diagram shows two boxes
+  (`policy-proposal` and `issue-policy`) feeding into it. The only
+  constraint: all UIs fanning into the same command must share the same
+  `Actor:` (a command's role-row placement is a single swimlane) — the
+  script throws if they don't.
+- `Triggers:` accepts a **comma-separated list of command ids**
+  (`Triggers: create-policy-proposal, issue-policy`) to link one `uis.md`
+  entry to several commands at once. The markdown stays a single `##
+  heading`, but the generated diagram renders it as **one visual UI box per
+  listed command**, each positioned above its own command column and wired
+  with its own trigger arrow — all boxes share the same `Name:`/`Type:`/
+  `Actor:`. This is the mirror image of the fan-in case above: one UI fans
+  **out** to several different commands, while fan-in is several UIs feeding
+  **into** the same command — both are legitimate and can be combined freely.
+
 - A UI whose id matches a **read model** id, and/or lists read model ids in
   `ConsistsOf:`, is that view's (or views') rendered **output** (e.g. a pdf
   document, or a dashboard combining several projections): rendered as a
@@ -208,6 +232,22 @@ views):
 - A command or read model with no matching `uis.md` entry has no UI card and
   no swimlane row — an automated (`Observes:`) command needs no `uis.md`
   entry at all; a read model with no UI entry just has no output card.
+- **Standalone UIs are supported and always rendered.** A `uis.md` entry can
+  legitimately end up with no `Triggers:` wiring and no read-model/`ConsistsOf:`
+  wiring — genuinely a UI card documented for context, not yet wired into any
+  slice: its id matches neither a command (no id-match candidacy) nor a read
+  model, and it declares no `Triggers:` at all. This is the **only** way a UI
+  lands in the standalone bucket. A UI whose id-match or `Triggers:` claim on
+  a command coexists fine with another UI's claim on that same command (see
+  fan-in above) — neither is ever silently demoted to standalone. Genuinely
+  standalone entries are never silently dropped either: the generator
+  collects them into a dedicated **"Unwired UIs" row**, placed right under
+  the time row and spanning the full width of the diagram, with one
+  dashed-border UI card per entry (labelled with its `Type:`/`Name:`/`Actor:`
+  like any other UI card, but with no arrows in or out since it isn't wired
+  to anything). This is a placeholder, not a final answer — flag it for a
+  human to either wire it up properly (`Triggers:`/`ConsistsOf:`) or confirm
+  it's intentionally standalone.
 - `Actor:` in `uis.md` is what actually builds the swimlane list (`roles`) —
   it is collected from **both** command-linked and read-model-linked (single
   or composite) UI entries, in the order first encountered, so a read model

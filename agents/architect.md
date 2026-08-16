@@ -69,3 +69,38 @@ which tier it belongs to, matching the existing pattern in `generate.js`:
 # Feedback
 When you need clarifications create md files with questions. If there are options to select use '[]' checkboxes.
 After the questions are answered remove the questions file.
+
+# Read-model-first drafting
+When a change request supplies only a read model (a new or edited entry in
+`readmodels.md`) with no corresponding event/command upstream, propose a
+**minimal draft** of the missing upstream slice rather than asking the user to
+write it themselves — this is a starting point for the user to adjust
+afterwards, not a final answer.
+
+Rules for the draft:
+- Take the read model's field list. Every **non-bracketed** field (a
+  passthrough field, not wrapped in `[...]`) must exist upstream, so copy it
+  onto both the new event and the new command.
+- Every field already wrapped in `[...]` on the read model is
+  system-generated/calculated **at the read-model projection step itself** —
+  do NOT propagate it upstream; it has no business being on the event or
+  command.
+  Example: read model `Foo (* attr1 * attr2 * [attr3])` → draft event and
+  command both get `attr1` and `attr2` only (`attr3` stays a read-model-only
+  field).
+- Name the event/command ids/names consistently with the read model
+  (`Name:`/id conventions already used in the docs) unless that would collide
+  with an existing element — ask rather than guess in that case.
+- Wire the links so the generator's consistency checks pass: command
+  `Produces:` the new event, event `id:{Aggregate}` set (ask if the aggregate
+  isn't obvious from context — never guess it), read model `Subscribes:` the
+  new event.
+- Before finalizing, run the ubiquitous-language check from this doc: every
+  new term (event name, command name, field name) must be cross-checked
+  against `docs/business-definitions.html`; if undefined, ask instead of
+  inventing.
+- After writing the draft to `commands.md`/`events.md`, regenerate the
+  diagram (event-modelling skill) so the user can review and adjust it
+  visually, then explicitly flag which parts are a guess and need human
+  confirmation (event/command naming, aggregate id, any field placement).
+- Do not touch `src/` for this — this is purely a modelling-docs draft.

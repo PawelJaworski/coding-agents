@@ -48,7 +48,13 @@ function parseMd(file) {
         case 'type': cur.uiType = val; break;
         case 'produces': cur.produces = val; break;
         case 'observes': cur.observes = val; break;
-        case 'triggers': cur.triggers = val; break;
+        case 'triggers':
+          // Comma-separated list of command ids this single UI card triggers.
+          // Rendering fans this out into one visual UI box per command (see
+          // buildModel/renderTable/renderArrows) while the markdown stays a
+          // single "## heading" entry.
+          cur.triggers = val.split(',').map((s) => s.trim()).filter(Boolean);
+          break;
         case 'subprocess': cur.subprocess = val; break;
         case 'id': cur.aggregateId = val; break;
         case 'subscribes':
@@ -183,28 +189,61 @@ function buildModel(inputDir) {
   const commandIds = new Set(commands.map((c) => c.id));
   const readmodelIds = new Set(readmodels.map((r) => r.id));
 
-  // Which UI triggers which command. By default a UI's own id is the
+  // Which UI(s) trigger which command. By default a UI's own id is the
   // trigger link (its id equals the command's id), same as before. An
-  // explicit `Triggers: <command-id>` overrides this — it lets the UI
-  // heading use its own descriptive id (e.g. "order-intake-form") instead
-  // of having to match the command id exactly, while still wiring it to
-  // that command as its human trigger.
-  const triggerUiForCommand = {}; // commandId -> ui
+  // explicit `Triggers: <command-id>[, <command-id>...]` overrides this — it
+  // lets the UI heading use its own descriptive id (e.g. "order-intake-form")
+  // instead of having to match the command id exactly, while still wiring it
+  // to that command as its human trigger. A single UI may list several
+  // command ids: the markdown stays one "## heading" entry, but each listed
+  // command gets wired to (and, in the rendered diagram, gets its own visual
+  // box for) that same UI — see renderTable/renderArrows below, which key
+  // off the command's own column, so one entry naturally fans out into N
+  // boxes without further bookkeeping here.
+  //
+  // Conversely, more than one UI may legitimately trigger the *same*
+  // command — this is fan-in: two different scenarios/entry points that
+  // both end up issuing the same command. E.g. an explicit `Triggers:`
+  // claim from one UI and an id-match claim from another UI with the same
+  // id as the command can coexist. This is not an error: every UI that
+  // has a real claim on a command is a distinct trigger candidate, and
+  // renderTable/renderArrows render one visual box per triggering UI in
+  // that command's column, side by side, each with its own arrow.
+  const triggerUiForCommand = {}; // commandId -> [ui, ui, ...] (dedup by ui.id)
+  const addTrigger = (cmdId, ui) => {
+    const list = triggerUiForCommand[cmdId] || (triggerUiForCommand[cmdId] = []);
+    if (!list.some((u) => u.id === ui.id)) list.push(ui);
+  };
   uis.forEach((u) => {
-    if (u.triggers) {
-      if (!commandIds.has(u.triggers)) {
-        throw new Error(
-          `UI "${u.id}" Triggers: references unknown command id "${u.triggers}".`
-        );
-      }
-      if (triggerUiForCommand[u.triggers] && triggerUiForCommand[u.triggers] !== u) {
-        throw new Error(
-          `Command "${u.triggers}" has more than one triggering UI — "${triggerUiForCommand[u.triggers].id}" and "${u.id}". Only one UI may trigger a given command.`
-        );
-      }
-      triggerUiForCommand[u.triggers] = u;
-    } else if (commandIds.has(u.id) && !triggerUiForCommand[u.id]) {
-      triggerUiForCommand[u.id] = u;
+    if (u.triggers && u.triggers.length) {
+      u.triggers.forEach((tid) => {
+        if (!commandIds.has(tid)) {
+          throw new Error(
+            `UI "${u.id}" Triggers: references unknown command id "${tid}".`
+          );
+        }
+        addTrigger(tid, u);
+      });
+    } else if (commandIds.has(u.id)) {
+      // This UI's own id matches a command id — an id-match auto-trigger
+      // candidate. Coexists with any other UI(s) already triggering the
+      // same command (explicit Triggers: or another id-match) — fan-in,
+      // not a conflict.
+      addTrigger(u.id, u);
+    }
+  });
+  // Sanity: all UIs fanning into the same command must share the same
+  // actor — a command's role-row placement is keyed by a single actor, so
+  // conflicting actors across triggering UIs would be ambiguous and must
+  // be surfaced rather than guessed at (e.g. silently picking the first).
+  Object.keys(triggerUiForCommand).forEach((cmdId) => {
+    const list = triggerUiForCommand[cmdId];
+    const actors = new Set(list.map((u) => u.actor));
+    if (actors.size > 1) {
+      throw new Error(
+        `Command "${cmdId}" is triggered by UIs with different actors — ${list.map((u) => `${u.id}:${u.actor}`).join(', ')}. ` +
+        `All UIs triggering the same command must share the same Actor:.`
+      );
     }
   });
 
@@ -228,7 +267,7 @@ function buildModel(inputDir) {
     if (set.size) uiSources[u.id] = [...set];
   });
 
-  const orphanUis = uis.filter((u) => !u.triggers && !commandIds.has(u.id) && !uiSources[u.id]);
+  const orphanUis = uis.filter((u) => !(u.triggers && u.triggers.length) && !commandIds.has(u.id) && !uiSources[u.id]);
   if (orphanUis.length) {
     throw new Error(
       `UI(s) in uis.md with no matching command or read model id — ${orphanUis.map((u) => u.id).join(', ')}. ` +
@@ -248,7 +287,7 @@ function buildModel(inputDir) {
       `Commands no longer carry Actor: directly; move it to a matching "## ${commandsWithInlineActor[0].id}" entry in uis.md instead.`
     );
   }
-  commands.forEach((c) => { c.actor = triggerUiForCommand[c.id] ? triggerUiForCommand[c.id].actor : undefined; });
+  commands.forEach((c) => { c.actor = triggerUiForCommand[c.id] ? triggerUiForCommand[c.id][0].actor : undefined; });
 
   commands.forEach((c) => { if (!c.name) c.name = c.id; c._h = cardHeight(c.aggregateId ? CMD_H + AGG_ID_H : CMD_H, c.fields); });
   const defaultSubprocess = (events[0] && events[0].subprocess) || 'Default';
@@ -369,6 +408,19 @@ function buildModel(inputDir) {
     uiPlacementCol[uiId] = bestIdx;
   });
 
+  // Standalone UIs: a "## heading" in uis.md that never ends up wired into
+  // the diagram — its id has NO id-match trigger candidacy (doesn't equal
+  // any command id) AND it has NO explicit `Triggers:` claim at all, and it
+  // isn't the source of any output view (`uiSources`) either. Any UI that
+  // *does* have an id-match or explicit-Triggers claim on a command is
+  // handled above — if that claim conflicts with another UI's claim on the
+  // same command, it throws rather than silently landing here. Rather than
+  // silently dropping genuinely unwired cards, they're still real UI cards
+  // from the model and must be rendered somewhere — see the dedicated
+  // "Unwired UIs" row in renderTable.
+  const wiredAsTrigger = new Set(Object.values(triggerUiForCommand).flat().map((u) => u.id));
+  const standaloneUis = uis.filter((u) => !wiredAsTrigger.has(u.id) && !uiSources[u.id]);
+
   const roles = [];
   commands.forEach((c) => {
     if (c.actor && !roles.includes(c.actor)) roles.push(c.actor);
@@ -386,6 +438,7 @@ function buildModel(inputDir) {
   return {
     commands, events, readmodels, uis, uiById, triggerUiForCommand, uiSources, uiPlacementCol,
     eventProducer, columns, midRow, colIndexForEvent, colIndexForView, roles, hasSystem, subprocesses,
+    standaloneUis,
   };
 }
 
@@ -396,6 +449,7 @@ function buildModel(inputDir) {
 const GUT = 180, COL = 360;
 const TIME_H = 40, ROLE_H = 130, SYS_H = 130, MID_H = 120, PROC_H = 150;
 const UI_W = 210, UI_H = 76;
+const STANDALONE_H = 130; // dedicated row for UI cards with no Triggers: and no read-model view wiring
 const CMD_W = 200, CMD_H = 56;
 const AGG_ID_H = 14; // extra height to fit an optional/mandatory "id:{Aggregate}" line
 const EVT_W = 220, EVT_H = 60 + AGG_ID_H; // events always carry the mandatory aggregate-id line
@@ -434,15 +488,16 @@ function computeGeometry(model) {
     return rowHeightFor(Math.max(0, ...evHeights), PROC_H);
   });
 
-  const midRowTop = TIME_H + R * ROLE_H + (model.hasSystem ? SYS_H : 0);
+  const standaloneH = model.standaloneUis.length ? STANDALONE_H : 0;
+  const midRowTop = TIME_H + standaloneH + R * ROLE_H + (model.hasSystem ? SYS_H : 0);
   const processTop = midRowTop + midRowH;
   const procGroupTop = (g) => processTop + procHeights.slice(0, g).reduce((a, b) => a + b, 0);
   const height = processTop + procHeights.reduce((a, b) => a + b, 0);
   return {
-    T, R, P, width, height, midRowTop, processTop, midRowH, procHeights,
+    T, R, P, width, height, midRowTop, processTop, midRowH, procHeights, standaloneH,
     colCenterX: (i) => COL * (i + 1),
-    roleCenterY: (r) => TIME_H + r * ROLE_H + ROLE_H / 2,
-    sysCenterY: () => TIME_H + R * ROLE_H + SYS_H / 2,
+    roleCenterY: (r) => TIME_H + standaloneH + r * ROLE_H + ROLE_H / 2,
+    sysCenterY: () => TIME_H + standaloneH + R * ROLE_H + SYS_H / 2,
     midCenterY: () => midRowTop + midRowH / 2,
     procGroupTop,
     procCenterY: (g) => procGroupTop(g) + procHeights[g] / 2,
@@ -466,7 +521,7 @@ function fieldsHtml(fields) {
 }
 
 function renderTable(model, geo) {
-  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiPlacementCol, eventProducer, columns, midRow, roles, hasSystem, subprocesses } = model;
+  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiPlacementCol, eventProducer, columns, midRow, roles, hasSystem, subprocesses, standaloneUis } = model;
 
   const colgroup = `<col style="width:${GUT}px">` + columns.map(() => `<col style="width:${COL}px">`).join('');
 
@@ -482,6 +537,21 @@ function renderTable(model, geo) {
   });
   const timeRow = `<tr style="height:${TIME_H}px">${timeCells}</tr>`;
 
+  // Standalone UIs row: cards defined in uis.md with no `Triggers:` wiring
+  // (or whose trigger slot was already claimed by another UI) and no
+  // read-model view wiring. Rather than dropping them, they get their own
+  // dedicated row right under the time row, laid out left-to-right in a
+  // single spanning cell — there's no natural column for them since they
+  // don't relate to any specific event/command/view column.
+  let standaloneRow = '';
+  if (standaloneUis.length) {
+    const cards = standaloneUis.map((u) => {
+      const label = u.uiType ? u.uiType.toUpperCase() : 'UI';
+      return `<div class="card ui-card standalone-ui" data-element="ui-${u.id}" data-type="ui" title="ui-${u.id} — standalone UI (no Triggers:, no view) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(u.name || u.id)}</div>${u.actor ? `<div class="caption">${escapeHtml(u.actor)}</div>` : ''}</div>`;
+    }).join('');
+    standaloneRow = `<tr style="height:${STANDALONE_H}px"><td class="gutter standalone-gutter">Unwired UIs</td><td class="lane-cell standalone-cell" colspan="${columns.length}"><div class="standalone-row">${cards}</div></td></tr>`;
+  }
+
   const roleRows = roles.map((role, r) => {
     let cells = `<td class="gutter role-gutter" style="background:${roleColor(r)}">${escapeHtml(role)}</td>`;
     columns.forEach((c, i) => {
@@ -489,10 +559,17 @@ function renderTable(model, geo) {
       if (c.type === 'event') {
         const cmd = eventProducer[c.eventId];
         if (cmd && cmd.actor === role) {
-          const ui = triggerUiForCommand[cmd.id];
-          const label = ui && ui.uiType ? ui.uiType.toUpperCase() : 'UI';
-          const uiId = ui ? ui.id : cmd.id;
-          content = `<div class="card ui-card" data-element="ui-${uiId}" data-type="ui" title="ui-${uiId} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml((ui && ui.name) || cmd.name)}</div></div>`;
+          // Fan-in: a command may be triggered by more than one UI (e.g. an
+          // explicit Triggers: claim plus an id-match claim, or several
+          // distinct entry-point scenarios) — render one box per triggering
+          // UI, side by side, in this same cell.
+          const triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id, name: cmd.name, uiType: undefined }];
+          const cards = triggerUis.map((ui) => {
+            const label = ui && ui.uiType ? ui.uiType.toUpperCase() : 'UI';
+            const uiId = ui.id;
+            return `<div class="card ui-card" data-element="ui-${uiId}" data-type="ui" title="ui-${uiId} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(ui.name || cmd.name)}</div></div>`;
+          }).join('');
+          content = triggerUis.length > 1 ? `<div class="ui-fanin-row">${cards}</div>` : cards;
         }
       }
       // Output UI (e.g. a pdf/html screen projected from one or more read
@@ -549,7 +626,7 @@ function renderTable(model, geo) {
     return `<tr style="height:${geo.procHeights[g]}px">${cells}</tr>`;
   }).join('\n');
 
-  return `<table>\n<colgroup>${colgroup}</colgroup>\n${timeRow}\n${roleRows}\n${systemRow}\n${midRowHtml}\n${processRows}\n</table>`;
+  return `<table>\n<colgroup>${colgroup}</colgroup>\n${timeRow}\n${standaloneRow}\n${roleRows}\n${systemRow}\n${midRowHtml}\n${processRows}\n</table>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -574,9 +651,18 @@ function renderArrows(model, geo) {
     if (!cmd.observes) {
       const r = roleIndex(cmd.actor);
       const roleBottom = geo.roleCenterY(r) + UI_H / 2;
-      const ui = triggerUiForCommand[cmd.id];
-      const uiId = ui ? ui.id : cmd.id;
-      arrows.push({ x1: cx, y1: roleBottom, x2: cx, y2: midTop, from: `ui-${uiId}`, to: cmd.id, marker: 'arrow' });
+      // Fan-in: draw one arrow per triggering UI, each anchored under its
+      // own box's x position within the fanned-in row (mirrors the CSS
+      // layout in renderTable's .ui-fanin-row: boxes centered on cx, laid
+      // out left-to-right with a fixed gap).
+      const triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id }];
+      const K = triggerUis.length;
+      const GAP = 8;
+      const totalW = K * UI_W + (K - 1) * GAP;
+      triggerUis.forEach((ui, k) => {
+        const boxCx = K > 1 ? (cx - totalW / 2 + UI_W / 2 + k * (UI_W + GAP)) : cx;
+        arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: `ui-${ui.id}`, to: cmd.id, marker: 'arrow' });
+      });
     } else {
       const obsIdx = colIndexForEvent(cmd.observes);
       const obsEv = events.find((e) => e.id === cmd.observes);
@@ -706,8 +792,12 @@ td{padding:0;vertical-align:middle;text-align:center;border:none}
 .time-badge{width:26px;height:26px;border-radius:50%;background:#fff;border:2px solid #333;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin:0 auto}
 .sys-gutter{background:#e2e9f5}
 .mid-gutter{background:#f7f8f9}
-.mid-cell{background:#f7f8f9}
-tr.mid-row td.mid-cell{border-top:2px dashed #bbb;border-bottom:2px dashed #bbb}
+.mid-cell{background:#f7f8f9}tr.mid-row td.mid-cell{border-top:2px dashed #bbb;border-bottom:2px dashed #bbb}
+.standalone-gutter{background:#f2f2f2;font-style:italic}
+.standalone-cell{background:#fbfbfb;border-bottom:2px dotted #ccc;text-align:left;vertical-align:middle}
+.standalone-row{display:flex;flex-wrap:wrap;gap:16px;padding:12px 20px}
+.standalone-ui{border-style:dashed}
+.ui-fanin-row{display:inline-flex;gap:8px;align-items:center;justify-content:center}
 .card{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.15);position:relative;user-select:none;transition:opacity .15s}
 .card.dim{opacity:.12}
 .card.active{outline:3px solid #333;outline-offset:2px}
@@ -769,6 +859,9 @@ function main() {
     model.columns.map((c) => (c.type === 'event' ? c.eventId : `[view:${c.viewId}]`)).join(' | ')
   );
   console.log(`T=${geo.T} R=${geo.R} P=${geo.P} width=${geo.width} height=${geo.height}`);
+  if (model.standaloneUis.length) {
+    console.log(`Standalone UI(s) (no Triggers:, no view wiring): ${model.standaloneUis.map((u) => u.id).join(', ')}`);
+  }
 }
 
 if (require.main === module) {

@@ -331,7 +331,7 @@ no two read models ever share a column.
 ```
 GUT = 180, COL = 360           // gutter + per-column width
 TIME_H=40, ROLE_H=130, SYS_H=130, MID_H=120, PROC_H=150
-UI 210x76, Command 200x56, Event 220x74 (+14 for the bold `id:{Aggregate}` line), Read model 220x60, Time badge 26x26
+UI 210x76, Command 200x56, Event 220x74 (+14 for the bold `{aggregateName}:Id` line), Read model 220x60, Time badge 26x26
 ```
 
 `width = GUT + T*COL` where `T` = events + inserted read-model columns.
@@ -449,7 +449,7 @@ short summary of the elements drawn.
 
 `scripts/generate.js` has unit tests (Node's built-in test runner, no extra
 dependencies) covering markdown parsing, orphan-event detection, missing
-`id:{Aggregate}`, unknown ids in `uis.md`, field-consistency checks, and
+`{aggregateName}:Id`, unknown ids in `uis.md`, field-consistency checks, and
 edge-`kind` tagging. Run them with:
 
 ```
@@ -463,18 +463,52 @@ Dataflow should be consistent. Attributes of read model should be derivated from
 The same for events. They should be derived from commands. If some attributes are missing in the backward flow (read models -> events -> commands) please add them.
 If attribute is not mapped directly (eg. calculated from two sources) then sorround this element with '[...]', eg. [balance calculation]
 
-For events the id attribute is mandatory:
-id:{Type}, eg. 'id:Shipmnent'. It means that it belongs to 'shipment' aggregate.
+For events the aggregate-id attribute is mandatory:
+{aggregateName}:Id, eg. 'shipment:Id'. It means that it belongs to 'shipment' aggregate.
 **This is enforced as a hard blocker**: the generator throws (like the
-orphan-event check) if any event is missing `id:`.
+orphan-event check) if any event is missing `:Id`.
 
-`id:{Aggregate}` is **optional on commands and read models**, but if present
-it's rendered the same way as on events: a bold `id:{Aggregate}` line
+`{aggregateName}:Id` is **optional on commands and read models**, but if present
+it's rendered the same way as on events: a bold `{aggregateName}:Id` line
 (`.agg-id` CSS class) directly under the card's title, above its field list.
-Any card (command, event, or read model) that declares `id:` grows 14px
+Any card (command, event, or read model) that declares an `:Id` line grows 14px
 taller (`AGG_ID_H` in `scripts/generate.js`) to make room for this line
-without shrinking the title or field list; cards without an `id:` stay at
+without shrinking the title or field list; cards without one stay at
 their normal base height.
+
+## Read-model `{keyName}:Key` attribute
+
+Read models may additionally declare one or more repeatable `{keyName}:Key` lines
+(bullet `- customerId:Key` or plain `customerId:Key` form, same parsing convention as
+every other `key: value` line), e.g.:
+
+```markdown
+## order-list
+Name: Order List
+Subscribes: order-created, order-cancelled
+customerId:Key
+region:Key
+```
+
+`:Key` is meaningful **only on read models** — if it's declared on a command
+or an event it's silently ignored (parsed but unused), the same tier as any
+other attribute that isn't meaningful for that file's shape.
+
+Rendering: `:Key` lines share the same slot as `{aggregateName}:Id` — stacked
+bold lines directly under the card's title, above the field list, reusing
+the `.agg-id` CSS class (one `<div class="agg-id">` per line, not
+comma-joined). If a read model has an `:Id` line, it renders first, then each
+`:Key` line below it in the order written in the markdown.
+
+**Hard blocker**: a read model must declare **at least one** of `:Id` or
+`:Key` — one with neither is a hard error (the generator throws, same tier
+as the orphan-event / missing-event-id checks). A read model with `:Id`
+only, `:Key` only (one or more), or both is fine.
+
+Geometry: `AGG_ID_H` (14px) is now added **once per identifying line**
+(the `:Id` line, if present, plus each `:Key` line) rather than a flat
+one-time bump — a read model with `:Id` + 2 `:Key` lines grows 3 × 14px
+taller than its base height.
 
 ## Ubiquitous language check (non-blocking)
 The generator also cross-checks every command's effective actor (from its

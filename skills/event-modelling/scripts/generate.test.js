@@ -14,6 +14,7 @@ const {
   parseMdText,
   buildModel,
   renderArrows,
+  renderTable,
   computeGeometry,
   isBracketedField,
   normalizeField,
@@ -47,7 +48,7 @@ Produces: policy-holder-added
   const events = overrides.events !== undefined ? overrides.events : `
 ## policy-holder-added
 Name: Policy Holder Added
-id:PolicyHolder
+policyHolder:Id
 * name
 * address
 `;
@@ -55,6 +56,7 @@ id:PolicyHolder
 ## policy-holder-view
 Name: Policy Holder View
 Subscribes: policy-holder-added
+policyHolderId:Key
 * name
 * address
 `;
@@ -91,17 +93,17 @@ Produces: policy-holder-added
   assert.deepEqual(items[0].fields, ['name', 'address']);
 });
 
-test('parseMdText parses an events.md-shaped entry with id:{Aggregate}', () => {
+test('parseMdText parses an events.md-shaped entry with {aggregateName}:Id', () => {
   const items = parseMdText(`
 ## policy-holder-added
 Name: Policy Holder Added
-id:PolicyHolder
+policyHolder:Id
 * name
 * address
 `);
   assert.equal(items.length, 1);
   assert.equal(items[0].id, 'policy-holder-added');
-  assert.equal(items[0].aggregateId, 'PolicyHolder');
+  assert.equal(items[0].aggregateId, 'policyHolder');
   assert.deepEqual(items[0].fields, ['name', 'address']);
 });
 
@@ -116,6 +118,18 @@ Subscribes: event-a, event-b
   assert.equal(items.length, 1);
   assert.deepEqual(items[0].subscribes, ['event-a', 'event-b']);
   assert.deepEqual(items[0].fields, ['name', '[computed-field]']);
+});
+
+test('parseMdText parses one or more repeatable {keyName}:Key lines on a read model', () => {
+  const items = parseMdText(`
+## order-list
+Name: Order List
+Subscribes: order-created, order-cancelled
+customerId:Key
+region:Key
+`);
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].keys, ['customerId', 'region']);
 });
 
 test('parseMdText parses a uis.md-shaped entry with Triggers: and ConsistsOf:', () => {
@@ -180,16 +194,17 @@ Produces: some-other-event
     events: `
 ## some-other-event
 Name: Some Other Event
-id:Foo
+foo:Id
 
 ## policy-holder-added
 Name: Policy Holder Added
-id:PolicyHolder
+policyHolder:Id
 `,
     readmodels: `
 ## rm
 Name: RM
 Subscribes: some-other-event, policy-holder-added
+policyHolderId:Key
 `,
     uis: `
 ## some-other-command
@@ -203,10 +218,10 @@ Actor: Clerk
 });
 
 // ---------------------------------------------------------------------------
-// buildModel — missing id:{Aggregate} on an event
+// buildModel — missing {aggregateName}:Id on an event
 // ---------------------------------------------------------------------------
 
-test('buildModel throws when an event is missing mandatory id:{Aggregate}', () => {
+test('buildModel throws when an event is missing mandatory {aggregateName}:Id', () => {
   const dir = baseFixture({
     events: `
 ## policy-holder-added
@@ -217,7 +232,7 @@ Name: Policy Holder Added
   });
   assert.throws(
     () => buildModel(dir),
-    /Event\(s\) missing mandatory "id:\{Aggregate\}" — policy-holder-added/
+    /Event\(s\) missing mandatory "\{aggregateName\}:Id" — policy-holder-added/
   );
 });
 
@@ -275,7 +290,7 @@ Produces: policy-holder-added
     events: `
 ## policy-holder-added
 Name: Policy Holder Added
-id:PolicyHolder
+policyHolder:Id
 * name
 * address
 `,
@@ -283,6 +298,7 @@ id:PolicyHolder
 ## policy-holder-view
 Name: Policy Holder View
 Subscribes: policy-holder-added
+policyHolderId:Key
 * name
 `,
   });
@@ -303,7 +319,7 @@ Produces: policy-holder-added
     events: `
 ## policy-holder-added
 Name: Policy Holder Added
-id:PolicyHolder
+policyHolder:Id
 * name
 * [holder-id]
 `,
@@ -311,6 +327,7 @@ id:PolicyHolder
 ## policy-holder-view
 Name: Policy Holder View
 Subscribes: policy-holder-added
+policyHolderId:Key
 * name
 `,
   });
@@ -355,17 +372,18 @@ Produces: policy-issued
     events: `
 ## policy-holder-added
 Name: Policy Holder Added
-id:PolicyHolder
+policyHolder:Id
 * name
 
 ## policy-issued
 Name: Policy Issued
-id:Policy
+policy:Id
 `,
     readmodels: `
 ## policy-holder-view
 Name: Policy Holder View
 Subscribes: policy-holder-added
+policyHolderId:Key
 * name
 `,
     uis: `
@@ -397,4 +415,102 @@ Type: html
   const geo = computeGeometry(model);
   const svg = renderArrows(model, geo);
   assert.match(svg, /data-kind="displays"/);
+});
+
+// ---------------------------------------------------------------------------
+// buildModel / renderTable — read-model `{keyName}:Key` attribute
+// ---------------------------------------------------------------------------
+
+test('buildModel throws when a read model has neither {aggregateName}:Id nor {keyName}:Key', () => {
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+* name
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /Read model\(s\) missing mandatory "\{aggregateName\}:Id" and\/or "\{keyName\}:Key" — policy-holder-view/
+  );
+});
+
+test('buildModel allows a read model with only {keyName}:Key (no {aggregateName}:Id)', () => {
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name
+* address
+`,
+  });
+  assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('buildModel allows a read model with multiple {keyName}:Key lines', () => {
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolderId:Key
+region:Key
+* name
+* address
+`,
+  });
+  const model = buildModel(dir);
+  const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
+  assert.deepEqual(rm.keys, ['policyHolderId', 'region']);
+});
+
+test('buildModel allows a read model with both {aggregateName}:Id and {keyName}:Key', () => {
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolder:Id
+region:Key
+* name
+* address
+`,
+  });
+  assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('renderTable stacks {aggregateName}:Id then {keyName}:Key lines (in written order) as separate .agg-id divs, and grows card height 14px per line', () => {
+  const dirIdOnly = baseFixture(); // base fixture's readmodel has only {keyName}:Key
+  const modelIdOnly = buildModel(dirIdOnly);
+  const rmIdOnly = modelIdOnly.readmodels.find((r) => r.id === 'policy-holder-view');
+  // base fixture: policyHolderId:Key + 2 fields -> VIEW_H(60) + 14*1 + fields(10+2*14)=38 => 60+14+38=112
+  assert.equal(rmIdOnly._h, 60 + 14 + (10 + 2 * 14));
+
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolder:Id
+region:Key
+customerId:Key
+* name
+* address
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
+  // 3 identifying lines (id + 2 keys) -> +14*3 vs base VIEW_H, plus fields block
+  assert.equal(rm._h, 60 + 14 * 3 + (10 + 2 * 14));
+
+  const html = renderTable(model, geo);
+  const cardMatch = html.match(/<div class="card view-card"[^>]*>([\s\S]*?)<\/div>\s*<\/td>/);
+  assert.ok(cardMatch, 'expected to find the read-model card html');
+  const cardHtml = cardMatch[1];
+  const aggIdDivs = [...cardHtml.matchAll(/<div class="agg-id">(.*?)<\/div>/g)].map((m) => m[1]);
+  assert.deepEqual(aggIdDivs, ['policyHolder:Id', 'region:Key', 'customerId:Key']);
 });

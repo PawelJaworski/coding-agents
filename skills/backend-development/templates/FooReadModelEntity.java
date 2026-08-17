@@ -7,8 +7,6 @@ import lombok.Setter;
 @Table(name = "foo")
 public record FooEntity(
         @Id
-        @GeneratedValue(strategy = GenerationType.IDENTITY)
-        @Setter
-        Long id,
+        String key,
         String attr) {
 }

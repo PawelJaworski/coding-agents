@@ -66,7 +66,7 @@ templates/FooAbility.java
 5. If class template exists NEVER invent your own pattern. Use code templates as much as possible. NEVER create controllers, helpers, services if pattern exists in templates.
 
 # Event modeling notation mapping
-1. `id:{Aggregate}` on an event/command/read model names the **aggregate id**
+1. `{aggregateName}:Id` on an event/command/read model names the **aggregate id**
    concept only. It does NOT point at any specific bulleted field — it is a
    separate declaration, not a reference to one of the `*` attributes.
 2. Every bulleted field (`* field name`), including ones wrapped in

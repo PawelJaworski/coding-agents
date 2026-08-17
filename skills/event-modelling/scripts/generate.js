@@ -45,10 +45,30 @@ function parseMdText(text) {
       continue;
     }
     if (!cur) continue;
-    const kv = line.match(/^\s*(?:-\s*)?([A-Za-z]+):\s*(.+)/);
+    const kv = line.match(/^\s*(?:-\s*)?([A-Za-z][A-Za-z0-9]*):\s*(.+)/);
     if (kv) {
-      const key = kv[1].toLowerCase();
+      const rawKey = kv[1];
       const val = kv[2].trim();
+      // Aggregate-id attribute: "aggregateName:Id", e.g. "policy:Id" — the
+      // LHS (in camelCase) is the aggregate name, the RHS is the literal
+      // suffix "Id". Checked before the generic switch below since the LHS
+      // is arbitrary (not one of the fixed known attribute names).
+      if (val === 'Id') {
+        cur.aggregateId = rawKey;
+        continue;
+      }
+      // Read-model-only attribute: one or more repeatable "keyName:Key"
+      // lines declaring a projection key, e.g. "policyNumber:Key". Parsed
+      // generically here (same as ":Id") but only meaningful/rendered/
+      // enforced on read models — see buildModel's hard-error check and
+      // renderTable. If it shows up on a command or event, it's silently
+      // ignored (same tier as any other attribute that isn't meaningful for
+      // that file's shape).
+      if (val === 'Key') {
+        (cur.keys || (cur.keys = [])).push(rawKey);
+        continue;
+      }
+      const key = rawKey.toLowerCase();
       switch (key) {
         case 'name': cur.name = val; break;
         case 'actor': cur.actor = val; break;
@@ -63,7 +83,6 @@ function parseMdText(text) {
           cur.triggers = val.split(',').map((s) => s.trim()).filter(Boolean);
           break;
         case 'subprocess': cur.subprocess = val; break;
-        case 'id': cur.aggregateId = val; break;
         case 'subscribes':
           cur.subscribes = val.split(',').map((s) => s.trim()).filter(Boolean);
           break;
@@ -303,7 +322,11 @@ function buildModel(inputDir) {
     if (!e.subprocess) e.subprocess = defaultSubprocess;
     e._h = cardHeight(EVT_H, e.fields);
   });
-  readmodels.forEach((r) => { if (!r.name) r.name = r.id; r._h = cardHeight(r.aggregateId ? VIEW_H + AGG_ID_H : VIEW_H, r.fields); });
+  readmodels.forEach((r) => {
+    if (!r.name) r.name = r.id;
+    const idKeyLines = (r.aggregateId ? 1 : 0) + (r.keys ? r.keys.length : 0);
+    r._h = cardHeight(VIEW_H + idKeyLines * AGG_ID_H, r.fields);
+  });
 
   const eventProducer = {}; // eventId -> command
   commands.forEach((c) => { if (c.produces) eventProducer[c.produces] = c; });
@@ -316,14 +339,27 @@ function buildModel(inputDir) {
     );
   }
 
-  // Sanity: every event must declare its owning aggregate via id:{Type}
-  // (see SKILL.md "Diagram consistency" — mandatory id attribute). This is
-  // a hard blocker, same tier as the orphan-event check.
+  // Sanity: every event must declare its owning aggregate via
+  // {aggregateName}:Id (see SKILL.md "Diagram consistency" — mandatory
+  // aggregate-id attribute). This is a hard blocker, same tier as the
+  // orphan-event check.
   const eventsMissingId = events.filter((e) => !e.aggregateId);
   if (eventsMissingId.length) {
     throw new Error(
-      `Event(s) missing mandatory "id:{Aggregate}" — ${eventsMissingId.map((e) => e.id).join(', ')}. ` +
-      `Add e.g. "id:Policy" to declare which aggregate the event belongs to.`
+      `Event(s) missing mandatory "{aggregateName}:Id" — ${eventsMissingId.map((e) => e.id).join(', ')}. ` +
+      `Add e.g. "policy:Id" to declare which aggregate the event belongs to.`
+    );
+  }
+
+  // Sanity: every read model must declare at least one identifying line —
+  // either `{aggregateName}:Id` and/or one or more `{keyName}:Key` lines.
+  // This is a hard blocker, same tier as the orphan-event / missing-event-id
+  // checks.
+  const readmodelsMissingIdOrKey = readmodels.filter((r) => !r.aggregateId && !(r.keys && r.keys.length));
+  if (readmodelsMissingIdOrKey.length) {
+    throw new Error(
+      `Read model(s) missing mandatory "{aggregateName}:Id" and/or "{keyName}:Key" — ${readmodelsMissingIdOrKey.map((r) => r.id).join(', ')}. ` +
+      `Add e.g. "policy:Id" and/or one or more "{keyName}:Key" lines to declare how the read model is identified.`
     );
   }
 
@@ -458,7 +494,7 @@ const TIME_H = 40, ROLE_H = 130, SYS_H = 130, MID_H = 120, PROC_H = 150;
 const UI_W = 210, UI_H = 76;
 const STANDALONE_H = 130; // dedicated row for UI cards with no Triggers: and no read-model view wiring
 const CMD_W = 200, CMD_H = 56;
-const AGG_ID_H = 14; // extra height to fit an optional/mandatory "id:{Aggregate}" line
+const AGG_ID_H = 14; // extra height to fit an optional/mandatory "{aggregateName}:Id" line
 const EVT_W = 220, EVT_H = 60 + AGG_ID_H; // events always carry the mandatory aggregate-id line
 const VIEW_W = 220, VIEW_H = 60;
 const RADIUS = 8; // card border-radius; inset corner-ish endpoints by this along the straight edge they touch
@@ -525,6 +561,18 @@ function fieldsHtml(fields) {
   const capped = fields.length > MAX_FIELDS;
   const style = capped ? ` style="max-height:${MAX_FIELDS * FIELD_LINE_H}px;overflow-y:auto"` : '';
   return `<div class="fields"${style}><ul>${fields.map((f) => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div>`;
+}
+
+// Read-model-only: stacked bold lines directly under the title — the
+// aggregate-id line first (if present), then each key line in the order
+// written in the markdown.
+// Reuses the `.agg-id` CSS class per line (one <div> per line, not joined),
+// mirroring how the aggregate-id line alone renders on commands/events.
+function idKeyLinesHtml(rm) {
+  const lines = [];
+  if (rm.aggregateId) lines.push(`${escapeHtml(rm.aggregateId)}:Id`);
+  (rm.keys || []).forEach((k) => lines.push(`${escapeHtml(k)}:Key`));
+  return lines.map((l) => `<div class="agg-id">${l}</div>`).join('');
 }
 
 function renderTable(model, geo) {
@@ -609,10 +657,10 @@ function renderTable(model, geo) {
     if (occ && occ.type === 'cmd') {
       const cmd = commands.find((cc) => cc.id === occ.id);
       const isSystem = !!cmd.observes;
-      content = `<div class="card cmd-card${isSystem ? ' system-cmd' : ''}" style="height:${cmd._h}px" data-element="${cmd.id}" data-type="cmd" title="${cmd.id} — click to focus, click again to clear">${isSystem ? '<div class="sys-badge">⚙ SYSTEM</div>' : ''}<div class="title">${escapeHtml(cmd.name)}</div>${cmd.aggregateId ? `<div class="agg-id">id:${escapeHtml(cmd.aggregateId)}</div>` : ''}${fieldsHtml(cmd.fields)}</div>`;
+      content = `<div class="card cmd-card${isSystem ? ' system-cmd' : ''}" style="height:${cmd._h}px" data-element="${cmd.id}" data-type="cmd" title="${cmd.id} — click to focus, click again to clear">${isSystem ? '<div class="sys-badge">⚙ SYSTEM</div>' : ''}<div class="title">${escapeHtml(cmd.name)}</div>${cmd.aggregateId ? `<div class="agg-id">${escapeHtml(cmd.aggregateId)}:Id</div>` : ''}${fieldsHtml(cmd.fields)}</div>`;
     } else if (occ && occ.type === 'view') {
       const rm = readmodels.find((rr) => rr.id === occ.id);
-      content = `<div class="card view-card" style="height:${rm._h}px" data-element="${rm.id}" data-type="view" title="${rm.id} — click to focus, click again to clear"><div class="title">${escapeHtml(rm.name)}</div>${rm.aggregateId ? `<div class="agg-id">id:${escapeHtml(rm.aggregateId)}</div>` : ''}${fieldsHtml(rm.fields)}</div>`;
+      content = `<div class="card view-card" style="height:${rm._h}px" data-element="${rm.id}" data-type="view" title="${rm.id} — click to focus, click again to clear"><div class="title">${escapeHtml(rm.name)}</div>${idKeyLinesHtml(rm)}${fieldsHtml(rm.fields)}</div>`;
     }
     midCells += `<td class="lane-cell mid-cell">${content}</td>`;
   });
@@ -625,7 +673,7 @@ function renderTable(model, geo) {
       if (c.type === 'event') {
         const ev = events.find((e) => e.id === c.eventId);
         if (ev.subprocess === sp) {
-          content = `<div class="card evt-card" style="height:${ev._h}px" data-element="${ev.id}" data-type="evt" title="${ev.id} — click to focus, click again to clear"><div class="title">${escapeHtml(ev.name)}</div><div class="agg-id">id:${escapeHtml(ev.aggregateId)}</div>${fieldsHtml(ev.fields)}</div>`;
+          content = `<div class="card evt-card" style="height:${ev._h}px" data-element="${ev.id}" data-type="evt" title="${ev.id} — click to focus, click again to clear"><div class="title">${escapeHtml(ev.name)}</div><div class="agg-id">${escapeHtml(ev.aggregateId)}:Id</div>${fieldsHtml(ev.fields)}</div>`;
         }
       }
       cells += `<td class="lane-cell" style="background:${procColor(g)}">${content}</td>`;

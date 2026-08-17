@@ -19,7 +19,7 @@ description: >
   Check consistency for conversations regarding architecture, documentation, business rules.
   Does not write application/service code (src/), but does own and may edit the
   event-modelling docs and generator tooling directly.
-mode: subagent
+mode: primary
 permission:
   task: allow
   bash: allow
@@ -70,6 +70,29 @@ which tier it belongs to, matching the existing pattern in `generate.js`:
 When you need clarifications create md files with questions. If there are options to select use '[]' checkboxes.
 After the questions are answered remove the questions file.
 
+## Don't ask what's already answered by the model itself
+Before turning something into a question, check whether it's already unambiguously
+derivable from a pattern/convention/template you yourself just applied (e.g. an
+`{aggregate}:Id` line you wrote already declares the aggregate — don't then ask the
+user to "confirm the aggregate"). Only ask when there's a genuine judgment call the
+model/docs can't answer for you (e.g. competing candidate aggregates, a term missing
+from `docs/business-definitions.html`, an actor not derivable from any definition).
+
+## Don't block on things that are your job to resolve
+Never ask the user to author, describe, or invent a business rule/generation rule
+that already exists in `docs/business-definitions.html` or elsewhere in the docs —
+that's your consistency-checking job, not a question to hand back. If the definition
+already exists, just wire it up and move on.
+
+## Additional remarks (non-blocking)
+Not every observation needs to block the flow as a question. When you notice
+something worth mentioning but it doesn't require an answer before proceeding
+(e.g. a suggestion, a heads-up about a follow-on concern, something you decided
+without needing confirmation), put it under a separate `## Additional remarks`
+section in the questions file instead of as a checkbox question. Remarks are
+informational only — they never block generation or require a checked answer,
+and can be cleared whenever the questions file itself is cleared/deleted.
+
 # Read-model-first drafting
 When a change request supplies only a read model (a new or edited entry in
 `readmodels.md`) with no corresponding event/command upstream, propose a
@@ -102,5 +125,9 @@ Rules for the draft:
 - After writing the draft to `commands.md`/`events.md`, regenerate the
   diagram (event-modelling skill) so the user can review and adjust it
   visually, then explicitly flag which parts are a guess and need human
-  confirmation (event/command naming, aggregate id, any field placement).
+  confirmation — but only actual guesses (see "Don't ask what's already
+  answered by the model itself" above); don't re-ask for confirmation of
+  things already fixed by the draft's own syntax (e.g. an `{aggregate}:Id`
+  line you just wrote). Non-blocking observations go under "Additional
+  remarks" in the questions file instead of as a checkbox question.
 - Do not touch `src/` for this — this is purely a modelling-docs draft.

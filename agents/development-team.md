@@ -25,4 +25,4 @@ model: claude-sonnet-5
 1. when backend code generation is needed then use skill 'backend-development'
 
 # Tools
-Use TODO list for planning and inform about progress
+ALWAYS use TODO list for planning and inform about progress

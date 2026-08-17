@@ -370,10 +370,25 @@ meets a flat edge, not the rounded notch.
 
 `reference/interactivity.js` is copied byte-identical into the page's
 `<script>` by the generator — **never hand-edit or rephrase it**. It's a
-click-to-focus filter: clicking a card dims (opacity, `.dim` class — never
-`display:none`) every card/arrow not transitively connected to it via
-`data-from`/`data-to` edges; clicking the focused card again, or the
-background, clears focus. The layout never reflows on click.
+click-to-focus filter, **upstream-only**: clicking a card dims (opacity,
+`.dim` class — never `display:none`) every card/arrow that is not the
+clicked card or one of its ancestors (walking `data-from`/`data-to` edges
+backwards, i.e. from the card to whatever produced it, transitively).
+Descendants/downstream siblings of the clicked card are dimmed, not
+highlighted. Clicking the focused card again, or the background, clears
+focus. The layout never reflows on click.
+
+Each arrow also carries a `data-kind` attribute — `triggers` (UI→command),
+`produces` (command→event), `observes`/`observes-cmd` (event→read-model or
+event→system-command), or `displays` (read-model→UI) — so the traversal can
+distinguish edge semantics. UI cards are **terminal ancestors**: a UI is
+included in the upstream set via its `triggers` edge into the command it
+triggers, but the backward walk does **not** continue past a UI through its
+`displays` edge into whatever read model that UI happens to show — that's an
+unrelated causal chain. E.g. clicking a read model highlights the event that
+produced it, the command behind that event, and the UI card(s) that trigger
+that command, but not any *other* read model those UI cards happen to
+display.
 
 ## Colors (reference palette)
 
@@ -429,6 +444,19 @@ After running the generator:
 If the user specified an output path, write there; otherwise the default is
 `eventmodel.html` beside the input files. Report the written path and a
 short summary of the elements drawn.
+
+## Testing the generator itself
+
+`scripts/generate.js` has unit tests (Node's built-in test runner, no extra
+dependencies) covering markdown parsing, orphan-event detection, missing
+`id:{Aggregate}`, unknown ids in `uis.md`, field-consistency checks, and
+edge-`kind` tagging. Run them with:
+
+```
+node --test .opencode/skills/event-modelling/scripts/generate.test.js
+```
+
+Run this after modifying `generate.js` or `reference/interactivity.js`.
 
 # Diagram consistency
 Dataflow should be consistent. Attributes of read model should be derivated from related events.

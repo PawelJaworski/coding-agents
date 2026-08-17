@@ -6,26 +6,54 @@
  *
  * Requires:
  * - every card element has class "card" and attribute data-element="<id>"
- * - every arrow element (line/polyline) has data-from="<id>" data-to="<id>"
+ * - every arrow element (line/polyline) has data-from="<id>" data-to="<id>",
+ *   and optionally data-kind="<kind>" (one of "triggers", "produces",
+ *   "observes", "observes-cmd", "displays") identifying the semantic edge
+ *   type — see kind meanings below.
  * - the outer container has class "wrap"
  * - CSS defines .card.dim (dimmed) and .card.active (focused) states,
  *   plus a dim rule for arrows, e.g.:
  *     .card.dim{opacity:.12}
  *     .card.active{outline:3px solid #333;outline-offset:2px}
  *     svg [data-from].dim{opacity:.08}
+ *
+ * Click-to-focus filter is UPSTREAM-ONLY: clicking a card highlights the
+ * card itself plus everything that causally led to it (walking data-from
+ * backwards from data-to along "triggers"/"produces"/"observes"/
+ * "observes-cmd" edges), i.e. its ancestors, never its descendants/
+ * downstream siblings.
+ *
+ * UI cards are treated as TERMINAL ancestors: a UI is included in the
+ * upstream set (via the "triggers" edge from that UI to the command it
+ * triggers), but traversal does NOT continue backward past a UI through
+ * its "displays" edge (read-model -> UI, i.e. "this UI happens to show
+ * that read model"). Which read model a UI displays is a separate,
+ * unrelated causal chain from what command that UI triggers, so walking
+ * backward through "displays" would incorrectly pull in an unconnected
+ * upstream slice. Concretely: clicking a read model highlights the event
+ * that produced it, the command that produced that event, and the UI
+ * card(s) that trigger that command — but not whatever read model those
+ * UI cards happen to display.
  */
 var EDGES=[];
 document.querySelectorAll('[data-from]').forEach(function(l){
-  EDGES.push([l.getAttribute('data-from'), l.getAttribute('data-to')]);
+  EDGES.push([l.getAttribute('data-from'), l.getAttribute('data-to'), l.getAttribute('data-kind')]);
 });
 var focused=null;
 function connectedSet(startId){
+  // Upstream-only: walk backwards along data-from -> data-to edges,
+  // i.e. from startId to whatever produced it (ancestors), never forwards
+  // to what it produces (descendants). UI cards are included as ancestors
+  // (via their "triggers" edge into a command) but are treated as a
+  // stopping point: we do not continue backward through a "displays"
+  // edge (read-model -> UI) into whatever read model feeds that UI, since
+  // that belongs to a separate causal chain.
   var seen={}; seen[startId]=true;
   var queue=[startId];
   while(queue.length){
     var id=queue.shift();
     EDGES.forEach(function(e){
-      if(e[0]===id && !seen[e[1]]){seen[e[1]]=true;queue.push(e[1]);}
+      if(e[1]===id && e[2]==='displays') return; // don't walk past a UI's Displays edge
       if(e[1]===id && !seen[e[0]]){seen[e[0]]=true;queue.push(e[0]);}
     });
   }

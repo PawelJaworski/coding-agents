@@ -27,6 +27,13 @@ const INTERACTIVITY_JS = path.join(SKILL_DIR, 'reference', 'interactivity.js');
 
 function parseMd(file) {
   const text = fs.readFileSync(file, 'utf8');
+  return parseMdText(text);
+}
+
+// Parses markdown text (same format as parseMd, but takes the raw string
+// directly rather than a file path) — extracted so it's unit-testable
+// without touching the filesystem.
+function parseMdText(text) {
   const lines = text.split('\n');
   const items = [];
   let cur = null;
@@ -661,7 +668,7 @@ function renderArrows(model, geo) {
       const totalW = K * UI_W + (K - 1) * GAP;
       triggerUis.forEach((ui, k) => {
         const boxCx = K > 1 ? (cx - totalW / 2 + UI_W / 2 + k * (UI_W + GAP)) : cx;
-        arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: `ui-${ui.id}`, to: cmd.id, marker: 'arrow' });
+        arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: `ui-${ui.id}`, to: cmd.id, marker: 'arrow', kind: 'triggers' });
       });
     } else {
       const obsIdx = colIndexForEvent(cmd.observes);
@@ -673,10 +680,10 @@ function renderArrows(model, geo) {
       const sysY = geo.sysCenterY();
       arrows.push({
         polyline: [[obsTopRightX, obsTop], [obsTopRightX, sysY], [cx, sysY], [cx, midTop]],
-        from: cmd.observes, to: cmd.id, dashed: true, marker: 'arrow-purple',
+        from: cmd.observes, to: cmd.id, dashed: true, marker: 'arrow-purple', kind: 'observes-cmd',
       });
     }
-    arrows.push({ x1: cx, y1: midBottom, x2: cx, y2: evTop, from: cmd.id, to: ev.id, marker: 'arrow' });
+    arrows.push({ x1: cx, y1: midBottom, x2: cx, y2: evTop, from: cmd.id, to: ev.id, marker: 'arrow', kind: 'produces' });
   });
 
   readmodels.forEach((rm) => {
@@ -712,7 +719,7 @@ function renderArrows(model, geo) {
         else { entryX = rmCx + spread; entryY = rmCy + rm._h / 2; }
         arrows.push({
           polyline: [[exitX, evTop], [exitX, bandY], [entryX, bandY], [entryX, entryY]],
-          from: ev.id, to: rm.id, purpleNoMarker: true,
+          from: ev.id, to: rm.id, purpleNoMarker: true, kind: 'observes',
         });
       });
     });
@@ -738,13 +745,14 @@ function renderArrows(model, geo) {
       const rmCx = geo.colCenterX(idx);
       const rmTop = geo.midCenterY() - rm._h / 2;
       if (idx === placementIdx) {
-        arrows.push({ x1: rmCx, y1: rmTop, x2: uiCx, y2: roleBottom, from: rm.id, to: `ui-${ui.id}`, marker: 'arrow' });
+        arrows.push({ x1: rmCx, y1: rmTop, x2: uiCx, y2: roleBottom, from: rm.id, to: `ui-${ui.id}`, marker: 'arrow', kind: 'displays' });
       } else {
         const exitX = idx < placementIdx ? rmCx + VIEW_W / 2 - RADIUS : rmCx - VIEW_W / 2 + RADIUS;
         const bandY = roleBottom + 15; // card-free band just below the role row
         arrows.push({
           polyline: [[exitX, rmTop], [exitX, bandY], [uiCx, bandY], [uiCx, roleBottom]],
           from: rm.id, to: `ui-${ui.id}`, marker: 'arrow',
+          kind: 'displays',
         });
       }
     });
@@ -754,11 +762,12 @@ function renderArrows(model, geo) {
     const dashAttr = a.dashed ? ' stroke-dasharray="6,4"' : '';
     const color = a.dashed || a.purpleNoMarker ? '#5E35B1' : '#333333';
     const markerAttr = a.marker ? ` marker-end="url(#${a.marker})"` : '';
+    const kindAttr = a.kind ? ` data-kind="${a.kind}"` : '';
     if (a.polyline) {
       const pts = a.polyline.map((p) => p.join(',')).join(' ');
-      return `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"${dashAttr}${markerAttr} data-from="${a.from}" data-to="${a.to}"/>`;
+      return `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"${dashAttr}${markerAttr} data-from="${a.from}" data-to="${a.to}"${kindAttr}/>`;
     }
-    return `<line x1="${a.x1}" y1="${a.y1}" x2="${a.x2}" y2="${a.y2}" stroke="${color}" stroke-width="2"${markerAttr} data-from="${a.from}" data-to="${a.to}"/>`;
+    return `<line x1="${a.x1}" y1="${a.y1}" x2="${a.x2}" y2="${a.y2}" stroke="${color}" stroke-width="2"${markerAttr} data-from="${a.from}" data-to="${a.to}"${kindAttr}/>`;
   }).join('\n');
 }
 
@@ -873,4 +882,7 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildModel, computeGeometry, renderTable, renderArrows, renderPage };
+module.exports = {
+  buildModel, computeGeometry, renderTable, renderArrows, renderPage,
+  parseMd, parseMdText, isBracketedField, normalizeField, hasMatchingField,
+};

@@ -293,14 +293,13 @@ function buildModel(inputDir) {
     if (set.size) uiSources[u.id] = [...set];
   });
 
-  const orphanUis = uis.filter((u) => !(u.triggers && u.triggers.length) && !commandIds.has(u.id) && !uiSources[u.id]);
-  if (orphanUis.length) {
-    throw new Error(
-      `UI(s) in uis.md with no matching command or read model id — ${orphanUis.map((u) => u.id).join(', ')}. ` +
-      `Each "## heading" in uis.md must match a command id (input UI), declare "Triggers: <command-id>" ` +
-      `(input UI with its own id), or match/list read model id(s) via its own id or ConsistsOf: (output UI).`
-    );
-  }
+  // A UI whose id matches neither a command nor a read model, and which
+  // declares no Triggers: (already validated above) and no ConsistsOf:
+  // (already validated above), is not an error — it's a genuinely
+  // standalone/placeholder UI (see "Standalone UIs are supported and always
+  // rendered" in SKILL.md). It's collected into `standaloneUis` below and
+  // rendered in its own dashed-border "Unwired UIs" row instead of being
+  // wired into any slice.
 
   // Commands no longer carry `Actor:` themselves — that's a hard error now,
   // to keep a single source of truth. Human commands get their actor from a

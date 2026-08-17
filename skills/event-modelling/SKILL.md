@@ -34,7 +34,8 @@ teaching to the generator.
    look in the current/target directory for `commands.md`, `events.md`,
    `readmodels.md`, `uis.md`. `uis.md` is the only source of `Actor:` — a
    command never carries `Actor:` itself (see Parsing rules). Ready-to-edit
-   templates live in `templates/` if the user is starting from scratch.
+   templates live in `templates/` if the user is starting from scratch —
+   they demonstrate every option documented in this file.
 2. Run the generator:
 
    ```bash

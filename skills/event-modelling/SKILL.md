@@ -12,6 +12,10 @@ description: >
 
   # When NOT to use
   Code generation is not the case for this skill.
+
+  # **Important** This skill is parametrized
+  * parameters: <docs> are passed from outside. You have to know them before staring this skill execution. Don't ever execute this skill without exactly knowing those params.
+
 ---
 
 # Event Modeling Diagram (HTML, interactive)

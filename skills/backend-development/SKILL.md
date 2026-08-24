@@ -35,8 +35,10 @@ templates/FooAbility.java
 * it's located in the package named the same as command (lowercase)
 * ALWAYS add new Command handler in the same package as the command
 3. When new read model appears then ALWAYS:
-* if read model has aggregateId then create on demand projector (FooOnDemandProjector template)
+* if read model has aggregateId then create on demand projector (FooOnDemandProjector template). 
+  We can fetch all related events by aggregate id so persisting projector is not needed - don't create it.
 * if read model doesn't have aggregate id then create persisting projector (FooPersistingProjector). 
+  We can have events for multiple aggregates and cannot fetch all related events at once so in this case persisting projector instead of on demand projector is the best choice.
   In the same time create all dependencies if missing: FooEntity (FooReadModelEntity template), FooRepositories.
 
 3. When new repository is added then create:

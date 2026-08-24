@@ -513,12 +513,12 @@ taller than its base height.
 
 ## Ubiquitous language check (non-blocking)
 The generator also cross-checks every command's effective actor (from its
-`uis.md` entry) against the term names in `docs/business-definitions.html`
+`uis.md` entry) against the term names in `<docs>/business-definitions.html`
 (matched via that page's `data-name="..."` attributes, walking up from the
-input directory to find `docs/`). An actor not found there prints a
+input directory to find `<docs>/`). An actor not found there prints a
 **warning**, not a hard failure — introducing a new actor may be intentional
 (and simply undocumented), so this requires human confirmation rather than
-blocking generation outright. If `docs/business-definitions.html` can't be
+blocking generation outright. If `<docs>/business-definitions.html` can't be
 found, the check is skipped silently.
 
 

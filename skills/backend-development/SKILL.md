@@ -6,6 +6,8 @@ description: >
   # When to use
   Use when there is a need for changing backend code.
   Use when there is request for backend code generation.
+  # **Important** This skill is parametrized
+  * parameters: <docs>, <eventModel> are passed from outside. You have to know them before staring this skill execution. Don't ever execute this skill without exactly knowing those params.
 ---
 
 # How to proceed this instructions
@@ -29,7 +31,9 @@ templates/FooAbility.java
 
 # Code update hooks
 1. When new event appears then ALWAYS StateProjector should be updated.
-2. When new command appears then ALWAYS add new Command handler in the same package
+2. When new command appears then:
+* it's located in the package named the same as command (lowercase)
+* ALWAYS add new Command handler in the same package as the command
 3. When new read model appears then ALWAYS:
 * if read model has aggregateId then create on demand projector (FooOnDemandProjector template)
 * if read model doesn't have aggregate id then create persisting projector (FooPersistingProjector). 
@@ -51,7 +55,7 @@ templates/FooAbility.java
    - Use the exact business term in class and field names where practical.
    - Only fall back to `String`, `UUID`, `Long`, etc. when the business model truly has no named concept yet.
 2. Objects should correspond to business-definitions.html as far as possible.
-   - Prefer reading `docs/business-definitions-raw.md` over `docs/business-definitions.html`
+   - Prefer reading `<docs>/business-definitions-raw.md` over `<docs>/business-definitions.html`
      when looking up business definitions — it's the same content as plain markdown
      without the HTML/CSS/JS wrapper, so it's cheaper to read and doesn't need stripping.
      Only fall back to the `.html` file if the raw markdown is missing or out of sync.
@@ -61,9 +65,10 @@ templates/FooAbility.java
      Implement it. Decide the implementation. If user don't like it it can change it in the code.
    - If a concept is present in the business definitions but is modeled as a primitive in code, consider it a smell and prefer introducing a domain object.
    - If type doesn't exist at the time don't ask and create as corresponding to business definition.
-3. Do not invent structure and logic. If something is not clear ask questions in file. When the questions are answered then delete the file.
-4. Event modeling atttributes are abstractions. They don't have to have all details. Prefer business-definitions over event modeling for objects attributes. 
+3. Do not invent structure and logic. Prefer business-definitions for objects attributes. If something is not clear ask questions in file. When the questions are answered then delete the file.
+4. Event modeling attributes are abstractions. They don't have to have all details. Prefer business-definitions over event modeling for objects attributes. 
 5. If class template exists NEVER invent your own pattern. Use code templates as much as possible. NEVER create controllers, helpers, services if pattern exists in templates.
+6. Do not invent attributes or concepts. For business concepts use business-definitions/rules. For code patterns prefer code templates and use them literally as much as possible.
 
 # Event modeling notation mapping
 1. `{aggregateName}:Id` on an event/command/read model names the **aggregate id**
@@ -86,8 +91,8 @@ templates/FooAbility.java
    assume they're always the same concept.
 
 # Boundaries
-Never edit the event-modelling docs (`commands.md`, `events.md`, `readmodels.md`,
-`uis.md`), the generated diagram (`eventmodel.html`), or the diagram generator
+Never edit the event-modelling docs (`<eventModel>/commands.md`, `<eventModel>/events.md`, `<eventModel>/readmodels.md`,
+`<eventModel>/uis.md`), the generated diagram (`<eventModel>/eventmodel.html`), or the diagram generator
 (`scripts/generate.js`) as part of backend code generation — that tooling and its
 consistency are owned exclusively by the **architect** agent. If code generation
 surfaces a mismatch or gap in the event-modelling docs (missing field, undocumented

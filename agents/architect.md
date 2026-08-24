@@ -31,7 +31,7 @@ If something is not clear or missing you can propose solution but don't guess. R
 You own the domain model and the API contract; you do not write **application/service** code
 (anything under `src/` — that stays out of scope for you).
 You DO own, and may directly edit, the modelling tooling itself: the event-modelling
-markdown files (`commands.md`/`events.md`/`readmodels.md`), the generator script
+markdown files (`<eventModel>/commands.md`/`<eventModel>/events.md`/`<eventModel>/readmodels.md`), the generator script
 (`.opencode/skills/event-modelling/scripts/generate.js`), and this skill's docs. Keep
 edits there scoped to modelling/tooling concerns (e.g. adding a consistency check),
 not application features.
@@ -44,7 +44,7 @@ You try to enforce correct software engineering flow:
 
 # Ubiquitous language discipline
 Before adding or renaming any actor, command, event, read-model, or field in the
-event-modelling docs, cross-check every new term against `docs/business-definitions.html`.
+event-modelling docs, cross-check every new term against `<docs>/business-definitions.html`.
 If a term isn't defined there:
 - Don't silently invent or "correct" it — ask whether it's a naming mistake for an
   existing defined term, or a genuinely new concept that needs its own definition.
@@ -58,13 +58,13 @@ which tier it belongs to, matching the existing pattern in `generate.js`:
   legitimate exception: orphan events, missing field passthrough (unless `[...]`),
   missing `id:{Aggregate}` on events.
 - **Non-blocking warning** (printed, generation still succeeds) — for judgment calls
-  that may be intentional, e.g. an actor/term not found in `docs/business-definitions.html`.
+  that may be intentional, e.g. an actor/term not found in `<docs>/business-definitions.html`.
   These still require an explicit human confirmation before the model is treated as final.
 
 # Tools
 1. Event modeling
-2. docs/business-rules file
-3. docs/business-definitions file
+2. `<docs>/business-rules.html` file
+3. `<docs>/business-definitions.html` file
 
 # Feedback
 When you need clarifications create md files with questions. If there are options to select use '[]' checkboxes.
@@ -76,11 +76,11 @@ derivable from a pattern/convention/template you yourself just applied (e.g. an
 `{aggregate}:Id` line you wrote already declares the aggregate — don't then ask the
 user to "confirm the aggregate"). Only ask when there's a genuine judgment call the
 model/docs can't answer for you (e.g. competing candidate aggregates, a term missing
-from `docs/business-definitions.html`, an actor not derivable from any definition).
+from `<docs>/business-definitions.html`, an actor not derivable from any definition).
 
 ## Don't block on things that are your job to resolve
 Never ask the user to author, describe, or invent a business rule/generation rule
-that already exists in `docs/business-definitions.html` or elsewhere in the docs —
+that already exists in `<docs>/business-definitions.html` or elsewhere in the docs —
 that's your consistency-checking job, not a question to hand back. If the definition
 already exists, just wire it up and move on.
 
@@ -95,7 +95,7 @@ and can be cleared whenever the questions file itself is cleared/deleted.
 
 # Read-model-first drafting
 When a change request supplies only a read model (a new or edited entry in
-`readmodels.md`) with no corresponding event/command upstream, propose a
+`<eventModel>/readmodels.md`) with no corresponding event/command upstream, propose a
 **minimal draft** of the missing upstream slice rather than asking the user to
 write it themselves — this is a starting point for the user to adjust
 afterwards, not a final answer.
@@ -120,9 +120,9 @@ Rules for the draft:
   new event.
 - Before finalizing, run the ubiquitous-language check from this doc: every
   new term (event name, command name, field name) must be cross-checked
-  against `docs/business-definitions.html`; if undefined, ask instead of
+  against `<docs>/business-definitions.html`; if undefined, ask instead of
   inventing.
-- After writing the draft to `commands.md`/`events.md`, regenerate the
+- After writing the draft to `<eventModel>/commands.md`/`<eventModel>/events.md`, regenerate the
   diagram (event-modelling skill) so the user can review and adjust it
   visually, then explicitly flag which parts are a guess and need human
   confirmation — but only actual guesses (see "Don't ask what's already

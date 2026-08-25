@@ -11,7 +11,25 @@ description: >
 ---
 
 # How to proceed this instructions
-* Do not read all code templates and other referenced files at start. You should read them on demand. Filename should show it's context.
+
+## Efficient execution flow
+To minimize token usage and execution time, follow this pattern:
+
+1. **Explore with glob, not manual traversal**: Use `glob` patterns like `src/main/java/**/*.java` or `src/main/java/pl/pjaworski/insurance_company/*/` instead of reading directories one level at a time.
+2. **Read docs once, upfront**: Read `<docs>/commands.md`, `<docs>/events.md`, `<docs>/readmodels.md`, and `<docs>/business-definitions-raw.md` in a single parallel batch. These are the source of truth.
+3. **Check existing code minimally**: Only read files that directly relate to what you're changing. Don't explore empty directories or read every existing class.
+4. **Batch file writes**: Write all new files in 2-3 parallel batches instead of one at a time. Group related files together (e.g., all domain types in one batch, all commands in another).
+5. **Delegate complex implementations**: For implementations involving 5+ new files, consider using the `Task` tool with a `general` agent to handle the entire implementation autonomously. Provide the agent with:
+   - The event modeling docs content (commands.md, events.md, readmodels.md)
+   - The business definitions content
+   - The target package structure
+   - The code templates to follow
+6. **Verify once at the end**: Run `mvn compile` and `mvn test` only after all files are written, not after each file.
+7. **Minimize todo updates**: Update the todo list at major milestones (exploration done, implementation done, verification done), not after every file.
+
+## Template usage
+* Do not read all code templates at start. Read them on demand when you need to create a specific type of class. Filename shows its context.
+* When creating a class, read the corresponding template first, then write the file.
 
 # Code templates
 templates/DoSomethingOnFooCmd.java
@@ -40,7 +58,6 @@ templates/FooAbility.java
 * if read model doesn't have aggregate id then create persisting projector (FooPersistingProjector). 
   We can have events for multiple aggregates and cannot fetch all related events at once so in this case persisting projector instead of on demand projector is the best choice.
   In the same time create all dependencies if missing: FooEntity (FooReadModelEntity template), FooRepositories.
-
 3. When new repository is added then create:
 * interface FooRepository in same package where entity is located
 * FooInMemoryRepository
@@ -67,10 +84,13 @@ templates/FooAbility.java
      Implement it. Decide the implementation. If user don't like it it can change it in the code.
    - If a concept is present in the business definitions but is modeled as a primitive in code, consider it a smell and prefer introducing a domain object.
    - If type doesn't exist at the time don't ask and create as corresponding to business definition.
-3. Do not invent structure and logic. Prefer business-definitions for objects attributes. If something is not clear ask questions in file. When the questions are answered then delete the file.
+3. Do not invent structure and logic. 
+   Prefer business-definitions for objects attributes. 
+   If something is not clear ask questions in file. When the questions are answered then delete the file.
 4. Event modeling attributes are abstractions. They don't have to have all details. Prefer business-definitions over event modeling for objects attributes. 
 5. If class template exists NEVER invent your own pattern. Use code templates as much as possible. NEVER create controllers, helpers, services if pattern exists in templates.
-6. Do not invent attributes or concepts. For business concepts use business-definitions/rules. For code patterns prefer code templates and use them literally as much as possible.
+6. Do not invent attributes or concepts. Add only attributes existing in documentation (business definitions/rules, event modeling etc.). 
+7. For code patterns prefer code templates and use them literally as much as possible.
 
 # Event modeling notation mapping
 1. `{aggregateName}:Id` on an event/command/read model names the **aggregate id**

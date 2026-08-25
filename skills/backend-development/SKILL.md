@@ -47,6 +47,9 @@ templates/FooReadModelEntity.java
 
 templates/FooAbility.java
 
+templates/TestDsl.java
+templates/ReadModelUnitTest.groovy
+
 # Code update hooks
 1. When new event appears then ALWAYS StateProjector should be updated.
 2. When new command appears then:
@@ -90,7 +93,8 @@ templates/FooAbility.java
 4. Event modeling attributes are abstractions. They don't have to have all details. Prefer business-definitions over event modeling for objects attributes. 
 5. If class template exists NEVER invent your own pattern. Use code templates as much as possible. NEVER create controllers, helpers, services if pattern exists in templates.
 6. Do not invent attributes or concepts. Add only attributes existing in documentation (business definitions/rules, event modeling etc.). 
-7. For code patterns prefer code templates and use them literally as much as possible.
+7. For code patterns prefer code templates and use them literally as much as possible. 
+* don't invent spring beans if template doesn't advice it
 
 # Event modeling notation mapping
 1. `{aggregateName}:Id` on an event/command/read model names the **aggregate id**
@@ -120,3 +124,18 @@ consistency are owned exclusively by the **architect** agent. If code generation
 surfaces a mismatch or gap in the event-modelling docs (missing field, undocumented
 term, ambiguous shape), stop and escalate to the architect (or ask the user) instead
 of editing those files directly. Only read them as input.
+
+# Development flow - use ALWAYS when generating code
+1. **Create code skeletons**: Create domain types, commands, events, interfaces, and minimal stubs so code compiles. Do NOT implement business logic yet.
+2. **Create groovy unit tests FIRST (TDD)**:
+   * **One test class per read model** — NOT per command handler. Tests verify end-to-end behavior: command → event → read model projection.
+   * Each test class implements **both** the command handler ability (to issue commands) **and** the projector ability (to verify read model state).
+   * Create helper DSLs in `*Ability` utils (test DSL template).
+   * Tests should compile and run but **CAN FAIL** at this stage — that's expected and OK.
+3. **Implement business logic**: Add minimal implementation to make failing tests pass (command handlers, projectors, state transitions).
+4. **Verify**: Run `mvn test` to confirm all tests pass.
+
+### What NOT to test
+* Do NOT create test classes that only test command handlers in isolation (e.g. `CreateProposalHandlerSpecification`). This is meaningless — the handler just appends events to an in-memory stream.
+* Do NOT create test classes that only verify `aggregateId != null`. This tests nothing useful.
+* The real behavior to test is: **when a command is issued, can the read model be retrieved with the correct projected data?**

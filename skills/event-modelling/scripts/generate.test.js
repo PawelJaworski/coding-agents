@@ -566,6 +566,51 @@ test('parseGwtContent handles GWT file with no title', () => {
   assert.equal(gwt.scenarios.length, 1);
 });
 
+test('parseGwtContent parses GWT file with colon format (given:/when:/then:)', () => {
+  const content = `
+# Given When Then
+
+## when issue policy then policy number has next ordinal
+given:
+- policy holder
+- policy coverage
+
+when:
+- issue policy command is executed
+
+then:
+- policy number has next ordinal
+`;
+  const gwt = parseGwtContent(content, 'policy-document');
+  assert.equal(gwt.title, 'Given When Then');
+  assert.equal(gwt.scenarios.length, 1);
+  assert.equal(gwt.scenarios[0].name, 'when issue policy then policy number has next ordinal');
+  assert.deepEqual(gwt.scenarios[0].given, ['policy holder', 'policy coverage']);
+  assert.deepEqual(gwt.scenarios[0].when, ['issue policy command is executed']);
+  assert.deepEqual(gwt.scenarios[0].then, ['policy number has next ordinal']);
+});
+
+test('parseGwtContent parses GWT file with optional given section', () => {
+  const content = `
+# Given When Then
+
+## when issue policy then policy number has next ordinal
+given:
+issue policy
+issue policy
+
+then:
+policy number has next ordinal
+`;
+  const gwt = parseGwtContent(content, 'policy-document');
+  assert.equal(gwt.title, 'Given When Then');
+  assert.equal(gwt.scenarios.length, 1);
+  assert.equal(gwt.scenarios[0].name, 'when issue policy then policy number has next ordinal');
+  assert.deepEqual(gwt.scenarios[0].given, ['issue policy', 'issue policy']);
+  assert.deepEqual(gwt.scenarios[0].when, []);
+  assert.deepEqual(gwt.scenarios[0].then, ['policy number has next ordinal']);
+});
+
 test('discoverGwtFiles finds GWT files for read models', () => {
   const gwtContent = `
 # GWT: Policy Status

@@ -50,6 +50,7 @@ function parseGwtContent(content, readmodelId) {
   const lines = content.split('\n');
   const scenarios = [];
   let currentScenario = null;
+  let currentSection = null; // Track which section we're in: 'given', 'when', 'then', or null
   let title = `GWT: ${readmodelId}`;
   
   for (const line of lines) {
@@ -62,7 +63,7 @@ function parseGwtContent(content, readmodelId) {
       continue;
     }
     
-    // Scenario heading: ## Scenario N: Name
+    // Scenario heading: ## Scenario N: Name or ## descriptive name
     const scenarioMatch = trimmed.match(/^##\s+(.+)/);
     if (scenarioMatch) {
       if (currentScenario) {
@@ -74,36 +75,66 @@ function parseGwtContent(content, readmodelId) {
         when: [],
         then: []
       };
+      currentSection = null; // Reset section when starting new scenario
       continue;
     }
     
     if (!currentScenario) continue;
     
-    // Parse GWT sections
-    const givenMatch = trimmed.match(/^\*\*Given\*\*\s+(.+)/i);
-    if (givenMatch) {
-      currentScenario.given.push(givenMatch[1]);
+    // Parse GWT sections - support both formats:
+    // Format 1: **Given** text (bold, uppercase)
+    // Format 2: given: (lowercase with colon)
+    
+    // Check for Given section
+    const givenMatchBold = trimmed.match(/^\*\*Given\*\*\s+(.+)/i);
+    const givenMatchColon = trimmed.match(/^given:\s*$/i);
+    if (givenMatchBold || givenMatchColon) {
+      currentSection = 'given';
+      if (givenMatchBold) {
+        currentScenario.given.push(givenMatchBold[1]);
+      }
       continue;
     }
     
-    const whenMatch = trimmed.match(/^\*\*When\*\*\s+(.+)/i);
-    if (whenMatch) {
-      currentScenario.when.push(whenMatch[1]);
+    // Check for When section
+    const whenMatchBold = trimmed.match(/^\*\*When\*\*\s+(.+)/i);
+    const whenMatchColon = trimmed.match(/^when:\s*$/i);
+    if (whenMatchBold || whenMatchColon) {
+      currentSection = 'when';
+      if (whenMatchBold) {
+        currentScenario.when.push(whenMatchBold[1]);
+      }
       continue;
     }
     
-    const thenMatch = trimmed.match(/^\*\*Then\*\*\s+(.+)/i);
-    if (thenMatch) {
-      currentScenario.then.push(thenMatch[1]);
+    // Check for Then section
+    const thenMatchBold = trimmed.match(/^\*\*Then\*\*\s+(.+)/i);
+    const thenMatchColon = trimmed.match(/^then:\s*$/i);
+    if (thenMatchBold || thenMatchColon) {
+      currentSection = 'then';
+      if (thenMatchBold) {
+        currentScenario.then.push(thenMatchBold[1]);
+      }
       continue;
     }
     
-    // Bullet points for each section
-    const bulletMatch = trimmed.match(/^[-*]\s+(.+)/);
-    if (bulletMatch && currentScenario) {
-      // Determine which section based on last encountered section header
-      // For simplicity, add to 'then' if no section header was explicitly set
-      // In practice, the format uses **Given**/**When**/**Then** inline
+    // Add content to current section (support both bullet points and plain text)
+    if (currentSection && trimmed) {
+      // Remove bullet point prefix if present
+      const bulletMatch = trimmed.match(/^[-*]\s+(.+)/);
+      const content = bulletMatch ? bulletMatch[1] : trimmed;
+      
+      switch (currentSection) {
+        case 'given':
+          currentScenario.given.push(content);
+          break;
+        case 'when':
+          currentScenario.when.push(content);
+          break;
+        case 'then':
+          currentScenario.then.push(content);
+          break;
+      }
     }
   }
   

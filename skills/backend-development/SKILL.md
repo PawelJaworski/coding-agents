@@ -19,13 +19,14 @@ To minimize token usage and execution time, follow this pattern:
 2. **Read docs once, upfront**: Read `<docs>/commands.md`, `<docs>/events.md`, `<docs>/readmodels.md`, and `<docs>/business-definitions-raw.md` in a single parallel batch. These are the source of truth.
 3. **Check existing code minimally**: Only read files that directly relate to what you're changing. Don't explore empty directories or read every existing class.
 4. **Batch file writes**: Write all new files in 2-3 parallel batches instead of one at a time. Group related files together (e.g., all domain types in one batch, all commands in another).
-5. **Delegate complex implementations**: For implementations involving 5+ new files, consider using the `Task` tool with a `general` agent to handle the entire implementation autonomously. Provide the agent with:
+5. **Write Ability classes for every Spring component**: Before writing tests, create `FooAbility.java` in `src/test/java/` for every `@Component`/`@RestController`/`@Service`. One Ability per component, never inline dependency construction.
+6. **Delegate complex implementations**: For implementations involving 5+ new files, consider using the `Task` tool with a `general` agent to handle the entire implementation autonomously. Provide the agent with:
    - The event modeling docs content (commands.md, events.md, readmodels.md)
    - The business definitions content
    - The target package structure
    - The code templates to follow
-6. **Verify once at the end**: Run `mvn compile` and `mvn test` only after all files are written, not after each file.
-7. **Minimize todo updates**: Update the todo list at major milestones (exploration done, implementation done, verification done), not after every file.
+7. **Verify once at the end**: Run `mvn compile` and `mvn test` only after all files are written, not after each file.
+8. **Minimize todo updates**: Update the todo list at major milestones (exploration done, implementation done, verification done), not after every file.
 
 ## Template usage
 * Do not read all code templates at start. Read them on demand when you need to create a specific type of class. Filename shows its context.
@@ -47,7 +48,6 @@ templates/FooReadModelEntity.java
 
 templates/FooAbility.java
 
-templates/TestDsl.java
 templates/ReadModelUnitTest.groovy
 
 # Code update hooks
@@ -65,11 +65,6 @@ templates/ReadModelUnitTest.groovy
 * interface FooRepository in same package where entity is located
 * FooInMemoryRepository
 * FooJpaRepository
-4. When any spring component, service or repository is added then ALWAYS create adequate test Ability (FooAbility template). Class and Ability is one to one relation - only one Ability per class.
-   * NEVER instantiate a dependency's Spring component/service inline inside another class's Ability, even if that would be simple/inline-able.
-     Reference the dependency's own Ability constant instead, e.g. `new Foo(BarAbility.INSTANCE)`, so every Spring component/service has exactly one Ability that owns its construction.
-     If the dependency's Ability does not exist yet, create it first (it is itself a Spring component and falls under this same rule).
-   * Exception: plain repositories do not need a wrapping Ability of their own - just use `new FooInMemoryRepository()` directly where the repository is required, since the InMemory repository already is the test double.
 
 # Sources of true
 1. Mirror business concepts in code as closely as possible.
@@ -93,8 +88,11 @@ templates/ReadModelUnitTest.groovy
 4. Event modeling attributes are abstractions. They don't have to have all details. Prefer business-definitions over event modeling for objects attributes. 
 5. If class template exists NEVER invent your own pattern. Use code templates as much as possible. NEVER create controllers, helpers, services if pattern exists in templates.
 6. Do not invent attributes or concepts. Add only attributes existing in documentation (business definitions/rules, event modeling etc.). 
-7. For code patterns prefer code templates and use them literally as much as possible. 
+7. For code patterns prefer code templates and use them **literally as much as possible**. 
 * don't invent spring beans if template doesn't advice it
+* don't change records into class if template define record
+* don't get attribute directly if template define getter
+* don't add config attributes (other than logic skeleton) if templates don't have them
 
 # Event modeling notation mapping
 1. `{aggregateName}:Id` on an event/command/read model names the **aggregate id**
@@ -126,14 +124,23 @@ term, ambiguous shape), stop and escalate to the architect (or ask the user) ins
 of editing those files directly. Only read them as input.
 
 # Development flow - use ALWAYS when generating code
+Do following steps in order:
 1. **Create code skeletons**: Create domain types, commands, events, interfaces, and minimal stubs so code compiles. Do NOT implement business logic yet.
-2. **Create groovy unit tests FIRST (TDD)**:
+2. **Create test Ability classes** (CRITICAL — never skip):
+   * For EVERY Spring component or repository (`@Component`, `@RestController`, `@Service`) added in step 1, create a corresponding `FooAbility.java` in `src/test/java/` in the **same package** as the component.
+   * One Ability per Spring component — no exceptions, no inlining.
+   * The Ability owns the construction of the component and all its dependencies:
+     * If the component depends on another Spring component, reference the dependency's Ability constant (e.g. `new Foo(BarAbility.INSTANCE)`), never construct it inline.
+     * If the dependency's Ability does not exist yet, create it FIRST (it is itself a Spring component and falls under this same rule).
+   * Plain repositories (`*InMemoryRepository`) are the exception — they don't need an Ability; use `new FooInMemoryRepository()` directly.
+   * Place all test Abilities and test classes under `src/test/java/` mirroring the main source package structure.
+3. **Create groovy unit tests (TDD)**:
    * **One test class per read model** — NOT per command handler. Tests verify end-to-end behavior: command → event → read model projection.
    * Each test class implements **both** the command handler ability (to issue commands) **and** the projector ability (to verify read model state).
-   * Create helper DSLs in `*Ability` utils (test DSL template).
+   * The test class itself defines thin DSL interfaces (e.g. `CreateProposalDsl`) that extend the Ability interfaces — these add only the test-specific DSL methods (like `createProposal { ... }`). The Ability interfaces handle all construction.
    * Tests should compile and run but **CAN FAIL** at this stage — that's expected and OK.
-3. **Implement business logic**: Add minimal implementation to make failing tests pass (command handlers, projectors, state transitions).
-4. **Verify**: Run `mvn test` to confirm all tests pass.
+4. **Implement business logic**: Add minimal implementation to make failing tests pass (command handlers, projectors, state transitions).
+5. **Verify**: Run `mvn test` to confirm all tests pass.
 
 ### What NOT to test
 * Do NOT create test classes that only test command handlers in isolation (e.g. `CreateProposalHandlerSpecification`). This is meaningless — the handler just appends events to an in-memory stream.

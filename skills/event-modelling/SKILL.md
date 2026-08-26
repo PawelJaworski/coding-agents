@@ -524,8 +524,9 @@ look for `gwt-policy-status.md` in the same directory as `readmodels.md`.
 
 ### GWT file format
 
-GWT files use a detailed format with multiple scenarios:
+GWT files use a detailed format with multiple scenarios. Two formats are supported:
 
+**Format 1: Bold headers (Given/When/Then inline)**
 ```markdown
 # GWT: Policy Status
 
@@ -539,6 +540,24 @@ GWT files use a detailed format with multiple scenarios:
 **When** the policy holder requests a status update
 **Then** the system returns "cancelled" status
 ```
+
+**Format 2: Colon headers (given:/when:/then: with bullet points or plain text)**
+```markdown
+# Given When Then
+
+## when issue policy then policy number has next ordinal
+given:
+- policy holder
+- policy coverage
+
+when:
+- issue policy command is executed
+
+then:
+- policy number has next ordinal
+```
+
+**Note:** The `given:` and `when:` sections are optional. If not present, they will be empty arrays and not rendered in the modal. The `then:` section is required.
 
 ### Rendering
 

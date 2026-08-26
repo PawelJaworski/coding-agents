@@ -7,6 +7,8 @@ import spock.lang.Specification
 //
 // Test flow: Command → Event → Read Model projection
 // Test class should be focused on app behaviour. All helpers, test dsls etc. should be implemented in test abilities
+// Test should not expose object creation of object. Just use test Abilities' dsl helpers.
+// Test should not invoke component or repository classes. Just use test Abilities' dsl helpers.
 class FooReadModelUnitTest extends Specification implements FooHandlerAbility, FooProjectorAbility {
 
     // Test name describes the business behavior, not technical details

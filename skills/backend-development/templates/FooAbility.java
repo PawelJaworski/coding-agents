@@ -12,7 +12,7 @@ public interface FooAbility {
     // DSLs for projectors abilities
     // DSL: fooDetails(aggregateId) { it.attr == "value" }
     default boolean fooDetails(UUID aggregateId, Predicate<FooReadModel> testCase) {
-        //ALWAYS INSTANCE getter
+        //ALWAYS use INSTANCE getter
         var readModel = getFooProjector().getFoo(aggregateId);
         return testCase.test(readModel);
     }
@@ -23,10 +23,11 @@ public interface FooAbility {
         var cmd = FooCmd.builder();
         // set defaults here if needed
         testCase.accept(cmd);
-        //ALWAYS INSTANCE getter
+        //ALWAYS use INSTANCE getter
         return getFooHandler().handle(cmd.build());
     }
 
+    //getter is mandatory
     default Foo getFoo() {
         return INSTANCE;
     }

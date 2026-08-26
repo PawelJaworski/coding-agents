@@ -15,10 +15,13 @@ const {
   buildModel,
   renderArrows,
   renderTable,
+  renderPage,
   computeGeometry,
   isBracketedField,
   normalizeField,
   hasMatchingField,
+  parseGwtContent,
+  discoverGwtFiles,
 } = require('./generate.js');
 
 // ---------------------------------------------------------------------------
@@ -513,4 +516,199 @@ customerId:Key
   const cardHtml = cardMatch[1];
   const aggIdDivs = [...cardHtml.matchAll(/<div class="agg-id">(.*?)<\/div>/g)].map((m) => m[1]);
   assert.deepEqual(aggIdDivs, ['policyHolder:Id', 'region:Key', 'customerId:Key']);
+});
+
+// ---------------------------------------------------------------------------
+// GWT (Given-When-Then) functionality
+// ---------------------------------------------------------------------------
+
+test('parseGwtContent parses a GWT file with multiple scenarios', () => {
+  const content = `
+# GWT: Policy Status
+
+## Scenario 1: Active Policy
+**Given** a policy exists with status "active"
+**When** the policy holder requests a status update
+**Then** the system returns "active" status
+
+## Scenario 2: Cancelled Policy
+**Given** a policy exists with status "cancelled"
+**When** the policy holder requests a status update
+**Then** the system returns "cancelled" status
+`;
+  const gwt = parseGwtContent(content, 'policy-status');
+  assert.equal(gwt.title, 'GWT: Policy Status');
+  assert.equal(gwt.scenarios.length, 2);
+  assert.equal(gwt.scenarios[0].name, 'Scenario 1: Active Policy');
+  assert.deepEqual(gwt.scenarios[0].given, ['a policy exists with status "active"']);
+  assert.deepEqual(gwt.scenarios[0].when, ['the policy holder requests a status update']);
+  assert.deepEqual(gwt.scenarios[0].then, ['the system returns "active" status']);
+  assert.equal(gwt.scenarios[1].name, 'Scenario 2: Cancelled Policy');
+  assert.deepEqual(gwt.scenarios[1].given, ['a policy exists with status "cancelled"']);
+});
+
+test('parseGwtContent handles empty GWT file', () => {
+  const content = '# Empty GWT\n';
+  const gwt = parseGwtContent(content, 'test-model');
+  assert.equal(gwt.title, 'Empty GWT');
+  assert.equal(gwt.scenarios.length, 0);
+});
+
+test('parseGwtContent handles GWT file with no title', () => {
+  const content = `
+## Scenario 1: Test
+**Given** something
+**When** action
+**Then** result
+`;
+  const gwt = parseGwtContent(content, 'test-model');
+  assert.equal(gwt.title, 'GWT: test-model');
+  assert.equal(gwt.scenarios.length, 1);
+});
+
+test('discoverGwtFiles finds GWT files for read models', () => {
+  const gwtContent = `
+# GWT: Policy Status
+
+## Scenario 1: Active Policy
+**Given** a policy exists with status "active"
+**When** the policy holder requests a status update
+**Then** the system returns "active" status
+`;
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name
+* address
+
+## policy-status
+Name: Policy Status
+Subscribes: policy-holder-added
+policyId:Key
+* status
+`,
+  });
+  // Create GWT file for policy-status only
+  fs.writeFileSync(path.join(dir, 'gwt-policy-status.md'), gwtContent);
+
+  const readmodelIds = ['policy-holder-view', 'policy-status'];
+  const gwtData = discoverGwtFiles(dir, readmodelIds);
+
+  assert.equal(Object.keys(gwtData).length, 1);
+  assert.ok(gwtData['policy-status']);
+  assert.equal(gwtData['policy-status'].title, 'GWT: Policy Status');
+  assert.equal(gwtData['policy-status'].scenarios.length, 1);
+  assert.equal(gwtData['policy-holder-view'], undefined);
+});
+
+test('discoverGwtFiles returns empty object when no GWT files exist', () => {
+  const dir = baseFixture();
+  const readmodelIds = ['policy-holder-view'];
+  const gwtData = discoverGwtFiles(dir, readmodelIds);
+  assert.deepEqual(gwtData, {});
+});
+
+test('buildModel attaches GWT data to read models', () => {
+  const gwtContent = `
+# GWT: Policy Holder View
+
+## Scenario 1: View Policy Holder
+**Given** a policy holder exists
+**When** the clerk views the policy holder
+**Then** the system displays the policy holder details
+`;
+  const dir = baseFixture();
+  fs.writeFileSync(path.join(dir, 'gwt-policy-holder-view.md'), gwtContent);
+
+  const model = buildModel(dir);
+  const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
+
+  assert.ok(rm.gwt);
+  assert.equal(rm.gwt.title, 'GWT: Policy Holder View');
+  assert.equal(rm.gwt.scenarios.length, 1);
+  assert.equal(rm.gwt.scenarios[0].name, 'Scenario 1: View Policy Holder');
+});
+
+test('buildModel sets gwt to null when no GWT file exists', () => {
+  const dir = baseFixture();
+  const model = buildModel(dir);
+  const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
+  assert.equal(rm.gwt, null);
+});
+
+test('renderTable adds GWT badge for read models with GWT files', () => {
+  const gwtContent = `
+# GWT: Policy Holder View
+
+## Scenario 1: Test
+**Given** something
+**When** action
+**Then** result
+`;
+  const dir = baseFixture();
+  fs.writeFileSync(path.join(dir, 'gwt-policy-holder-view.md'), gwtContent);
+
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+
+  // Check that GWT badge is present for the read model
+  assert.match(html, /<div class="gwt-badge" data-gwt="policy-holder-view" title="Click to view GWT scenarios">GWT<\/div>/);
+});
+
+test('renderTable does not add GWT badge for read models without GWT files', () => {
+  const dir = baseFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+
+  // Check that no GWT badge is present
+  assert.doesNotMatch(html, /gwt-badge/);
+});
+
+test('renderPage includes GWT modal HTML and GWT data script', () => {
+  const gwtContent = `
+# GWT: Policy Holder View
+
+## Scenario 1: Test
+**Given** something
+**When** action
+**Then** result
+`;
+  const dir = baseFixture();
+  fs.writeFileSync(path.join(dir, 'gwt-policy-holder-view.md'), gwtContent);
+
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const tableHtml = renderTable(model, geo);
+  const arrowsHtml = renderArrows(model, geo);
+  const pageHtml = renderPage(model, geo, tableHtml, arrowsHtml);
+
+  // Check that GWT modal HTML is present
+  assert.match(pageHtml, /<div class="gwt-modal" id="gwt-modal">/);
+  assert.match(pageHtml, /<div class="gwt-modal-content">/);
+  assert.match(pageHtml, /<button class="gwt-modal-close" id="gwt-modal-close">/);
+
+  // Check that GWT data is included in the script
+  assert.match(pageHtml, /var GWT_DATA = \{/);
+  assert.match(pageHtml, /"policy-holder-view":\{/);
+  assert.match(pageHtml, /"title":"GWT: Policy Holder View"/);
+});
+
+test('renderPage includes GWT modal CSS styles', () => {
+  const dir = baseFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const tableHtml = renderTable(model, geo);
+  const arrowsHtml = renderArrows(model, geo);
+  const pageHtml = renderPage(model, geo, tableHtml, arrowsHtml);
+
+  // Check that GWT-related CSS styles are present
+  assert.match(pageHtml, /\.gwt-badge\{/);
+  assert.match(pageHtml, /\.gwt-modal\{/);
+  assert.match(pageHtml, /\.gwt-modal-content\{/);
+  assert.match(pageHtml, /\.gwt-scenario\{/);
 });

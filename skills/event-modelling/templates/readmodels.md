@@ -22,6 +22,7 @@ Name: Policy Status
 Subscribes: policy-issued, policy-cancelled
 * policy holder
 * coverage period
+* status
 
 ## policy-document
 policy:Id

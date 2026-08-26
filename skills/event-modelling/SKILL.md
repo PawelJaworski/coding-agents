@@ -515,6 +515,46 @@ Geometry: `AGG_ID_H` (14px) is now added **once per identifying line**
 one-time bump — a read model with `:Id` + 2 `:Key` lines grows 3 × 14px
 taller than its base height.
 
+## Read-model GWT (Given-When-Then) files
+
+Read models can have associated GWT (Given-When-Then) files that document
+business scenarios and acceptance criteria. The generator automatically
+discovers GWT files by convention: for a read model with id `policy-status`,
+look for `gwt-policy-status.md` in the same directory as `readmodels.md`.
+
+### GWT file format
+
+GWT files use a detailed format with multiple scenarios:
+
+```markdown
+# GWT: Policy Status
+
+## Scenario 1: Active Policy
+**Given** a policy exists with status "active"
+**When** the policy holder requests a status update
+**Then** the system returns "active" status
+
+## Scenario 2: Cancelled Policy
+**Given** a policy exists with status "cancelled"
+**When** the policy holder requests a status update
+**Then** the system returns "cancelled" status
+```
+
+### Rendering
+
+When a GWT file exists for a read model:
+1. A blue "GWT" badge appears at the bottom of the read model card
+2. Clicking the badge opens a modal dialog showing all GWT scenarios
+3. Each scenario displays its Given, When, and Then sections
+4. The modal can be closed by clicking the X button, clicking outside, or pressing Escape
+
+### Discovery
+
+GWT files are automatically discovered by the generator:
+- For read model id `foo`, look for `gwt-foo.md` in the input directory
+- No explicit linking is required — convention over configuration
+- If no GWT file exists, no badge appears on the read model card
+
 ## Ubiquitous language check (non-blocking)
 The generator also cross-checks every command's effective actor (from its
 `uis.md` entry) against the term names in `<docs>/business-definitions.html`

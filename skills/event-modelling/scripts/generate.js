@@ -25,6 +25,105 @@ const INTERACTIVITY_JS = path.join(SKILL_DIR, 'reference', 'interactivity.js');
 // 1. Parse markdown inputs
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 1a. GWT (Given-When-Then) file discovery and parsing
+// ---------------------------------------------------------------------------
+
+// Discover GWT files for read models: looks for gwt-{read-model-id}.md files
+// in the input directory. Returns a map of read model id -> parsed GWT data.
+function discoverGwtFiles(inputDir, readmodelIds) {
+  const gwtData = {};
+  
+  for (const rmId of readmodelIds) {
+    const gwtFile = path.join(inputDir, `gwt-${rmId}.md`);
+    if (fs.existsSync(gwtFile)) {
+      const content = fs.readFileSync(gwtFile, 'utf8');
+      gwtData[rmId] = parseGwtContent(content, rmId);
+    }
+  }
+  
+  return gwtData;
+}
+
+// Parse GWT content in Option B format (detailed GWT with multiple scenarios)
+function parseGwtContent(content, readmodelId) {
+  const lines = content.split('\n');
+  const scenarios = [];
+  let currentScenario = null;
+  let title = `GWT: ${readmodelId}`;
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    // Extract title from # heading
+    const titleMatch = trimmed.match(/^#\s+(.+)/);
+    if (titleMatch) {
+      title = titleMatch[1];
+      continue;
+    }
+    
+    // Scenario heading: ## Scenario N: Name
+    const scenarioMatch = trimmed.match(/^##\s+(.+)/);
+    if (scenarioMatch) {
+      if (currentScenario) {
+        scenarios.push(currentScenario);
+      }
+      currentScenario = {
+        name: scenarioMatch[1],
+        given: [],
+        when: [],
+        then: []
+      };
+      continue;
+    }
+    
+    if (!currentScenario) continue;
+    
+    // Parse GWT sections
+    const givenMatch = trimmed.match(/^\*\*Given\*\*\s+(.+)/i);
+    if (givenMatch) {
+      currentScenario.given.push(givenMatch[1]);
+      continue;
+    }
+    
+    const whenMatch = trimmed.match(/^\*\*When\*\*\s+(.+)/i);
+    if (whenMatch) {
+      currentScenario.when.push(whenMatch[1]);
+      continue;
+    }
+    
+    const thenMatch = trimmed.match(/^\*\*Then\*\*\s+(.+)/i);
+    if (thenMatch) {
+      currentScenario.then.push(thenMatch[1]);
+      continue;
+    }
+    
+    // Bullet points for each section
+    const bulletMatch = trimmed.match(/^[-*]\s+(.+)/);
+    if (bulletMatch && currentScenario) {
+      // Determine which section based on last encountered section header
+      // For simplicity, add to 'then' if no section header was explicitly set
+      // In practice, the format uses **Given**/**When**/**Then** inline
+    }
+  }
+  
+  // Push the last scenario
+  if (currentScenario) {
+    scenarios.push(currentScenario);
+  }
+  
+  return {
+    title,
+    scenarios
+  };
+}
+
+// Check if a GWT file exists for a read model
+function hasGwtFile(inputDir, readmodelId) {
+  const gwtFile = path.join(inputDir, `gwt-${readmodelId}.md`);
+  return fs.existsSync(gwtFile);
+}
+
 function parseMd(file) {
   const text = fs.readFileSync(file, 'utf8');
   return parseMdText(text);
@@ -366,6 +465,12 @@ function buildModel(inputDir) {
   // whether to formally document a term is a business-intent decision).
   checkActorsAgainstDefinitions(commands, inputDir);
 
+  // Discover GWT files for read models
+  const gwtData = discoverGwtFiles(inputDir, readmodels.map((r) => r.id));
+  readmodels.forEach((rm) => {
+    rm.gwt = gwtData[rm.id] || null;
+  });
+
   // Sanity: every non-bracketed event field must trace back to the same
   // field on its producing command (canonical rule, see SKILL.md — "Diagram
   // consistency"). Bracketed fields ([...]) are exempt (calculated/system-
@@ -659,7 +764,8 @@ function renderTable(model, geo) {
       content = `<div class="card cmd-card${isSystem ? ' system-cmd' : ''}" style="height:${cmd._h}px" data-element="${cmd.id}" data-type="cmd" title="${cmd.id} — click to focus, click again to clear">${isSystem ? '<div class="sys-badge">⚙ SYSTEM</div>' : ''}<div class="title">${escapeHtml(cmd.name)}</div>${cmd.aggregateId ? `<div class="agg-id">${escapeHtml(cmd.aggregateId)}:Id</div>` : ''}${fieldsHtml(cmd.fields)}</div>`;
     } else if (occ && occ.type === 'view') {
       const rm = readmodels.find((rr) => rr.id === occ.id);
-      content = `<div class="card view-card" style="height:${rm._h}px" data-element="${rm.id}" data-type="view" title="${rm.id} — click to focus, click again to clear"><div class="title">${escapeHtml(rm.name)}</div>${idKeyLinesHtml(rm)}${fieldsHtml(rm.fields)}</div>`;
+      const gwtBadge = rm.gwt ? `<div class="gwt-badge" data-gwt="${rm.id}" title="Click to view GWT scenarios">GWT</div>` : '';
+      content = `<div class="card view-card" style="height:${rm._h}px" data-element="${rm.id}" data-type="view" title="${rm.id} — click to focus, click again to clear"><div class="title">${escapeHtml(rm.name)}</div>${idKeyLinesHtml(rm)}${fieldsHtml(rm.fields)}${gwtBadge}</div>`;
     }
     midCells += `<td class="lane-cell mid-cell">${content}</td>`;
   });
@@ -824,6 +930,16 @@ function renderArrows(model, geo) {
 
 function renderPage(model, geo, tableHtml, arrowsHtml) {
   const script = fs.readFileSync(INTERACTIVITY_JS, 'utf8');
+  
+  // Build GWT data for JavaScript
+  const gwtDataMap = {};
+  model.readmodels.forEach((rm) => {
+    if (rm.gwt) {
+      gwtDataMap[rm.id] = rm.gwt;
+    }
+  });
+  const gwtDataJson = JSON.stringify(gwtDataMap);
+  
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -871,7 +987,25 @@ svg [data-from].dim{opacity:.08}
 .fields li{font-size:10px;line-height:14px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fields li::before{content:'•';margin-right:5px;opacity:.6}
 .sys-badge{position:absolute;top:-10px;font-size:9px;background:#5E35B1;color:#fff;padding:2px 6px;border-radius:10px}
+.gwt-badge{position:absolute;bottom:-10px;font-size:9px;background:#2196F3;color:#fff;padding:2px 6px;border-radius:10px;cursor:pointer;z-index:10}
+.gwt-badge:hover{background:#1976D2}
 svg{position:absolute;top:0;left:0;pointer-events:none}
+.gwt-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center}
+.gwt-modal.active{display:flex}
+.gwt-modal-content{background:#fff;border-radius:8px;padding:24px;max-width:600px;max-height:80vh;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,0.3)}
+.gwt-modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #eee;padding-bottom:12px}
+.gwt-modal-title{font-size:18px;font-weight:700;color:#333}
+.gwt-modal-close{background:none;border:none;font-size:24px;cursor:pointer;color:#666;padding:0 8px}
+.gwt-modal-close:hover{color:#333}
+.gwt-scenario{margin-bottom:20px;padding:16px;background:#f8f9fa;border-radius:6px;border-left:4px solid #2196F3}
+.gwt-scenario:last-child{margin-bottom:0}
+.gwt-scenario-title{font-size:14px;font-weight:700;color:#333;margin-bottom:12px}
+.gwt-section{margin-bottom:8px}
+.gwt-section:last-child{margin-bottom:0}
+.gwt-section-title{font-size:12px;font-weight:600;color:#666;text-transform:uppercase;margin-bottom:4px}
+.gwt-section-content{font-size:13px;color:#333;line-height:1.4}
+.gwt-section-content ul{margin:0;padding-left:20px}
+.gwt-section-content li{margin-bottom:4px}
 </style>
 </head>
 <body>
@@ -885,7 +1019,20 @@ ${tableHtml}
 ${arrowsHtml}
 </svg>
 </div>
+
+<!-- GWT Modal -->
+<div class="gwt-modal" id="gwt-modal">
+  <div class="gwt-modal-content">
+    <div class="gwt-modal-header">
+      <div class="gwt-modal-title" id="gwt-modal-title">GWT Scenarios</div>
+      <button class="gwt-modal-close" id="gwt-modal-close">&times;</button>
+    </div>
+    <div class="gwt-modal-body" id="gwt-modal-body"></div>
+  </div>
+</div>
+
 <script>
+var GWT_DATA = ${gwtDataJson};
 ${script}
 </script>
 </body>
@@ -932,4 +1079,5 @@ if (require.main === module) {
 module.exports = {
   buildModel, computeGeometry, renderTable, renderArrows, renderPage,
   parseMd, parseMdText, isBracketedField, normalizeField, hasMatchingField,
+  parseGwtContent, discoverGwtFiles,
 };

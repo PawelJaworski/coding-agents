@@ -84,3 +84,93 @@ document.querySelector('.wrap').addEventListener('click',function(){
   focused=null; refresh();
 });
 refresh();
+
+// GWT Modal functionality
+function showGwtModal(readmodelId) {
+  var gwtData = window.GWT_DATA && window.GWT_DATA[readmodelId];
+  if (!gwtData) return;
+  
+  var modal = document.getElementById('gwt-modal');
+  var title = document.getElementById('gwt-modal-title');
+  var body = document.getElementById('gwt-modal-body');
+  
+  title.textContent = gwtData.title;
+  
+  var html = '';
+  gwtData.scenarios.forEach(function(scenario) {
+    html += '<div class="gwt-scenario">';
+    html += '<div class="gwt-scenario-title">' + escapeHtmlHtml(scenario.name) + '</div>';
+    
+    if (scenario.given.length) {
+      html += '<div class="gwt-section">';
+      html += '<div class="gwt-section-title">Given</div>';
+      html += '<div class="gwt-section-content"><ul>';
+      scenario.given.forEach(function(item) {
+        html += '<li>' + escapeHtmlHtml(item) + '</li>';
+      });
+      html += '</ul></div></div>';
+    }
+    
+    if (scenario.when.length) {
+      html += '<div class="gwt-section">';
+      html += '<div class="gwt-section-title">When</div>';
+      html += '<div class="gwt-section-content"><ul>';
+      scenario.when.forEach(function(item) {
+        html += '<li>' + escapeHtmlHtml(item) + '</li>';
+      });
+      html += '</ul></div></div>';
+    }
+    
+    if (scenario.then.length) {
+      html += '<div class="gwt-section">';
+      html += '<div class="gwt-section-title">Then</div>';
+      html += '<div class="gwt-section-content"><ul>';
+      scenario.then.forEach(function(item) {
+        html += '<li>' + escapeHtmlHtml(item) + '</li>';
+      });
+      html += '</ul></div></div>';
+    }
+    
+    html += '</div>';
+  });
+  
+  body.innerHTML = html;
+  modal.classList.add('active');
+}
+
+function hideGwtModal() {
+  var modal = document.getElementById('gwt-modal');
+  modal.classList.remove('active');
+}
+
+function escapeHtmlHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Attach GWT badge click handlers
+document.querySelectorAll('.gwt-badge').forEach(function(badge) {
+  badge.addEventListener('click', function(e) {
+    e.stopPropagation();
+    var readmodelId = badge.getAttribute('data-gwt');
+    showGwtModal(readmodelId);
+  });
+});
+
+// Close modal on close button click
+document.getElementById('gwt-modal-close').addEventListener('click', function() {
+  hideGwtModal();
+});
+
+// Close modal on backdrop click
+document.getElementById('gwt-modal').addEventListener('click', function(e) {
+  if (e.target === this) {
+    hideGwtModal();
+  }
+});
+
+// Close modal on Escape key
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    hideGwtModal();
+  }
+});

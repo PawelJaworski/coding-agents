@@ -7,6 +7,9 @@ description: >
   existing source tree, decides what code is missing, and writes a compact, precise,
   machine-readable diff-spec to a fixed artifact path (target/backend-spec.json).
   It performs ALL reasoning. It does NOT write any code and holds NO code templates.
+  For each GWT scenario the planner emits a COMPILING unit test (it may still fail at this
+  stage, but it MUST compile) plus the outline of a SIMPLE, minimal-but-functional
+  implementation sketch the executor fills in to make the test green.
   # When to use
   Use when there is a need to change backend code and a precise plan of what to
   create/change must be produced before any file is generated. The EXECUTOR stage
@@ -108,14 +111,29 @@ the DSL helpers the tests will need (command-issue DSL + projector DSL). See cap
 full generated ability body is too heavy for the planner context, emit the component name + which DSLs
 are needed and let the executor assemble from the FooAbility template.
 
-## Test -> spec entry (kind: "test") - HYBRID
+## Test -> spec entry (kind: "test") - HYBRID + TEST-FIRST
 The test is the one artifact where real logic lives (given/when/then -> assertions). The planner MUST
 produce a CONCRETE, fully-resolved body and attach it as `body` (Java String) so the executor writes it
-verbatim without re-reading the GWT file. Emit one test entry PER read model that has a gwt-*.md file:
+verbatim without re-reading the GWT file. The test MUST COMPILE at the time it is written, even though
+it may not pass yet (test-first). Emit one test entry PER read model that has a gwt-*.md file:
 * `methodName` from the GWT scenario heading (e.g. "when issue policy then policy number has next ordinal").
 * `body`: the complete Spock `def "..."() { }` method text with concrete ability DSL calls and assertions
-  matching the GWT given/when/then EXACTLY. Do not emit generic happy paths.
+  matching the GWT given/when/then EXACTLY. Do not emit generic happy paths. Keep the assertions driving
+  only what the scenario checks, so the minimal sketch can satisfy them.
+* `implementationSketch`: a short, explicit outline of the SIMPLE, minimal-but-functional logic the
+  executor writes to make this test green (for example: handler appends its produced event into the
+  event stream and returns the new aggregate id; projector `apply(PolicyIssuedEvent)` builds the read
+  model; ordinal/serial is a monotonically derived value). Give the concrete rule (e.g. "policy number =
+  `P-` + sequential counter incremented per issued policy"). This is the LOWER bound of behavior - keep
+  it minimal and scenario-scoped; do not design production-grade complexity here.
 Only emit tests for read models WITH a GWT file.
+
+## Implementation sketch -> spec entry (kind: "implementation-sketch")
+Optionally the planner can also attach the same minimal-sketch outline to the affected
+`command-handler` / `projector` / `event` / `state-projector` entries so the executor has the concrete
+behavior to transcribe (e.g. "handler injects EventStream, appends <Event>, returns the generated id").
+Where the outline is emitted on the `test` entry, mirror it to the relevant component entries so the
+executor follows it literally without re-deriving it.
 
 # Event modeling notation mapping (apply when building the spec)
 1. `{aggregateName}:Id` on an event/command/read model names the AGGREGATE ID concept only - a separate

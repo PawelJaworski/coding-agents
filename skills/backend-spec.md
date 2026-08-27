@@ -38,7 +38,8 @@
 | `entity`            | FooReadModelEntity.java           | JPA entity (persisting projector only) |
 | `repository`        | FooRepository / InMemory / Jpa    | repository triad (persisting projector only) |
 | `ability`           | FooAbility.java                   | test DSL per Spring component |
-| `test`              | ReadModelUnitTest.groovy          | Spock test for one read model with a GWT file |
+| `test`              | ReadModelUnitTest.groovy          | Spock test for one read model with a GWT file (COMPILES first, may still fail) |
+| `implementation-sketch` | (attached to command-handler / projector / state-projector) | the minimal-but-functional behavior outline that makes the test green |
 
 ## Required fields per kind (the fields the executor reads)
 
@@ -54,7 +55,12 @@
 - **entity**: `className`, `package`, `fields[{type,name}]`
 - **repository**: `interfaceName`, `implName`, `jpaName`, `package`, `entityClassName`
 - **ability**: `className`, `package`, `clazz` (wrapped component), `dsl[{name, kind}]`
-- **test**: `className`, `package`, `implements[abilities]`, `body` (fully-resolved Spock method text)
+- **test**: `className`, `package`, `implements[abilities]`, `body` (fully-resolved Spock method text,
+  must COMPILE), optionally `implementationSketch` (the minimal behavior outline)
+- **implementation-sketch** (on command-handler / event / state-projector / projector): an explicit
+  minimal rule - e.g. "handler injects EventStream, appends <Event> and returns the new aggregate id",
+  "`apply(PolicyIssuedEvent)` builds the read model", "policy number = `P-` + per-policy sequential
+  counter". This is the LOWER bound of behavior the executor transcribes; keep it scenario-scoped.
 
 ## Notation rules the planner applies (so the executor never re-derives them)
 
@@ -65,14 +71,21 @@
 - A bracketed field on an **event** (e.g. `[policy number]`) is where the aggregate seeds/decides
   that value — it appears on the event, not the command.
 
-## Resolution
+## Resolution - test-first + minimal sketch
 
-The executor is expected to flag, not fix, any ambiguity it finds in a spec entry; the facade
-escalates spec defects back to the user/planner before regenerating.
+Generation is TEST-FIRST for every GWT scenario:
+1. The executor writes a COMPILING unit test (may legitimately fail at runtime at this stage).
+2. The executor then writes a **minimal implementation sketch** - the few lines of real behavior the
+   spec's `implementationSketch` outlines (handler event emission, projector/state `apply` building
+   the read model, ordinal/serial rule) - just enough to make the test green.
+3. The full suite must end GREEN (`mvn clean verify`).
 
-**No-invention guard:** the executor writes exactly the `targets` in this file and edits nothing
-else. Pre-existing files that are not `targets` (infrastructure, `eventstream/`, serde, config, and
-any existing entity/repo) are off-limits — never add scaffolding (e.g. a `@Transient` carry-around
-field) or shims to make a test pass. If generated code can't work end-to-end with only template+
-spec output (e.g. event serialization is unimplemented), that is a coverage gap in this spec, not a
-license to improvise.
+The sketch is the LOWER bound of behavior, never a license to gold-plate (no validation, error
+handling, or generality the scenarios don't exercise). A genuinely ambiguous business rule that no
+sketch can bridge is escalated to the user/architect - it is never guessed.
+
+The executor writes exactly the `targets` in this file and edits nothing outside spec targets (except
+the minimal sketch those targets describe). Pre-existing files that are not `targets` (infrastructure,
+`eventstream/`, serde, config, and any existing entity/repo) are off-limits - never add scaffolding
+(e.g. a `@Transient` carry-around field) or shims to make a test pass. The pipeline ends with a
+`<project root>/REPORT.md` capturing the biggest problems met in the conversation.

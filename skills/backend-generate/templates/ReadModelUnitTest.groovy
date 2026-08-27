@@ -22,7 +22,7 @@ class FooReadModelUnitTest extends Specification implements FooHandlerAbility, F
 
         then: "foo details projection contains the correct data"
         // use dls prepared in projector ability as much as possible. Dont invent test helpers
-        fooDetails(aggregateId) {
+        expect_foo(aggregateId) {
             it.attr == "value"
         }
     }

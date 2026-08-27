@@ -10,8 +10,8 @@ public interface FooAbility {
     Foo INSTANCE = new Foo(BarAbility.INSTANCE)
 
     // DSLs for projectors abilities
-    // DSL: fooDetails(aggregateId) { it.attr == "value" }
-    default boolean fooDetails(UUID aggregateId, Predicate<FooReadModel> testCase) {
+    // DSL: expect_foo(aggregateId) { it.attr == "value" }
+    default boolean expect_foo(UUID aggregateId, Predicate<FooReadModel> testCase) {
         //ALWAYS use INSTANCE getter
         var readModel = getFooProjector().getFoo(aggregateId);
         return testCase.test(readModel);
@@ -19,6 +19,7 @@ public interface FooAbility {
 
     // DLSs for for command handlers abilities
     // DSL: foo { it.attr = "value" }
+    // method name in snake case
     default UUID foo(Consumer<FooCmd.FooCmdBuilder> testCase) {
         var cmd = FooCmd.builder();
         // set defaults here if needed

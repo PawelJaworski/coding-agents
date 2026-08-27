@@ -55,6 +55,15 @@ implementation (a "sketch") from the spec's `implementationSketch` / mirrored ou
 * Templates: `templates/*` (all under this skill). Read a template ONLY when an entry needs it.
 
 # General transcribing rules
+0. **Templates carry critical instructions in their `// ...` comments. Read the WHOLE template —
+   every `//` comment, not just the placeholder annotations — and honor each comment in the output.**
+   These comments are not idle decoration: they state hard structural requirements (e.g. "Class name
+   ends with Cmd", "Always contains aggregate id", "One wrapper per domain event", "the record
+   component MUST be typed DomainEvent so the generated accessor satisfies the
+   DomainEventSerdeWrapper.event() contract", "getter is mandatory", the @JsonSubTypes wiring notes,
+   "ALWAYS use INSTANCE getter", "NEVER construct a new Bar()"). If a comment and the spec ever appear
+   to conflict, the comment wins (it encodes intent the spec assumes). Never strip or "clean up" these
+   comments from the goal statement; transcribe the output so the resulting code satisfies them.
 1. Copy the named template verbatim, then apply ONLY the substitutions the spec entry provides.
 2. Replace `{base}` with `basePackage` from spec `meta`.
 3. Replace every `Foo`/`SomethingHappenToFoo`/`do-something-on-foo`/`SOMETHING_HAPPEN_TO_FOO`

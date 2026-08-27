@@ -44,6 +44,11 @@ Read both worker SKILL.md files when invoked, then run the pipeline:
      builds the read model, ordinal/counter logic) just enough to make the test green. No
      gold-plating beyond the behavior the scenario exercises.
    - **3c. Verify**: run `mvn clean verify`; fix transcribing mistakes; the suite must end green.
+   - **Template comments rule (lives in `backend-generate/SKILL.md`, rule 0)**: the executor MUST read
+     the WHOLE code template — every `//` comment, not just placeholder annotations — and honor them,
+     because the comments encode critical structural requirements (class-naming suffixes, aggregate-id
+     presence, `DomainEvent`-typed serde component, DSL getters/INSTANCE reuse, etc.). A template comment
+     overrides the spec on any conflict. Do not run the executor without this rule in effect.
 4. **Report** -> once the code is done, the facade writes `<project root>/REPORT.md` with the
    biggest problems met during the conversation (flown to the reader in a few plain bullet points).
 5. **Reconcile** (only if the executor reported a genuine spec defect that no minimal sketch can

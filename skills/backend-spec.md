@@ -29,6 +29,8 @@
 | `command`           | DoSomethingOnFooCmd.java          | a command record |
 | `command-handler`   | DoSomethingOnFooHandler.java      | an HTTP command handler |
 | `event`             | FooEvent.java                     | a domain event record |
+| `event-serde`       | FooEventSerdeWrapper.java         | one serde wrapper per event (in `infrastructure`) |
+| `serde-wiring`      | (wires `DomainEventSerdeWrapper`/`DomainEventEntity`) | register wrappers + `serialize()` switch |
 | `event-type`        | (append to DomainEventType)        | enum constants |
 | `state-projector`   | StateProjector.java               | the shared state projector switch |
 | `read-model`        | (plain record)                    | the read-model record |
@@ -43,6 +45,8 @@
 - **command**: `className`, `package`, `recordComponents[{type,name}]`
 - **command-handler**: `className`, `package`, `commandClassName`, `postMapping`
 - **event**: `className`, `package`, `aggregateId`, `eventTypeEnum`, `otherAttributes[{type,name}]`
+- **event-serde**: `className`, `package`, `eventClassName`, `eventTypeEnum` (wraps the event for the event store)
+- **serde-wiring**: `package`, `addSerdeWrappers[{eventTypeEnum, wrapperClassName, eventClassName}...]`
 - **event-type**: `package`, `appendToEnum[string...]`
 - **state-projector**: `package`, `addEventCases[{eventTypeEnum, eventClassName}...]`
 - **read-model**: `className`, `package`, `aggregateIdPresent(bool)`, `fields[{type,name}]`
@@ -65,3 +69,10 @@
 
 The executor is expected to flag, not fix, any ambiguity it finds in a spec entry; the facade
 escalates spec defects back to the user/planner before regenerating.
+
+**No-invention guard:** the executor writes exactly the `targets` in this file and edits nothing
+else. Pre-existing files that are not `targets` (infrastructure, `eventstream/`, serde, config, and
+any existing entity/repo) are off-limits — never add scaffolding (e.g. a `@Transient` carry-around
+field) or shims to make a test pass. If generated code can't work end-to-end with only template+
+spec output (e.g. event serialization is unimplemented), that is a coverage gap in this spec, not a
+license to improvise.

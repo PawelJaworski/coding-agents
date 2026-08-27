@@ -22,6 +22,21 @@ spec entry leaves any doubt about what to write, DO NOT guess - treat the spec a
 incomplete and stop/escalate rather than invent. (The planner was told to be fully explicit,
 so any ambiguity is a spec defect, not a gap for you to fill.)
 
+# Hard rule: write ONLY spec targets, never "fix" with scaffolding
+You write EXACTLY the files the spec lists as `targets`, and nothing else. In particular:
+- **Pre-existing files NOT named as a spec `target` are off-limits.** This includes
+  infrastructure/envelope code (`eventstream/`, `infrastructure/`, `config/`, and any
+  existing entity/repo/serde class). You may READ them to understand the shape, but you
+  must NOT edit them, and you must NOT add bypass scaffolding to them (no `@Transient`
+  carry-around fields, no "make-the-test-pass" shims, no commented-out payloads).
+- If a generated artifact cannot work end-to-end without inventing logic/data that the
+  spec (or its template) does not provide — e.g. a behavioral GWT test fails because
+  serialization or handler-emit logic is genuinely unimplemented — that is a **spec/coverage
+  defect**, not a license to improvise. STOP and report it back to the facade/planner.
+  Do not bridge the gap with code outside the spec.
+- This mirrors the planner/executor contract: every field is explicit, so if you feel
+  forced to invent anything, the spec is incomplete — flag it.
+
 # Inputs
 * Spec: `target/backend-spec.json` (project-relative). Must exist; if missing, you have
   nothing to do - report it.
@@ -62,6 +77,18 @@ For each spec target, apply the matching row. The `template` field names the fil
    - for each `addEventCases` entry add a `case <eventTypeEnum> -> apply(state, (<eventClassName>) event);`
      mapping and a `default S apply(S state, <eventClassName> event) { return state; }` stub.
    - Update the `apply(S state, DomainEvent event)` switch to include all cases.
+### kind: "event-serde"  (template: FooEventSerdeWrapper.java)
+   -> `<pkg>/<className>.java`, package = entry `package` (always `{base}.infrastructure`).
+   Substitutions: class <className> = `{Pascal}EventSerdeWrapper`, record component event of type
+   <eventClassName>, `@JsonTypeName("<eventTypeEnum>")`, `getEventType()` returns
+   `DomainEventType.<eventTypeEnum>`.
+### kind: "serde-wiring"  (wires existing `DomainEventSerdeWrapper` + `DomainEventEntity`)
+   - `addSerdeWrappers` = [{eventTypeEnum, wrapperClassName, eventClassName}...].
+   - In `DomainEventSerdeWrapper`: set `@JsonSubTypes` (one `@JsonSubTypes.Type(value = <wrapperClassName>.class, name = "<eventTypeEnum>")` per element).
+   - In `DomainEventEntity.serialize(DomainEvent event)`: replace the stub with a switch over
+     `event.eventType()` returning `new <wrapperClassName>( (<eventClassName>) event )` per element.
+   - In `DomainEventEntity`: remove the `@Transient` carry-around field and delete the null-fallback in
+     `toDomainEvent()` (it becomes `return eventJson.event();`).
 ### kind: "read-model"  (template: none - a plain record)
    - create record <className>(<<fields>>) in `<pkg>`. Use `fields` `Type name` list.
 ### kind: "projector"  (template: FooOnDemandProjector.java | FooPersistingProjector.java chosen by planner)
@@ -85,13 +112,17 @@ For each spec target, apply the matching row. The `template` field names the fil
 # Mandatory checks before finishing
 - [ ] Every top-level spec target produced exactly one file at the package-derived path
 - [ ] No file written outside `src/main/java` or `src/test/java` except the spec itself
+- [ ] No file edited that was NOT listed as a spec `target` (see "Hard rule" above)
 - [ ] Only substitutions from the spec entry + `{base}` were applied to templates
-- [ ] `mvn compile` (and `mvn test` if any test entries exist) pass; if not, fix ONLY
-      transcribing mistakes (imports/placeholders), never add logic.
+- [ ] `mvn clean verify` passes; if not, fix ONLY transcribing mistakes (imports/placeholders),
+      never add logic, never scaffold pre-existing files to force a pass.
 
 # Verification
-Run `mvn compile` once all main files are written; run `mvn test` if there are test entries.
-Treat `mvn` results as authoritative (ignore Lombok LSP noise).
+Run `mvn clean verify` once all main files are written. **Always build clean FIRST.**
+Incremental `target/` can hold stale `.class` files from a previous template-driven compile,
+which produce phantom failures (e.g. "constructor X requires no arguments" when a
+Lombok-generated all-args constructor exists but the stale class predates it). Only a clean
+build is authoritative. Treat `mvn` results as authoritative (ignore Lombok LSP noise).
 
 # Boundaries
 Never edit the event-modelling docs, the generated diagram, or the diagram generator - owned by

@@ -33,10 +33,22 @@ Read both worker SKILL.md files when invoked, then run the pipeline:
 2. **Review the spec (optional but recommended)**: read `target/backend-spec.json`. The user can
    adjust it before generation. The spec is the contract - generation follows it literally.
 3. **Generate** -> delegate to `backend-generate`. It transcribes every spec entry from its
-   templates into `src/main/java` / `src/test/java` and runs `mvn compile` (+ `mvn test` if tests present).
+   templates into `src/main/java` / `src/test/java` and runs `mvn clean verify`.
 4. **Reconcile** (only if the executor reported a spec defect): escalate to the user (or a big model)
-   to fix `target/backend-spec.json`, then re-run generate. Never have the executor "fix" logic.
+   to fix `target/backend-spec.json`, then re-run generate. Never have the executor "fix" logic, and
+   never patch pre-existing code (e.g. add `@Transient` scaffolding to `DomainEventEntity`) to make a
+   test pass — if serialization/handler-emit/projection isn't generated, treat that as a spec/coverage
+   gap and route it back to the planner rather than inventing it here.
 5. **Code review** -> delegate to `backend-code-reviewer`. Add this as the last point of TODO list.
+
+# Delegation vs. inline execution
+Delegating each stage to a separate subagent is preferred (keeps contexts small and clean), but it is a
+means, not a goal. If a delegated stage executor is unavailable (provider/endpoint failure, context
+limits), the orchestrator may run that stage inline — **without collapsing the two phases**: plan first
+(produce the spec), then generate from the spec, each in its own step, with `target/backend-spec.json`
+as the handoff. Do not create the code in the same pass that reasons about what to build. If a "generate
+inline" reconciler is tempted to improve/complete generated code, that is a spec defect — stop and
+escalate per step 4.
 
 # Low-context invariant
 Find ONE clean handoff document between planner and executor: `target/backend-spec.json`.

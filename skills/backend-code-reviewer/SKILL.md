@@ -24,19 +24,25 @@ description: >
 4. Use code templates as much as possible; do not invent patterns that a template already covers.
 5. The planner produced a spec where every entry is explicit (no "derive from context" language).
 6. The spec artifact (`target/backend-spec.json`) is the single handoff; executor did not re-read docs/GWT.
+7. **No pre-existing file was edited unless it was a spec `target`.** In particular the executor must not
+   have added scaffolding to pre-existing infrastructure (e.g. a `@Transient` carry-around field on
+   `DomainEventEntity`, commented-out payloads, or a shim to make a GWT test pass). If such a change
+   exists, it is a spec/coverage defect the executor should have reported, not improvised — flag it.
 
 ## Structural correctness
-7. Events carry `aggregateId` as their own field/value, NOT aliased to a business attribute.
-8. Read-model bracket fields (`[x]`) were NOT pushed upstream onto command/event.
-9. Command handlers exist in a package matching the command name; events live in `domain.events`.
-10. On-demand projector used when read model has an aggregate id; persisting projector (+ entity/repo)
+8. Events carry `aggregateId` as their own field/value, NOT aliased to a business attribute.
+9. Read-model bracket fields (`[x]`) were NOT pushed upstream onto command/event.
+10. Command handlers exist in a package matching the command name; events live in `domain.events`.
+11. On-demand projector used when read model has an aggregate id; persisting projector (+ entity/repo)
     used when it does not.
 
 ## Tests (behavior)
-11. Test classes exist ONLY for read models with a `gwt-{readmodel-id}.md` file.
-12. Test names match the GWT scenario names exactly (no generic "happy path" names).
-13. Test bodies (given/when/then) match the GWT file exactly; the executor pasted the planner-provided body verbatim.
-14. Tests were run (`mvn test`) and pass.
+12. Test classes exist ONLY for read models with a `gwt-{readmodel-id}.md` file.
+13. Test names match the GWT scenario names exactly (no generic "happy path" names).
+14. Test bodies (given/when/then) match the GWT file exactly; the executor pasted the planner-provided body verbatim.
+15. Tests were run (`mvn clean verify`) and pass.
 
 # Notes
-- Lombok LSP noise is a false positive; trust `mvn compile`/`mvn test`.
+- Lombok LSP noise is a false positive; trust `mvn clean verify`.
+- A failing behavioral GWT test is NOT proof the executor invented code — check first whether
+  serialization/handler-emit logic is simply a spec/coverage gap (report/escalate) vs. a transcribing mistake.

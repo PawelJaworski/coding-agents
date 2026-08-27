@@ -75,6 +75,19 @@ a single entry. The executor appends them to the enum.
 Collect every (eventTypeEnum, eventClassName) pair across all events into one entry's `addEventCases`.
 The executor wires each case's `apply` switch.
 
+## Event serde -> spec entries (kinds: "event-serde" and "serde-wiring")
+Every declared event must be serializable by the event store. Emit TWO things:
+1. One (kind: "event-serde") target PER event -> a `{Pascal}EventSerdeWrapper` file
+   (template `FooEventSerdeWrapper.java`) in `{base}.infrastructure`. Fields:
+   `className` (`{Pascal}EventSerdeWrapper`), `package` (`{base}.infrastructure`),
+   `eventClassName` (`{Pascal}Event`), `eventTypeEnum`.
+2. ONE (kind: "serde-wiring") entry collecting ALL events into `addSerdeWrappers`:
+   each element is `{eventTypeEnum, wrapperClassName, eventClassName}`. The executor uses it to
+   register each wrapper in `DomainEventSerdeWrapper`'s `@JsonSubTypes` and to wire the
+   `serialize()` switch in `DomainEventEntity` (which are existing infrastructure files that the
+   planner DOES target for this wiring). The `@Transient` carry-around field must be removed —
+   serialization is the one true path.
+
 ## Read model -> spec entry (kind: "read-model")
 * `aggregateIdPresent`: true if the read model declares an `{x}:Id` line (on-demand projector), false
   otherwise (persisting projector). On-demand: fetch all events by aggregate id; persisting: needs an

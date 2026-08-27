@@ -120,7 +120,11 @@ For each spec target, apply the matching row. The `template` field names the fil
    - In `DomainEventEntity`: remove the `@Transient` carry-around field and delete the null-fallback in
      `toDomainEvent()` (it becomes `return eventJson.event();`).
 ### kind: "read-model"  (template: none - a plain record)
-   - create record <className>(<<fields>>) in `<pkg>`. Use `fields` `Type name` list.
+    - create record <className>(<<fields>>) in `<pkg>`. Use `fields` `Type name` list.
+### kind: "value-object"  (template: none - a plain record)
+    - create record <className>(<<fields>>) in `<pkg>` using the entry's `fields` `Type name`
+      list — identical transcription to a read model, but produce NOTHING else for it
+      (no projector/entity/repository/DSL/ability).
 ### kind: "projector"  (template: FooOnDemandProjector.java | FooPersistingProjector.java chosen by planner)
    - FooOnDemandProjector: class <className> implements StateProjector<<readModelClassName>>,
      readModelClassName set, getter method + @GetMapping("foo/{aggregateId}").

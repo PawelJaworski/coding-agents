@@ -33,6 +33,9 @@ Read both worker SKILL.md files when invoked, then run the pipeline:
 1. **Plan** -> delegate to `backend-plan`. It reads `<docs>/commands.md`, `<docs>/events.md`,
    `<docs>/readmodels.md`, `<docs>/uis.md`, all `glob <docs>/gwt-*.md`, and the existing `src/`,
    then writes `target/backend-spec.json`.
+   Do NOT pre-resolve field types for the planner — type resolution of business attributes
+   (e.g. `policy coverage` -> a `PolicyCoverage` value object) belongs to backend-plan via
+   `<docs>/business-definitions-raw.md`; seeding `String` shortcuts that resolution.
 2. **Review the spec (optional but recommended)**: read `target/backend-spec.json`. The user can
    adjust it before generation. The spec is the contract - generation follows it literally.
 3. **Generate** -> delegate to `backend-generate`. For every GWT-driven test it follows the

@@ -37,6 +37,7 @@
 | `projector`         | FooOnDemandProjector / FooPersistingProjector | read-model projector |
 | `entity`            | FooReadModelEntity.java           | JPA entity (persisting projector only) |
 | `repository`        | FooRepository / InMemory / Jpa    | repository triad (persisting projector only) |
+| `value-object`      | (none — plain record)             | a business-defined value object resolved from business-definitions-raw.md (e.g. PolicyCoverage with coveragePeriod/riskList) |
 | `ability`           | FooAbility.java                   | test DSL per Spring component |
 | `test`              | ReadModelUnitTest.groovy          | Spock test for one read model with a GWT file (COMPILES first, may still fail) |
 | `implementation-sketch` | (attached to command-handler / projector / state-projector) | the minimal-but-functional behavior outline that makes the test green |
@@ -51,6 +52,7 @@
 - **event-type**: `package`, `appendToEnum[string...]`
 - **state-projector**: `package`, `addEventCases[{eventTypeEnum, eventClassName}...]`
 - **read-model**: `className`, `package`, `aggregateIdPresent(bool)`, `fields[{type,name}]`
+- **value-object**: `className`, `package`, `fields[{type,name}]`
 - **projector**: `className`, `package`, `template`, `readModelClassName`, (+`entityClassName`/`repositoryClassName` when persisting)
 - **entity**: `className`, `package`, `fields[{type,name}]`
 - **repository**: `interfaceName`, `implName`, `jpaName`, `package`, `entityClassName`

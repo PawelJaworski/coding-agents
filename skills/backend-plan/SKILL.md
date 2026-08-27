@@ -6,7 +6,8 @@ description: >
   (commands.md, events.md, readmodels.md), the GWT scenario files (gwt-*.md) and the
   existing source tree, decides what code is missing, and writes a compact, precise,
   machine-readable diff-spec to a fixed artifact path (target/backend-spec.json).
-  It performs ALL reasoning. It does NOT write any code and holds NO code templates.
+  It performs ALL reasoning. It resolves every field type from `<docs>/business-definitions-raw.md`
+(structured concepts become `value-object` targets). It does NOT write any code and holds NO code templates.
   For each GWT scenario the planner emits a COMPILING unit test (it may still fail at this
   stage, but it MUST compile) plus the outline of a SIMPLE, minimal-but-functional
   implementation sketch the executor fills in to make the test green.
@@ -46,6 +47,24 @@ For each element declared in the docs, compare against what already exists in `s
 * If it exists but its attributes changed, add an entry that (re)declares its current
   full attribute set (the executor regenerates the file).
 * If it exists unchanged, omit it.
+
+## Type resolution from business definitions (mandatory)
+Resolve the TYPE of every bulleted field on commands, events and read models from
+`<docs>/business-definitions-raw.md` — never default to `String` by instinct:
+* If the concept's definition lists attributes (e.g. `Policy Coverage`: *coverage
+  period*, *risk list*), the field MUST be typed as a **value object** record carrying
+  EXACTLY those attributes, and the spec MUST include a (kind: "value-object") target
+  for it. Minimal Java types per attribute: `String` for names/periods, `List<String>`
+  for lists; use a richer type only when the definition implies one (e.g. an id).
+* If the concept has NO listed attributes (description only, e.g. `Policy Holder`),
+  the field resolves to `String` (or an identifier type when the definition says the
+  value is an identifier).
+* The resolved value-object type name is used VERBATIM as the field type in every
+  command/event/read-model entry that carries the bullet, with the import implied by
+  the value object's package.
+Example: `* policy coverage` on commands, events and read models -> `PolicyCoverage`
+value object (`String coveragePeriod`, `List<String> riskList`) in a shared domain
+package (e.g. `{base}.domain`).
 
 ## Command -> spec entry (kind: "command")
 A command entry produces a `{Pascal}Cmd` in a package named after the command (lowercase
@@ -134,6 +153,15 @@ Optionally the planner can also attach the same minimal-sketch outline to the af
 behavior to transcribe (e.g. "handler injects EventStream, appends <Event>, returns the generated id").
 Where the outline is emitted on the `test` entry, mirror it to the relevant component entries so the
 executor follows it literally without re-deriving it.
+
+## Value object -> spec entry (kind: "value-object")
+One per structured business concept resolved from business definitions (see
+"Type resolution from business definitions" above). It is a plain record — NO
+template, NO projector/entity/repository, NO DSL. Sets `className`, `package`
+(a shared domain package, e.g. `{base}.domain`) and `fields` (the concept's
+attributes as `Type name`). The executor writes `public record <className>(<<fields>>) {}`
+exactly like a read model, but produces NOTHING else for it. Do not emit
+value-object entries for concepts that have no listed attributes.
 
 # Event modeling notation mapping (apply when building the spec)
 1. `{aggregateName}:Id` on an event/command/read model names the AGGREGATE ID concept only - a separate

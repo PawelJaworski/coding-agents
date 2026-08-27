@@ -2,28 +2,41 @@
 name: backend-code-reviewer
 description: >
   # Responsibility
-  Responsible for checking if code generated with backend-development skill comply with backend-development skill instructions.
+  Responsible for checking if code generated with the backend pipeline (backend-plan ->
+  backend-generate via the backend-development facade) complies with the worker skills'
+  instructions, and that generated code matches the backend-spec.json contract.
   # When to use
-  Use when backend-development skill generates/changes any code.
+  Use when backend-development (or its workers backend-plan / backend-generate) generates/changes any code.
 ---
 
 # Flow
-1. Check if generated code comply with backend-development skill instructions.
-2. Invoke backend-development skill to apply all remarks.
+1. Validate that generation respected the two-stage contract:
+   - The executor (backend-generate) transcribed ONLY from `target/backend-spec.json` + templates.
+   - The planner (backend-plan) produced a spec that is complete and explicit.
+2. Check generated files comply with the rules below.
+3. Invoke backend-development skill to apply all remarks.
 
 # Things to check:
-1. Do not generate code other than code templates shows unless instructions said other way
-2. Do not generate spring beans
-3. Do not add domain attributes other than event modeling diagram or business docs says
-4. Use code templates as much as possible
-5. Do not invent attributes or concepts
-6. Was unit tests updated based on event modeling gwt-*.md files?
-7. **Test generation scope** - Only test classes for read models with GWT files should exist:
-   - Check if any test classes exist for read models without corresponding `gwt-{readmodel-id}.md` files
-   - If yes, remove those test classes
-8. **Test names** - Must match GWT scenario names exactly:
-   - Test names must describe the business behavior from the GWT file
-   - Generic test names like "when X then Y can be retrieved" are not acceptable
-9. **Test content** - Must match GWT file exactly:
-   - Test steps must match the GWT file's given/when/then sections exactly
-   - Generic "happy path" tests are not acceptable when specific GWT scenarios exist
+## Contract & scope
+1. Generated files must trace 1:1 to `target/backend-spec.json` targets (no stray files, none missing).
+2. No code was added beyond template + spec substitutions (no invented beans, helpers, services).
+3. No domain attributes beyond what the event modeling docs / spec declares (ask the architect about docs-level gaps rather than silently adding).
+4. Use code templates as much as possible; do not invent patterns that a template already covers.
+5. The planner produced a spec where every entry is explicit (no "derive from context" language).
+6. The spec artifact (`target/backend-spec.json`) is the single handoff; executor did not re-read docs/GWT.
+
+## Structural correctness
+7. Events carry `aggregateId` as their own field/value, NOT aliased to a business attribute.
+8. Read-model bracket fields (`[x]`) were NOT pushed upstream onto command/event.
+9. Command handlers exist in a package matching the command name; events live in `domain.events`.
+10. On-demand projector used when read model has an aggregate id; persisting projector (+ entity/repo)
+    used when it does not.
+
+## Tests (behavior)
+11. Test classes exist ONLY for read models with a `gwt-{readmodel-id}.md` file.
+12. Test names match the GWT scenario names exactly (no generic "happy path" names).
+13. Test bodies (given/when/then) match the GWT file exactly; the executor pasted the planner-provided body verbatim.
+14. Tests were run (`mvn test`) and pass.
+
+# Notes
+- Lombok LSP noise is a false positive; trust `mvn compile`/`mvn test`.

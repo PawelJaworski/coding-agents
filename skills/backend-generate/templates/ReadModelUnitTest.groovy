@@ -1,3 +1,5 @@
+package {the same as read model}
+
 import spock.lang.Specification
 
 // Each test class tests ONE read model's behavior end-to-end.
@@ -19,6 +21,7 @@ class FooReadModelUnitTest extends Specification implements FooHandlerAbility, F
         }
 
         then: "foo details projection contains the correct data"
+        // use dls prepared in projector ability as much as possible. Dont invent test helpers
         fooDetails(aggregateId) {
             it.attr == "value"
         }

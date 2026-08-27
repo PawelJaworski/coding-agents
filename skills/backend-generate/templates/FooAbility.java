@@ -3,10 +3,10 @@ package {the same as Foo class}
 
 public interface FooAbility {
     //if Foo has Bar dependency (Bar is itself a Spring component/service) then reuse
-    //BarAbility.INSTANCE - NEVER construct a new Bar/BarImpl instance here directly.
+    //BarAbility.INSTANCE - NEVER construct a new new Bar() instance here directly.
     //If BarAbility does not exist yet, create it first (one Ability per class, no duplicates).
-    //if Foo is Repository just use new instance of InMemory repository
-    //if Foo is mapstruct mapper then use instance of generated mapper impl
+    //if Foo is Repository just use new instance of InMemory repository for INSTANCE
+    //if Foo is mapstruct mapper then use instance of generated mapper impl for INSTANCE
     Foo INSTANCE = new Foo(BarAbility.INSTANCE)
 
     // DSLs for projectors abilities

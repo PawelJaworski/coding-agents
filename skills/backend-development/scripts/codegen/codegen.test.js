@@ -37,6 +37,17 @@ test('read model naming', () => {
   assert.equal(rm.dslMethod, 'expect_policy_document');
 });
 
+test('keyed read model drops the {aggregateId} path variable (it spans aggregates)', () => {
+  const rm = naming.readModel(BASE, 'policy-list', { keyed: true });
+  assert.equal(rm.getMapping, 'policy-list');
+  assert.equal(rm.entityClassName, 'PolicyListEntity');
+  assert.equal(rm.repositoryClassName, 'PolicyListRepository');
+  assert.equal(rm.jpaRepositoryClassName, 'PolicyListJpaRepository');
+  assert.equal(rm.inMemoryRepositoryClassName, 'PolicyListInMemoryRepository');
+  assert.equal(rm.repositoryConstant, 'POLICY_LIST_REPOSITORY');
+  assert.equal(rm.tableName, 'policy_list');
+});
+
 test('fields: plain, bracketed, bracketed with convention', () => {
   assert.deepEqual(parseField('policy holder'), {
     label: 'policy holder', name: 'policyHolder', bracketed: false, convention: null,
@@ -75,6 +86,19 @@ policy:Id
 test('aggregate id line is not mistaken for a field', () => {
   const [s] = parseSections('## x\nproposal:Id\n* a\n');
   assert.equal(s.fields.length, 1);
+});
+
+test(':Key marks a persisting projection and is not swallowed as a property', () => {
+  const [s] = parseSections('## policy-list\nName: Policy List\npolicy:Key\n* policy holder\n');
+  assert.equal(s.aggregate, 'policy');
+  assert.equal(s.keyed, true);
+  assert.equal(s.props.policy, undefined);
+  assert.deepEqual(s.fields.map((f) => f.name), ['policyHolder']);
+});
+
+test(':Id is the on-demand default', () => {
+  const [s] = parseSections('## policy-details\npolicy:Id\n* policy holder\n');
+  assert.equal(s.keyed, false);
 });
 
 test('definitions with attributes become value objects, without stay scalar', () => {

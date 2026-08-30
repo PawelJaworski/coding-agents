@@ -320,13 +320,18 @@ Run once per read model, in `readmodels.md` order, against the **current**
 1. Natural column = immediately right of the read model's **last
    (rightmost) subscribed event's column** — never left of any event it
    subscribes to.
-2. If that column doesn't exist yet or its mid-row cell is free, place the
-   read model there (appending a column if needed).
-3. If that column's mid-row cell is already occupied, **insert a new column
-   right there**, pushing the old occupant (and everything after it) one
-   slot right, then place the read model in the freed-up slot. Never append
-   past the occupant — that would strand the read model past an unrelated
-   later slice.
+2. If one or more read models were already placed at that natural column
+   (by an **earlier** entry in `readmodels.md` sharing the same rightmost
+   subscribed event), skip past all of them — this keeps read models
+   sharing a natural column in `readmodels.md` **file-declaration order,
+   left to right**, rather than reversing it.
+3. If the resulting column doesn't exist yet or its mid-row cell is free,
+   place the read model there (appending a column if needed).
+4. If that column's mid-row cell is already occupied by something else (a
+   command), **insert a new column right there**, pushing the old occupant
+   (and everything after it) one slot right, then place the read model in
+   the freed-up slot. Never append past the occupant — that would strand
+   the read model past an unrelated later slice.
 
 This keeps every command→event→view slice visually grouped, and guarantees
 no two read models ever share a column.

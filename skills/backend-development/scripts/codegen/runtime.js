@@ -51,6 +51,20 @@ public interface EventStream {
 }
 `),
 
+    file(base, 'eventstream', 'PersistingProjector', `/**
+ * A projection that keeps its own table instead of being replayed per request.
+ * Declared in readmodels.md with {@code <aggregate>:Key}.
+ *
+ * <p>On-demand projections ({@code <aggregate>:Id}) hydrate from the stream on every
+ * read, so they need no notification. A persisting one spans aggregates and therefore
+ * cannot be rebuilt from {@code findAllById}, so the event stream pushes each appended
+ * event here, synchronously and inside the appending transaction.
+ */
+public interface PersistingProjector {
+    void project(DomainEvent event);
+}
+`),
+
     file(base, 'infrastructure', 'EventStreamImpl', `import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -59,19 +73,31 @@ import org.springframework.stereotype.Component;
 
 import ${base}.eventstream.DomainEvent;
 import ${base}.eventstream.EventStream;
+import ${base}.eventstream.PersistingProjector;
 
 @Component
 public class EventStreamImpl implements EventStream {
 
     private final DomainEventRepository repository;
+    private final Collection<PersistingProjector> projectors;
 
-    public EventStreamImpl(DomainEventRepository repository) {
+    public EventStreamImpl(DomainEventRepository repository,
+            Collection<PersistingProjector> projectors) {
         this.repository = repository;
+        // Kept by reference, not copied: Spring hands us an immutable list, while a
+        // test ability registers its own projector into a shared mutable collection
+        // AFTER this stream is constructed. Copying here would silently drop those.
+        this.projectors = projectors;
     }
 
     @Override
     public void append(Collection<DomainEvent> events) {
-        events.forEach(event -> repository.save(new DomainEventEntity(event)));
+        events.forEach(event -> {
+            repository.save(new DomainEventEntity(event));
+            // Persisting projections (<aggregate>:Key) cannot be replayed per request,
+            // so they are advanced here, synchronously, in the same transaction.
+            projectors.forEach(projector -> projector.project(event));
+        });
     }
 
     @Override

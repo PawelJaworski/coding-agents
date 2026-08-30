@@ -39,15 +39,25 @@ const naming = {
     serdePackage: `${base}.infrastructure`,
   }),
 
-  readModel: (base, id) => ({
+  // `keyed` picks the persisting variant: an extra entity + repository pair, and a
+  // collection endpoint (no {aggregateId} path variable, since it spans aggregates).
+  readModel: (base, id, { keyed = false } = {}) => ({
     className: pascal(id),
     package: `${base}.${slicePackage(id)}`,
     projectorClassName: `${pascal(id)}Projector`,
     deciderClassName: `${pascal(id)}ProjectionDecider`,
     abilityClassName: `${pascal(id)}ProjectorAbility`,
     getterMethod: `get${pascal(id)}`,
-    getMapping: `${id}/{aggregateId}`,
+    getMapping: keyed ? id : `${id}/{aggregateId}`,
     dslMethod: `expect_${words(id).join('_')}`,
+    // persisting-only names
+    entityClassName: `${pascal(id)}Entity`,
+    repositoryClassName: `${pascal(id)}Repository`,
+    jpaRepositoryClassName: `${pascal(id)}JpaRepository`,
+    inMemoryRepositoryClassName: `${pascal(id)}InMemoryRepository`,
+    // distinct from EventStreamAbility.REPOSITORY, which this ability inherits
+    repositoryConstant: `${screamingSnake(id)}_REPOSITORY`,
+    tableName: words(id).join('_'),
   }),
 
   valueObject: (base, name) => ({

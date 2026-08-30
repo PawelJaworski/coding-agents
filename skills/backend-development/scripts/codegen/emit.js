@@ -234,13 +234,6 @@ ${imports ? imports + '\n\n' : ''}public record ${rm.className}(${components(rm.
 }
 
 function projector(rm, eventsById, base) {
-  if (!rm.onDemand) {
-    throw new Error(
-      `Read model "${rm.id}" has no <aggregate>:Id line. Persisting projectors are not ` +
-        `supported by the generator yet — add the aggregate id or implement it by hand.`,
-    );
-  }
-
   const extraImports = [];
   let needsDecider = false;
   const applies = rm.subscribes.map((eid) => {
@@ -474,6 +467,9 @@ ${cases}
 
 // --- test abilities (mechanical DSL, generator-owned) ------------------------
 
+// Domain-independent on purpose. It must NOT name any slice: a persisting projector
+// is wired by its OWN sibling ability calling `register`, so adding a `:Key` read
+// model never edits this file and each component owns its own test utility.
 function eventStreamAbility(base) {
   return {
     test: true,
@@ -483,14 +479,31 @@ function eventStreamAbility(base) {
     content: `${HEADER('the event stream infrastructure')}package ${base}.eventstream;
 
 ${importBlock([
+  'java.util.List',
+  'java.util.concurrent.CopyOnWriteArrayList',
   `${base}.infrastructure.DomainEventInMemoryRepository`,
   `${base}.infrastructure.EventStreamImpl`,
 ])}
 
 public interface EventStreamAbility {
 
+    // Mutable and handed to the stream by reference, so a slice's own ability can
+    // register its persisting projector when that ability is first touched.
+    List<PersistingProjector> PROJECTORS = new CopyOnWriteArrayList<>();
+    List<Runnable> PROJECTION_RESETS = new CopyOnWriteArrayList<>();
+
     DomainEventInMemoryRepository REPOSITORY = new DomainEventInMemoryRepository();
-    EventStream INSTANCE = new EventStreamImpl(REPOSITORY);
+    EventStream INSTANCE = new EventStreamImpl(REPOSITORY, PROJECTORS);
+
+    /**
+     * Called from a sibling <slice>ProjectorAbility's field initialiser. Returns the
+     * projector so it can be assigned in one expression.
+     */
+    static <P extends PersistingProjector> P register(P projector, Runnable reset) {
+        EventStreamAbility.PROJECTORS.add(projector);
+        EventStreamAbility.PROJECTION_RESETS.add(reset);
+        return projector;
+    }
 
     default EventStream getEventStream() {
         return EventStreamAbility.INSTANCE;
@@ -498,6 +511,7 @@ public interface EventStreamAbility {
 
     default void reset_event_stream() {
         EventStreamAbility.REPOSITORY.deleteAll();
+        EventStreamAbility.PROJECTION_RESETS.forEach(Runnable::run);
     }
 }
 `,
@@ -574,6 +588,272 @@ public interface ${rm.abilityClassName} extends EventStreamAbility {
   };
 }
 
+// --- persisting read models (<aggregate>:Key) --------------------------------
+// One row per aggregate, keyed by aggregateId, advanced on append. Unlike an
+// on-demand projection it can be listed across aggregates, which is the whole
+// reason the model marks it with ":Key".
+
+function readModelEntity(rm) {
+  const needsJson = rm.fields.some((f) => f.javaType !== 'String');
+  const imports = importBlock([
+    'java.util.UUID',
+    'jakarta.persistence.Entity',
+    'jakarta.persistence.Id',
+    'jakarta.persistence.Table',
+    'lombok.AccessLevel',
+    'lombok.AllArgsConstructor',
+    'lombok.Getter',
+    'lombok.NoArgsConstructor',
+    'lombok.Setter',
+    ...(needsJson ? ['org.hibernate.annotations.JdbcTypeCode', 'org.hibernate.type.SqlTypes'] : []),
+    ...rm.fields.flatMap((f) => f.imports),
+  ]);
+  // A value object / list has no JPA mapping of its own, so it is stored as JSON
+  // rather than inventing an embeddable the model never described.
+  const columns = rm.fields
+    .map((f) => {
+      const ann = f.javaType === 'String' ? '' : '    @JdbcTypeCode(SqlTypes.JSON)\n';
+      return `${ann}    private ${f.javaType} ${f.name};`;
+    })
+    .join('\n');
+  return {
+    package: rm.package,
+    className: rm.entityClassName,
+    overwrite: true,
+    content: `${HEADER('readmodels.md')}package ${rm.package};
+
+${imports}
+
+@Entity
+@Table(name = "${rm.tableName}")
+@Getter
+@Setter
+@AllArgsConstructor
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+public class ${rm.entityClassName} {
+
+    @Id
+    private UUID aggregateId;
+
+${columns}
+
+    public ${rm.className} toReadModel() {
+        return new ${rm.className}(${rm.fields.map((f) => f.name).join(', ')});
+    }
+}
+`,
+  };
+}
+
+function readModelRepository(rm) {
+  return {
+    package: rm.package,
+    className: rm.repositoryClassName,
+    overwrite: true,
+    content: `${HEADER('readmodels.md')}package ${rm.package};
+
+${importBlock(['java.util.List', 'java.util.Optional', 'java.util.UUID'])}
+
+public interface ${rm.repositoryClassName} {
+    ${rm.entityClassName} save(${rm.entityClassName} entity);
+    Optional<${rm.entityClassName}> findById(UUID aggregateId);
+    List<${rm.entityClassName}> findAll();
+    void deleteAll();
+}
+`,
+  };
+}
+
+function readModelJpaRepository(rm) {
+  return {
+    package: rm.package,
+    className: rm.jpaRepositoryClassName,
+    overwrite: true,
+    content: `${HEADER('readmodels.md')}package ${rm.package};
+
+${importBlock(['java.util.UUID', 'org.springframework.data.jpa.repository.JpaRepository'])}
+
+public interface ${rm.jpaRepositoryClassName}
+        extends ${rm.repositoryClassName}, JpaRepository<${rm.entityClassName}, UUID> {
+}
+`,
+  };
+}
+
+function readModelInMemoryRepository(rm) {
+  return {
+    test: true,
+    package: rm.package,
+    className: rm.inMemoryRepositoryClassName,
+    overwrite: true,
+    content: `${HEADER('readmodels.md')}package ${rm.package};
+
+${importBlock([
+  'java.util.LinkedHashMap',
+  'java.util.List',
+  'java.util.Map',
+  'java.util.Optional',
+  'java.util.UUID',
+])}
+
+public class ${rm.inMemoryRepositoryClassName} implements ${rm.repositoryClassName} {
+
+    private final Map<UUID, ${rm.entityClassName}> entities = new LinkedHashMap<>();
+
+    @Override
+    public ${rm.entityClassName} save(${rm.entityClassName} entity) {
+        entities.put(entity.getAggregateId(), entity);
+        return entity;
+    }
+
+    @Override
+    public Optional<${rm.entityClassName}> findById(UUID aggregateId) {
+        return Optional.ofNullable(entities.get(aggregateId));
+    }
+
+    @Override
+    public List<${rm.entityClassName}> findAll() {
+        return List.copyOf(entities.values());
+    }
+
+    @Override
+    public void deleteAll() {
+        entities.clear();
+    }
+}
+`,
+  };
+}
+
+function persistingProjector(rm, eventsById, base) {
+  const extraImports = [];
+  let needsDecider = false;
+
+  const applies = rm.subscribes.map((eid) => {
+    const e = eventsById.get(eid);
+    const args = rm.fields.map((f) => {
+      const r = resolveArg(f, {
+        sourceFields: e.fields,
+        sourceExpr: 'event',
+        deciderVar: 'decider',
+        deciderArgs: 'state, event',
+        fallback: (field) => `state == null ? null : state.${field.name}()`,
+      });
+      if (r.decided) needsDecider = true;
+      extraImports.push(...r.imports);
+      return r.expr;
+    });
+    extraImports.push(`${e.package}.${e.className}`);
+    return `    @Override
+    public ${rm.className} apply(${rm.className} state, ${e.className} event) {
+        var projected = new ${rm.className}(
+${args.map((a) => `                ${a}`).join(',\n')});
+        repository.save(new ${rm.entityClassName}(event.aggregateId(), ${rm.fields
+      .map((f) => `projected.${f.name}()`)
+      .join(', ')}));
+        return projected;
+    }`;
+  });
+
+  const deciderField = needsDecider ? `    private final ${rm.deciderClassName} decider;\n` : '';
+  const deciderParam = needsDecider ? `, ${rm.deciderClassName} decider` : '';
+  const deciderAssign = needsDecider ? `\n        this.decider = decider;` : '';
+
+  const imports = importBlock([
+    'java.util.List',
+    'java.util.UUID',
+    'org.springframework.stereotype.Component',
+    'org.springframework.web.bind.annotation.GetMapping',
+    'org.springframework.web.bind.annotation.RestController',
+    `${base}.eventstream.DomainEvent`,
+    `${base}.eventstream.PersistingProjector`,
+    `${base}.eventstream.StateProjector`,
+    ...extraImports,
+  ]);
+
+  return {
+    package: rm.package,
+    className: rm.projectorClassName,
+    overwrite: true,
+    needsDecider,
+    content: `${HEADER('readmodels.md + events.md')}package ${rm.package};
+
+${imports}
+
+@RestController
+@Component
+public class ${rm.projectorClassName}
+        implements StateProjector<${rm.className}>, PersistingProjector {
+
+    private final ${rm.repositoryClassName} repository;
+${deciderField}
+    public ${rm.projectorClassName}(${rm.repositoryClassName} repository${deciderParam}) {
+        this.repository = repository;${deciderAssign}
+    }
+
+    @GetMapping("${rm.getMapping}")
+    public List<${rm.className}> ${rm.getterMethod}() {
+        return repository.findAll().stream().map(${rm.entityClassName}::toReadModel).toList();
+    }
+
+    /**
+     * Advanced by the event stream on append. The current row (if any) is the state the
+     * apply overloads fold the new event onto, so a projection stays incremental.
+     */
+    @Override
+    public void project(DomainEvent event) {
+        var state = repository.findById(event.aggregateId())
+                .map(${rm.entityClassName}::toReadModel)
+                .orElse(null);
+        hydrate(state, List.of(event));
+    }
+
+${applies.join('\n\n')}
+}
+`,
+  };
+}
+
+function persistingProjectorAbility(rm, base, needsDecider) {
+  const deciderArg = needsDecider ? `, new ${rm.deciderClassName}()` : '';
+  return {
+    test: true,
+    package: rm.package,
+    className: rm.abilityClassName,
+    overwrite: true,
+    content: `${HEADER('readmodels.md')}package ${rm.package};
+
+${importBlock([
+  'java.util.List',
+  'java.util.function.Predicate',
+  `${base}.eventstream.EventStreamAbility`,
+])}
+
+public interface ${rm.abilityClassName} extends EventStreamAbility {
+
+    // This slice owns its own test wiring. Registering here (rather than being named
+    // by EventStreamAbility) keeps the shared ability domain-independent and means
+    // this projection only exists in tests that actually ask for it.
+    ${rm.inMemoryRepositoryClassName} ${rm.repositoryConstant} = new ${rm.inMemoryRepositoryClassName}();
+
+    // Qualify when you need the instance itself: ${rm.abilityClassName}.INSTANCE
+    ${rm.projectorClassName} INSTANCE = EventStreamAbility.register(
+            new ${rm.projectorClassName}(${rm.abilityClassName}.${rm.repositoryConstant}${deciderArg}),
+            ${rm.abilityClassName}.${rm.repositoryConstant}::deleteAll);
+
+    default ${rm.projectorClassName} get${rm.projectorClassName}() {
+        return ${rm.abilityClassName}.INSTANCE;
+    }
+
+    /** DSL: ${rm.dslMethod} { rows -> rows.size() == 1 } */
+    default boolean ${rm.dslMethod}(Predicate<List<${rm.className}>> testCase) {
+        return testCase.test(get${rm.projectorClassName}().${rm.getterMethod}());
+    }
+}
+`,
+  };
+}
+
 // --- orchestration -----------------------------------------------------------
 
 export function emit(model) {
@@ -601,6 +881,20 @@ export function emit(model) {
   }
 
   for (const rm of model.readModels) {
+    if (rm.keyed) {
+      const p = persistingProjector(rm, eventsById, base);
+      files.push(
+        readModel(rm),
+        readModelEntity(rm),
+        readModelRepository(rm),
+        readModelJpaRepository(rm),
+        readModelInMemoryRepository(rm),
+        p,
+      );
+      if (p.needsDecider) files.push(projectionDecider(rm, eventsById));
+      files.push(persistingProjectorAbility(rm, base, p.needsDecider));
+      continue;
+    }
     const p = projector(rm, eventsById, base);
     files.push(readModel(rm), p);
     if (p.needsDecider) files.push(projectionDecider(rm, eventsById));

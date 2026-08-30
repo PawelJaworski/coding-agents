@@ -558,6 +558,14 @@ function buildModel(inputDir) {
     const maxIdx = Math.max(...idxs);
     let naturalIdx = maxIdx + 1;
 
+    // Skip past any read-model columns already placed here (in earlier
+    // readmodels.md order) instead of displacing them — this keeps
+    // read models sharing the same natural column in file-declaration
+    // order, left to right.
+    while (naturalIdx < columns.length && columns[naturalIdx].type === 'view') {
+      naturalIdx++;
+    }
+
     if (naturalIdx >= columns.length) {
       columns.push({ type: 'view', viewId: null });
       midRow.push(null);

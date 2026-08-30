@@ -8,6 +8,7 @@ mlx_lm server \
   --port 1234 \
   --max-tokens 2048 \
   --temp 0.1 \
+  --top-p 0.9 \
   --prompt-cache-size 0 \
   --decode-concurrency 1 \
   --prompt-concurrency 1

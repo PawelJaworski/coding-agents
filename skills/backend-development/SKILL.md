@@ -2,90 +2,84 @@
 name: backend-development
 description: >
   # Responsibility
-  Facade/orchestrator for all backend code work.   Splits generation into two strictly
-  separated cognitive stages so each runs in a small, self-contained context (ideal for
-  local models with small context windows):
-    * backend-plan     - PLANNER: reads event modeling docs + GWT files + existing src,
-                         decides what is missing, and writes a precise machine-readable
-                         diff-spec to target/backend-spec.json. Holds NO code templates.
-    * backend-generate - EXECUTOR: transcribes the diff-spec into files. For every GWT
-                         scenario it works TEST-FIRST: write a compiling unit test (it may
-                         fail at this stage but MUST compile), then provide a simple,
-                         minimal-but-functional implementation sketch that makes the test
-                         green. Never re-reads docs or GWT.
-  Finishes with backend-code-reviewer and a project-root `REPORT.md` of the biggest
-  problems met in the conversation.
+  Facade for all backend code work in a sliced, event-sourced project. Scaffolding is
+  NOT written by an agent — it is generated deterministically from the event model by
+  `scripts/codegen` (this skill owns the generator). The only code an agent writes is
+  business logic, and only when a GWT scenario demands it (delegated to backend-implement).
   # When to use
-  Use when there is a need to change backend code, generate backend code, implement
-  business logic based on GWT scenarios, or add/update a command, event or read model.
-  This facade decides the pipeline and wires the handoff.
+  Use when backend code must be created or changed: a command/event/read model was added
+  or updated in the event model, or a GWT scenario must be implemented.
   # **Important** This skill is parametrized
-  * parameters: <docs>, <eventModel> are passed from outside. You have to know them before staring this skill execution. Don't ever execute this skill without exactly knowing those params.
+  * parameters: <docs>, <eventModel> are passed from outside. You have to know them
+    before starting this skill execution. Don't ever execute this skill without exactly
+    knowing those params.
 ---
 
+# The one rule
+**Never hand-write scaffolding.** Commands, events, read models, value objects, handlers,
+projectors, serde wrappers, the event-type enum, the state projector and the test abilities
+are all derived from the model by a script. If you are tempted to write one by hand, you
+are working on the wrong thing: change the MODEL and regenerate.
+
+An agent's only job here is business logic, and it enters through TDD, never through
+scaffolding.
+
 # Flow
-This facade does NOT hold the instructions. It wires two strict stages. The stages are:
-* `backend-plan`     - writes `target/backend-spec.json` (the diff of everything to create/change).
-* `backend-generate` - reads the spec + templates, writes the actual Java/Groovy files.
 
-Read both worker SKILL.md files when invoked, then run the pipeline:
+1. **Generate.** From anywhere in the project:
+   ```
+   node .opencode/skills/backend-development/scripts/codegen
+   ```
+   Reads `<docs>/{commands,events,readmodels}.md` + `business-definitions-raw.md`.
+   Reports what it created / updated / preserved. That is the complete inventory of
+   scaffolding — do not add to it.
 
-1. **Plan** -> delegate to `backend-plan`. It reads `<docs>/commands.md`, `<docs>/events.md`,
-   `<docs>/readmodels.md`, `<docs>/uis.md`, all `glob <docs>/gwt-*.md`, and the existing `src/`,
-   then writes `target/backend-spec.json`.
-   Do NOT pre-resolve field types for the planner — type resolution of business attributes
-   (e.g. `policy coverage` -> a `PolicyCoverage` value object) belongs to backend-plan via
-   `<docs>/business-definitions-raw.md`; seeding `String` shortcuts that resolution.
-2. **Review the spec (optional but recommended)**: read `target/backend-spec.json`. The user can
-   adjust it before generation. The spec is the contract - generation follows it literally.
-3. **Generate** -> delegate to `backend-generate`. For every GWT-driven test it follows the
-   test-first / implementation-sketch flow, then verifies the whole suite:
-   - **3a. Compiling test**: write the unit test from the spec's GWT body. It must COMPILE even
-     if it does not yet pass. A red-but-compiling test at this stage is expected and fine.
-   - **3b. Minimal implementation sketch**: write a SIMPLE, minimal-but-functional implementation
-     (e.g. command handler emits its produced event into the event stream, projector `apply`
-     builds the read model, ordinal/counter logic) just enough to make the test green. No
-     gold-plating beyond the behavior the scenario exercises.
-   - **3c. Verify**: run `mvn clean verify`; fix transcribing mistakes; the suite must end green.
-   - **Template comments rule (lives in `backend-generate/SKILL.md`, rule 0)**: the executor MUST read
-     the WHOLE code template — every `//` comment, not just placeholder annotations — and honor them,
-     because the comments encode critical structural requirements (class-naming suffixes, aggregate-id
-     presence, `DomainEvent`-typed serde component, DSL getters/INSTANCE reuse, etc.). A template comment
-     overrides the spec on any conflict. Do not run the executor without this rule in effect.
-4. **Report** -> once the code is done, the facade writes `<project root>/REPORT.md` with the
-   biggest problems met during the conversation (flown to the reader in a few plain bullet points).
-5. **Reconcile** (only if the executor reported a genuine spec defect that no minimal sketch can
-   bridge — e.g. conflicting business rules): escalate to the user (or a big model) to clarify,
-   then re-run generate. Do not silently invent behavior the skill is not allowed to shape; a minimal
-   functional sketch IS allowed, but guessing at ambiguous business intent is not - ask first.
-6. **Code review** -> delegate to `backend-code-reviewer`. Add this as the last point of TODO list.
+2. **Read the output, not the codebase.** The generator tells you every file it touched.
+   You do NOT need to explore `src/` to learn what exists, what a package is called, or
+   whether a class is already there — all of it is derived from the model by
+   `scripts/codegen/naming.js`. Do not build or consult a code index.
 
-# Delegation vs. inline execution
-Delegating each stage to a separate subagent is preferred (keeps contexts small and clean), but it is a
-means, not a goal. If a delegated stage executor is unavailable (provider/endpoint failure, context
-limits), the orchestrator may run that stage inline — **without collapsing the two phases**: plan first
-(produce the spec), then generate from the spec, each in its own step, with `target/backend-spec.json`
-as the handoff. Do not create the code in the same pass that reasons about what to build. If a "generate
-inline" reconciler is tempted to expand a minimal sketch into something elaborate, that is scope creep —
-keep it minimal and escalate genuine business ambiguity per step 5.
+3. **Stop if the model is wrong.** The generator fails loudly with a `MODEL ERROR`
+   (unknown event, field an event needs but no command supplies, unknown convention).
+   That is a defect in the event model, owned by the architect. Escalate — never work
+   around it in code.
 
-# Low-context invariant
-Find ONE clean handoff document between planner and executor: `target/backend-spec.json`.
-The planner's context = docs + GWT + src (no templates). The executor's context = spec + its
-templates (no docs/GWT). Do NOT collapse them into one session - that defeats the split.
+4. **Implement GWT scenarios** — delegate to `backend-implement`, once per
+   `<docs>/gwt-*.md` scenario. Nothing else in this pipeline writes logic.
 
-# Event modeling notation mapping
-Applied by the planner when building the spec. Key rule for the record: `{aggregateName}:Id`
-names the aggregate id concept only (a separate declaration, not a reference to a bulleted
-field); bracketed `[field]` on a READ MODEL are system-generated/calculated at projection and
-have no upstream passthrough. See backend-plan SKILL.md.
+5. **Verify.** `mvn clean verify` must be green, and `node .opencode/skills/backend-development/scripts/codegen --check` must report
+   `up to date`.
+
+6. **Review** — delegate to `backend-code-reviewer`.
+
+# File ownership — memorize this
+| header in the file | who owns it |
+|---|---|
+| `// GENERATED by ... DO NOT EDIT` | the generator. Overwritten every run. Change the model, not the file. |
+| `// SCAFFOLDED ONCE ... this file is YOURS` | the project. Written when absent, never touched again. |
+
+`*Decider` classes are the ONLY place business logic lives. They are scaffolded once, with
+one `UnsupportedOperationException` stub per `[bracketed]` model field.
+
+# Why brackets matter
+Everything derivable is derived. A field that flows command -> event -> read model is wired
+automatically by name. A `[bracketed]` field has no upstream source, so it must be *decided* —
+the generator delegates it to a decider that throws until a GWT scenario forces it into
+existence. **Brackets in the model mark exactly, and only, what a human or a GWT scenario
+must decide.** `[field]:now` and `[field]:uuid` are conventional and implemented for you.
+
+# Setup in a new project
+The generator is domain-agnostic. A project needs two things at its root:
+1. `codegen.config.json`:
+   ```json
+   { "basePackage": "com.example.myapp", "modelDir": "../docs" }
+   ```
+2. an executable `node .opencode/skills/backend-development/scripts/codegen` wrapper (a one-line `exec node <skill>/scripts/codegen "$@"`).
+   Do NOT add a `package.json` to a Maven project just to alias the generator.
+The first run also scaffolds the domain-independent event-sourcing runtime
+(`DomainEvent`, `EventStream`, `DomainEventEntity`, repositories, ...) as once-owned files.
 
 # Boundaries
-Never edit the event-modelling docs (`<eventModel>/commands.md`, `<eventModel>/events.md`,
-`<eventModel>/readmodels.md`, `<eventModel>/uis.md`), the generated diagram
-(`<eventModel>/eventmodel.html`), or the diagram generator (`scripts/generate.js`) - owned by the
-architect. If generation surfaces a mismatch or gap in the event-modelling docs, stop and escalate
-to the architect (or ask the user) instead of editing those files directly. Only read them as input.
-
-The minimal implementation sketch is the LOWER bound for behavior (just enough to make the test
-green), never a license to gold-plate. Keep it simple and scenario-scoped.
+Never edit the event-modelling docs (`<eventModel>/commands.md`, `events.md`,
+`readmodels.md`, `uis.md`), the generated diagram, or the diagram generator — owned by the
+architect. Never edit a `// GENERATED` file. Never write scaffolding by hand.

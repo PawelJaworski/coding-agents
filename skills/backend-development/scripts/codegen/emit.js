@@ -379,11 +379,11 @@ function serdeWrapper(e, base) {
 ${importBlock([
   'com.fasterxml.jackson.annotation.JsonTypeName',
   `${base}.domain.events.DomainEventType`,
-  `${base}.eventstream.DomainEvent`,
+  `${e.package}.${e.className}`,
 ])}
 
 @JsonTypeName("${e.typeEnum}")
-public record ${e.serdeClassName}(DomainEvent event) implements DomainEventSerdeWrapper {
+public record ${e.serdeClassName}(${e.className} event) implements DomainEventSerdeWrapper {
     @Override
     public DomainEventType getEventType() {
         return DomainEventType.${e.typeEnum};
@@ -431,7 +431,7 @@ public interface DomainEventSerdeWrapper {
 
 function serde(events, base) {
   const cases = events
-    .map((e) => `            case ${e.typeEnum} -> new ${e.serdeClassName}(event);`)
+    .map((e) => `            case ${e.typeEnum} -> new ${e.serdeClassName}((${e.className}) event);`)
     .join('\n');
   return {
     package: `${base}.infrastructure`,
@@ -439,7 +439,7 @@ function serde(events, base) {
     overwrite: true,
     content: `${HEADER('events.md')}package ${base}.infrastructure;
 
-${importBlock([`${base}.eventstream.DomainEvent`])}
+${importBlock([`${base}.eventstream.DomainEvent`, ...events.map((e) => `${e.package}.${e.className}`)])}
 
 public final class DomainEventSerde {
 

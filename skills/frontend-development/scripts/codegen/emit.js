@@ -14,6 +14,16 @@ const ONCE = '// SCAFFOLDED ONCE by frontend-development/scripts/codegen — thi
 
 function contracts(page, apiBase) {
   const out = [GEN];
+  // Structured business definitions, mirroring the Java records the backend
+  // generates from the same `business-definitions-raw.md`. A field typed by one of
+  // these is an object on the wire — never a string.
+  for (const obj of page.objectTypes || []) {
+    const fields = obj.fields.map((f) => `  ${f.name}: ${f.tsType};`).join('\n');
+    out.push(
+      `/** The \`${obj.label}\` business definition. */\n` +
+        `export interface ${obj.name} {\n${fields}\n}`,
+    );
+  }
   for (const cmd of page.commands) {
     // Mirrors the generated `<Cmd>` Java record component-for-component, so the
     // body is wire-compatible by construction. A [bracketed] field is decided
@@ -51,6 +61,17 @@ function contracts(page, apiBase) {
 }
 
 const constName = (id) => naming.words(id).join('_').toUpperCase();
+
+// Empty value for a form field, matching its generated type exactly.
+function initValue(f, indent) {
+  if (f.object) {
+    const inner = f.object.fields
+      .map((sf) => `${indent}  ${sf.name}: ${initValue(sf, `${indent}  `)},`)
+      .join('\n');
+    return `{\n${inner}\n${indent}}`;
+  }
+  return f.tsType === 'string[]' ? "['']" : "''";
+}
 
 // Whatever a template uses must be declared in `imports`, and Angular warns
 // (NG8113) about anything declared but unused. Since the template is owned, the
@@ -114,9 +135,11 @@ function component(page) {
   for (const c of page.commands) {
     // Form state is the command's own shape, so it is derived too. Bracketed
     // fields are optional server-side decisions and get no input binding.
+    // A structured field is initialised as a nested object so the body matches the
+    // Java record; a list starts with one empty entry so the form has one input.
     const init = c.fields
       .filter((f) => !f.bracketed)
-      .map((f) => `    ${f.name}: ${f.tsType === 'string[]' ? '[]' : "''"},`)
+      .map((f) => `    ${f.name}: ${initValue(f, '    ')},`)
       .join('\n');
     lines.push('');
     lines.push(`  protected readonly ${naming.camel(c.id)}Form: ${naming.payload(c.id)} = {`);
@@ -259,6 +282,72 @@ function store(page) {
   return lines.join('\n') + '\n';
 }
 
+// One form control per field, shaped like the field's generated type. A structured
+// field becomes a fieldset of nested controls and a list one input per entry, so
+// `[(ngModel)]` always writes a value of the declared type. Binding a plain input
+// to an object or a list is exactly what makes the backend fail to deserialise.
+function formControl(field, expr, nameBase, indent) {
+  if (field.object) {
+    const out = [`${indent}<fieldset>`, `${indent}  <legend>${field.label}</legend>`];
+    for (const sub of field.object.fields) {
+      out.push(...formControl(sub, `${expr}.${sub.name}`, `${nameBase}_${sub.name}`, `${indent}  `));
+    }
+    out.push(`${indent}</fieldset>`);
+    return out;
+  }
+  if (field.tsType === 'string[]') {
+    return [
+      `${indent}<fieldset>`,
+      `${indent}  <legend>${field.label}</legend>`,
+      `${indent}  @for (entry of ${expr}; track $index) {`,
+      `${indent}    <input name="${nameBase}_{{ $index }}" [(ngModel)]="${expr}[$index]" />`,
+      `${indent}  }`,
+      `${indent}</fieldset>`,
+    ];
+  }
+  return [
+    `${indent}<label>`,
+    `${indent}  ${field.label}`,
+    `${indent}  <input name="${nameBase}" [(ngModel)]="${expr}" />`,
+    `${indent}</label>`,
+  ];
+}
+
+// Same shapes again, inline, for a table cell.
+function cellValue(field, expr) {
+  if (field.object) {
+    return `<dl>${field.object.fields
+      .map((sf) => `<dt>${sf.label}</dt><dd>${cellValue(sf, `${expr}.${sf.name}`)}</dd>`)
+      .join('')}</dl>`;
+  }
+  if (field.tsType === 'string[]') {
+    return `<ul>@for (entry of ${expr}; track $index) {<li>{{ entry }}</li>}</ul>`;
+  }
+  return `{{ ${expr} }}`;
+}
+
+// Read-only rendering of one field, mirroring the same shapes. An object rendered
+// with `{{ }}` would print "[object Object]", so it gets a nested list instead.
+function viewValue(field, expr, indent) {
+  if (field.object) {
+    const out = [`${indent}<dd>`, `${indent}  <dl>`];
+    for (const sub of field.object.fields) {
+      out.push(`${indent}    <dt>${sub.label}</dt>`);
+      out.push(...viewValue(sub, `${expr}.${sub.name}`, `${indent}    `));
+    }
+    out.push(`${indent}  </dl>`, `${indent}</dd>`);
+    return out;
+  }
+  if (field.tsType === 'string[]') {
+    return [
+      `${indent}<dd>`,
+      `${indent}  <ul>@for (entry of ${expr}; track $index) {<li>{{ entry }}</li>}</ul>`,
+      `${indent}</dd>`,
+    ];
+  }
+  return [`${indent}<dd>{{ ${expr} }}</dd>`];
+}
+
 // A seed template that already renders what the page is wired to. It is yours to
 // replace — the point is that a freshly generated page is demonstrably talking to
 // the backend, not a blank box that needs work before it shows anything.
@@ -285,7 +374,7 @@ function template(page) {
       lines.push(`    </thead>`);
       lines.push(`    <tbody>`);
       lines.push(`      @for (row of ${sig}; track $index) {`);
-      lines.push(`        <tr>${v.fields.map((f) => `<td>{{ row.${f.name} }}</td>`).join('')}</tr>`);
+      lines.push(`        <tr>${v.fields.map((f) => `<td>${cellValue(f, `row.${f.name}`)}</td>`).join('')}</tr>`);
       lines.push(`      }`);
       lines.push(`    </tbody>`);
       lines.push(`  </table>`);
@@ -293,7 +382,8 @@ function template(page) {
       lines.push(`  @if (${sig}; as ${naming.camel(v.id)}) {`);
       lines.push(`    <dl>`);
       for (const f of v.fields) {
-        lines.push(`      <dt>${f.label}</dt><dd>{{ ${naming.camel(v.id)}.${f.name} }}</dd>`);
+        lines.push(`      <dt>${f.label}</dt>`);
+        lines.push(...viewValue(f, `${naming.camel(v.id)}.${f.name}`, '      '));
       }
       lines.push(`    </dl>`);
       lines.push(`  }`);
@@ -306,12 +396,7 @@ function template(page) {
     lines.push(`  <!-- command: ${c.id} -->`);
     lines.push(`  <form (ngSubmit)="store.${naming.triggerMethod(c.id)}(${model})">`);
     for (const f of c.fields.filter((x) => !x.bracketed)) {
-      lines.push(`    <label>`);
-      lines.push(`      ${f.label}`);
-      lines.push(
-        `      <input name="${f.name}" [(ngModel)]="${model}.${f.name}" />`,
-      );
-      lines.push(`    </label>`);
+      lines.push(...formControl(f, `${model}.${f.name}`, f.name, '    '));
     }
     lines.push(`    <button type="submit" [disabled]="store.pending()">${c.name}</button>`);
     lines.push(`  </form>`);
@@ -320,9 +405,137 @@ function template(page) {
   return lines.join('\n') + '\n';
 }
 
+// Just enough CSS to make the scaffolded page readable: one column, labels above
+// their inputs, fieldsets visibly grouping the fields of a structured value, and
+// a table/definition list you can actually scan. Scoped to the page's own class,
+// so it is yours to replace wholesale.
 const style = (page) =>
-  `/* SCAFFOLDED ONCE by frontend-development/scripts/codegen — this file is YOURS. */\n` +
-  `.${page.dir} {\n}\n`;
+  `/* SCAFFOLDED ONCE by frontend-development/scripts/codegen — this file is YOURS. */
+.${page.dir} {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: #1b1b1b;
+}
+
+.${page.dir} h1 {
+  margin: 0 0 1.5rem;
+  font-size: 1.5rem;
+}
+
+.${page.dir} .error {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid #b3261e;
+  background: #fdeceb;
+  color: #b3261e;
+}
+
+/* form: one field per row, label above its input */
+.${page.dir} form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: flex-start;
+  margin: 1.5rem 0;
+}
+
+.${page.dir} label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  font-weight: 600;
+}
+
+.${page.dir} input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #b8b8b8;
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 400;
+}
+
+.${page.dir} input:focus {
+  outline: 2px solid #1b6ef3;
+  outline-offset: 1px;
+}
+
+/* a structured value or a list — visibly one group */
+.${page.dir} fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.${page.dir} legend {
+  padding: 0 0.25rem;
+  font-weight: 600;
+}
+
+.${page.dir} button {
+  padding: 0.5rem 1.25rem;
+  border: 0;
+  border-radius: 4px;
+  background: #1b6ef3;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.${page.dir} button:disabled {
+  background: #b8b8b8;
+  cursor: not-allowed;
+}
+
+/* read models */
+.${page.dir} table {
+  width: 100%;
+  margin: 1.5rem 0;
+  border-collapse: collapse;
+}
+
+.${page.dir} th,
+.${page.dir} td {
+  padding: 0.5rem;
+  border-bottom: 1px solid #e4e4e4;
+  text-align: left;
+  vertical-align: top;
+}
+
+.${page.dir} th {
+  background: #f5f5f5;
+}
+
+.${page.dir} dl {
+  margin: 1.5rem 0;
+}
+
+.${page.dir} dt {
+  font-weight: 600;
+}
+
+.${page.dir} dd {
+  margin: 0 0 0.75rem;
+}
+
+.${page.dir} dd dl {
+  margin: 0.25rem 0 0 1rem;
+}
+
+.${page.dir} ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+`;
 
 // A smoke test that the generated wiring really reaches the backend contract.
 // It is yours: frontend-implement adds the GWT scenarios alongside it.

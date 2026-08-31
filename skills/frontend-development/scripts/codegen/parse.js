@@ -13,6 +13,12 @@
 //   <aggregate>:Id | :Key      (readmodels.md) projection strategy
 //   * field name               payload attribute / read-model column
 //   * [field name]:uuid|now    system-decided attribute (never a form input)
+//
+// Field TYPES come from `business-definitions-raw.md`, exactly as the backend
+// generator resolves them (backend-development/scripts/codegen/parse.js). A field
+// whose label names a business definition that lists attributes is a structured
+// object, not a string — the backend emits a Java record for it, so the frontend
+// must emit a matching nested interface or the JSON will not deserialise.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,22 +67,88 @@ export function parseField(raw) {
 
 const list = (v) => (v || '').split(',').map((x) => x.trim()).filter(Boolean);
 
+// ---- business definitions -------------------------------------------------
+// Mirrors backend-development/scripts/codegen/parse.js. Both generators read the
+// same file and apply the same rules, so a field cannot be a record on one side
+// and a string on the other.
+
+export function parseDefinitions(text) {
+  const defs = [];
+  for (const block of text.split(/^-{3,}\s*$/m)) {
+    const nameLine = block.match(/^#\s*name\s+(.+)$/m);
+    if (!nameLine) continue;
+    const attrs = [...block.matchAll(/^\*\s+(.+)$/gm)].map((m) => m[1].trim());
+    defs.push({ name: nameLine[1].trim(), attributes: attrs });
+  }
+  return defs;
+}
+
+// A concept WITH listed attributes becomes an object type (the backend's value
+// object / Java record); without attributes it is just a string.
+export function resolveTypes(defs) {
+  const byKey = new Map();
+  const objectTypes = [];
+  for (const def of defs) {
+    const key = naming.words(def.name).join(' ');
+    if (def.attributes.length === 0) {
+      byKey.set(key, { tsType: 'string', object: null });
+      continue;
+    }
+    const objectType = {
+      name: naming.pascal(def.name),
+      label: def.name,
+      fields: def.attributes.map((a) => ({
+        label: a,
+        name: naming.field(a),
+        // a "... list" attribute is a list of names; everything else is a string.
+        // Same rule as the backend's `List<String>` vs `String`.
+        tsType: /\blist$/i.test(a.trim()) ? 'string[]' : 'string',
+      })),
+    };
+    byKey.set(key, { tsType: objectType.name, object: objectType });
+    objectTypes.push(objectType);
+  }
+  return { byKey, objectTypes };
+}
+
+// A convention (`:uuid`, `:now`) is decided server-side and goes over the wire as
+// a string, so it wins over any definition of the same name. Otherwise a matching
+// business definition decides the type; failing that the parsed default stands.
+function typeOf(field, byKey) {
+  if (field.convention) return { tsType: 'string', object: null };
+  return byKey.get(naming.words(field.label).join(' ')) || { tsType: field.tsType, object: null };
+}
+
 export function parseModel({ modelDir }) {
   const read = (f) => {
     const p = path.join(modelDir, f);
     if (!fs.existsSync(p)) throw new Error(`Missing model file: ${p}`);
     return fs.readFileSync(p, 'utf8');
   };
+  // Optional: a model may define no business concepts at all, in which case every
+  // field is a plain string and nothing nested is generated.
+  const readOptional = (f) => {
+    const p = path.join(modelDir, f);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  };
 
-  const commands = parseSections(read('commands.md')).map((s) => ({
-    id: s.id,
-    name: s.props.name || s.id,
-    producesId: s.props.produces || null,
-    // Bracketed fields are decided downstream (server side). A form only ever
-    // collects the plain ones, so the split is part of the model, not a view concern.
-    fields: s.fields,
-    inputFields: s.fields.filter((f) => !f.bracketed),
-  }));
+  const { byKey, objectTypes } = resolveTypes(
+    parseDefinitions(readOptional('business-definitions-raw.md')),
+  );
+  const decorate = (fields) => fields.map((f) => ({ ...f, ...typeOf(f, byKey) }));
+
+  const commands = parseSections(read('commands.md')).map((s) => {
+    const fields = decorate(s.fields);
+    return {
+      id: s.id,
+      name: s.props.name || s.id,
+      producesId: s.props.produces || null,
+      // Bracketed fields are decided downstream (server side). A form only ever
+      // collects the plain ones, so the split is part of the model, not a view concern.
+      fields,
+      inputFields: fields.filter((f) => !f.bracketed),
+    };
+  });
   const commandById = new Map(commands.map((c) => [c.id, c]));
 
   const readModels = parseSections(read('readmodels.md')).map((s) => ({
@@ -88,7 +160,7 @@ export function parseModel({ modelDir }) {
     // collection. An `:Id` one is replayed for a single aggregate -> one object.
     collection: Boolean(s.keyed),
     subscribes: list(s.props.subscribes),
-    fields: s.fields,
+    fields: decorate(s.fields),
   }));
   const readModelById = new Map(readModels.map((r) => [r.id, r]));
 
@@ -125,12 +197,20 @@ export function parseModel({ modelDir }) {
       // aggregate id — it comes from the route, which is why the route path grows
       // a `:aggregateId` segment. `:Key` read models are listable and need none.
       const aggregateParam = views.some((v) => !v.collection);
+      const pageCommands = triggerIds.map((id) => commandById.get(id));
+      // The nested interfaces this page's contracts file must declare — exactly
+      // those its own payloads and views reference, so nothing unused is emitted.
+      const pageObjectTypes = [];
+      for (const f of [...pageCommands, ...views].flatMap((x) => x.fields)) {
+        if (f.object && !pageObjectTypes.includes(f.object)) pageObjectTypes.push(f.object);
+      }
       const page = {
         ...u,
         triggerIds,
         viewIds,
-        commands: triggerIds.map((id) => commandById.get(id)),
+        commands: pageCommands,
         views,
+        objectTypes: pageObjectTypes,
         aggregateParam,
         standalone: triggerIds.length === 0 && viewIds.length === 0,
         ...naming.page(u.id),
@@ -149,6 +229,7 @@ export function parseModel({ modelDir }) {
     pages,
     commands,
     readModels,
+    objectTypes,
     skipped: uis.filter((u) => u.type !== 'html'),
   };
 }

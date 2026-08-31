@@ -5,14 +5,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseModel, parseSections, parseField } from './parse.js';
-import { emit, component, store, contracts, api } from './emit.js';
+import { emit, component, store, contracts, api, template } from './emit.js';
 import naming from './naming.js';
 
-function withModel({ uis, commands = '', readmodels = '' }, fn) {
+function withModel({ uis, commands = '', readmodels = '', definitions = null }, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fecodegen-'));
   fs.writeFileSync(path.join(dir, 'uis.md'), uis);
   fs.writeFileSync(path.join(dir, 'commands.md'), commands);
   fs.writeFileSync(path.join(dir, 'readmodels.md'), readmodels);
+  if (definitions !== null) {
+    fs.writeFileSync(path.join(dir, 'business-definitions-raw.md'), definitions);
+  }
   try {
     return fn(parseModel({ modelDir: dir }));
   } finally {
@@ -225,4 +228,94 @@ test('parseSections keeps props lowercase-keyed and collects fields', () => {
   assert.equal(s.props.type, 'html');
   assert.equal(s.props.consistsof, 'a, b');
   assert.deepEqual(s.fields.map((f) => f.name), ['one']);
+});
+
+// ---- business definitions -------------------------------------------------
+// The backend generates a Java record for any definition that lists attributes, so
+// a field naming one is an object on the wire. Typing it `string` here is what made
+// Jackson reject `"FIRE, STEALING"` for PolicyCoverage.
+
+const DEFINITIONS = `# name Policy Holder
+# description
+The person who buys the policy.
+------
+# name Policy Coverage
+# description
+What the insurer will pay for.
+* coverage period
+* risk list
+`;
+
+const COVERAGE_UIS = `# UIs\n## issue-policy\nType: html\nName: Issue Policy\n`;
+const COVERAGE_COMMANDS = `# Commands
+## issue-policy
+Name: Issue Policy
+* policy holder
+* policy coverage
+`;
+
+const withCoverage = (fn) =>
+  withModel(
+    { uis: COVERAGE_UIS, commands: COVERAGE_COMMANDS, definitions: DEFINITIONS },
+    fn,
+  );
+
+test('a definition with attributes types the field as an object, without stays a string', () => {
+  withCoverage((m) => {
+    const [holder, coverage] = m.commands[0].fields;
+    // "Policy Holder" is defined but lists no attributes -> a plain string
+    assert.equal(holder.tsType, 'string');
+    assert.equal(holder.object, null);
+    // "Policy Coverage" lists attributes -> the record the backend generates
+    assert.equal(coverage.tsType, 'PolicyCoverage');
+    assert.deepEqual(coverage.object.fields.map((f) => [f.name, f.tsType]), [
+      ['coveragePeriod', 'string'],
+      ['riskList', 'string[]'],
+    ]);
+  });
+});
+
+test('a page declares only the object types its own contracts reference', () => {
+  withCoverage((m) => {
+    assert.deepEqual(m.pages[0].objectTypes.map((o) => o.name), ['PolicyCoverage']);
+  });
+});
+
+test('contracts emit the nested interface used by the payload', () => {
+  withCoverage((m) => {
+    const out = contracts(m.pages[0], '/api');
+    assert.match(out, /export interface PolicyCoverage \{/);
+    assert.match(out, /coveragePeriod: string;/);
+    assert.match(out, /riskList: string\[\];/);
+    assert.match(out, /policyCoverage: PolicyCoverage;/);
+  });
+});
+
+test('form state initialises a nested object, not an empty string', () => {
+  withCoverage((m) => {
+    const out = component(m.pages[0]);
+    assert.match(out, /policyCoverage: \{/);
+    assert.match(out, /coveragePeriod: '',/);
+    // one empty entry so the seeded form renders one input for the list
+    assert.match(out, /riskList: \[''\],/);
+    assert.doesNotMatch(out, /policyCoverage: '',/);
+  });
+});
+
+test('the form binds nested controls instead of one input for the whole object', () => {
+  withCoverage((m) => {
+    const html = template(m.pages[0]);
+    // never bind a plain input straight to the object
+    assert.doesNotMatch(html, /\[\(ngModel\)\]="issuePolicyForm\.policyCoverage"/);
+    assert.match(html, /\[\(ngModel\)\]="issuePolicyForm\.policyCoverage\.coveragePeriod"/);
+    assert.match(html, /@for \(entry of issuePolicyForm\.policyCoverage\.riskList; track \$index\)/);
+    assert.match(html, /\[\(ngModel\)\]="issuePolicyForm\.policyCoverage\.riskList\[\$index\]"/);
+  });
+});
+
+test('the model still parses when no business definitions file exists', () => {
+  withModel({ uis: COVERAGE_UIS, commands: COVERAGE_COMMANDS }, (m) => {
+    assert.deepEqual(m.objectTypes, []);
+    assert.deepEqual(m.commands[0].fields.map((f) => f.tsType), ['string', 'string']);
+  });
 });

@@ -134,13 +134,14 @@ function commandHandler(c, e, base) {
     args.push(r.expr);
   }
 
-  const deciderField = needsDecider ? `    private final ${c.deciderClassName} decider;\n` : '';
-  const deciderParam = needsDecider ? `, ${c.deciderClassName} decider` : '';
-  const deciderAssign = needsDecider ? `\n        this.decider = decider;` : '';
+  // Lombok writes the constructor from the final fields, in declaration order — the
+  // same signature the generated abilities call, with none of the boilerplate.
+  const deciderField = needsDecider ? `\n    private final ${c.deciderClassName} decider;` : '';
 
   const imports = importBlock([
     'java.util.List',
     'java.util.UUID',
+    'lombok.RequiredArgsConstructor',
     'org.springframework.stereotype.Component',
     'org.springframework.transaction.annotation.Transactional',
     'org.springframework.web.bind.annotation.PostMapping',
@@ -165,13 +166,10 @@ ${imports}
 @RestController
 @Component
 @Transactional
+@RequiredArgsConstructor
 public class ${c.handlerClassName} implements CommandHandler<${c.className}> {
 
-    private final EventStream eventStream;
-${deciderField}
-    public ${c.handlerClassName}(EventStream eventStream${deciderParam}) {
-        this.eventStream = eventStream;${deciderAssign}
-    }
+    private final EventStream eventStream;${deciderField}
 
     @PostMapping("${c.postMapping}")
     @Override
@@ -258,14 +256,11 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     }`;
   });
 
-  const deciderField = needsDecider
-    ? `    private final ${rm.deciderClassName} decider;\n`
-    : '';
-  const deciderParam = needsDecider ? `, ${rm.deciderClassName} decider` : '';
-  const deciderAssign = needsDecider ? `\n        this.decider = decider;` : '';
+  const deciderField = needsDecider ? `\n    private final ${rm.deciderClassName} decider;` : '';
 
   const imports = importBlock([
     'java.util.UUID',
+    'lombok.RequiredArgsConstructor',
     'org.springframework.stereotype.Component',
     'org.springframework.web.bind.annotation.GetMapping',
     'org.springframework.web.bind.annotation.PathVariable',
@@ -286,13 +281,10 @@ ${imports}
 
 @RestController
 @Component
+@RequiredArgsConstructor
 public class ${rm.projectorClassName} implements StateProjector<${rm.className}> {
 
-    private final EventStream eventStream;
-${deciderField}
-    public ${rm.projectorClassName}(EventStream eventStream${deciderParam}) {
-        this.eventStream = eventStream;${deciderAssign}
-    }
+    private final EventStream eventStream;${deciderField}
 
     @GetMapping("${rm.getMapping}")
     public ${rm.className} ${rm.getterMethod}(@PathVariable UUID aggregateId) {
@@ -755,13 +747,12 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     }`;
   });
 
-  const deciderField = needsDecider ? `    private final ${rm.deciderClassName} decider;\n` : '';
-  const deciderParam = needsDecider ? `, ${rm.deciderClassName} decider` : '';
-  const deciderAssign = needsDecider ? `\n        this.decider = decider;` : '';
+  const deciderField = needsDecider ? `\n    private final ${rm.deciderClassName} decider;` : '';
 
   const imports = importBlock([
     'java.util.List',
     'java.util.UUID',
+    'lombok.RequiredArgsConstructor',
     'org.springframework.stereotype.Component',
     'org.springframework.web.bind.annotation.GetMapping',
     'org.springframework.web.bind.annotation.RestController',
@@ -782,14 +773,11 @@ ${imports}
 
 @RestController
 @Component
+@RequiredArgsConstructor
 public class ${rm.projectorClassName}
         implements StateProjector<${rm.className}>, PersistingProjector {
 
-    private final ${rm.repositoryClassName} repository;
-${deciderField}
-    public ${rm.projectorClassName}(${rm.repositoryClassName} repository${deciderParam}) {
-        this.repository = repository;${deciderAssign}
-    }
+    private final ${rm.repositoryClassName} repository;${deciderField}
 
     @GetMapping("${rm.getMapping}")
     public List<${rm.className}> ${rm.getterMethod}() {

@@ -69,6 +69,7 @@ public interface PersistingProjector {
 import java.util.List;
 import java.util.UUID;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import ${base}.eventstream.DomainEvent;
@@ -76,19 +77,17 @@ import ${base}.eventstream.EventStream;
 import ${base}.eventstream.PersistingProjector;
 
 @Component
+@RequiredArgsConstructor
 public class EventStreamImpl implements EventStream {
 
     private final DomainEventRepository repository;
-    private final Collection<PersistingProjector> projectors;
 
-    public EventStreamImpl(DomainEventRepository repository,
-            Collection<PersistingProjector> projectors) {
-        this.repository = repository;
-        // Kept by reference, not copied: Spring hands us an immutable list, while a
-        // test ability registers its own projector into a shared mutable collection
-        // AFTER this stream is constructed. Copying here would silently drop those.
-        this.projectors = projectors;
-    }
+    /**
+     * Held by reference, never copied. Spring injects an immutable list, but a test
+     * ability registers its own projector into a shared mutable collection AFTER this
+     * stream is constructed — a defensive copy would silently drop those.
+     */
+    private final Collection<PersistingProjector> projectors;
 
     @Override
     public void append(Collection<DomainEvent> events) {

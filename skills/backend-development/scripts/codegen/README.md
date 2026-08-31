@@ -8,6 +8,9 @@ Spring Boot project. Domain-agnostic and reusable: the only project-specific inp
 node <skill>/scripts/codegen                 # regenerate
 node <skill>/scripts/codegen --check         # CI gate: fail if generated code is stale
 node <skill>/scripts/codegen --json          # print the parsed model
+node <skill>/scripts/codegen --accept-scaffold  # record once-files as reconciled with
+                                             # their current template (marker only —
+                                             # never rewrites the body)
 node <skill>/scripts/codegen --project <dir> --model <dir>
 node --test <skill>/scripts/codegen/*.test.js
 ```

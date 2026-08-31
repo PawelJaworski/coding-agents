@@ -176,6 +176,7 @@ export function parseModel({ modelDir, openapiPath = null }) {
     // collection. An `:Id` one is replayed for a single aggregate -> one object.
     const collection = Boolean(s.keyed);
     let endpoint = collection ? `/${s.id}` : `/${s.id}/{aggregateId}`;
+    let search = null;
     if (contract) {
       const op = contract.views.get(s.id);
       if (!op) {
@@ -193,6 +194,7 @@ export function parseModel({ modelDir, openapiPath = null }) {
       }
       fields = mergeFields(op.fields, fields, `read model ${s.id}`);
       endpoint = op.endpoint;
+      search = op.search;
     }
     return {
       id: s.id,
@@ -201,6 +203,9 @@ export function parseModel({ modelDir, openapiPath = null }) {
       keyed: s.keyed,
       collection,
       endpoint,
+      // Filtered read path, when the backend publishes one. Criteria names and
+      // types come from openapi.json's query parameters — never from markdown.
+      search,
       subscribes: list(s.props.subscribes),
       fields,
     };

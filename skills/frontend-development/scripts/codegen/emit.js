@@ -56,6 +56,18 @@ function contracts(page, apiBase) {
           : `export const ${naming.camel(view.id)}Endpoint = (aggregateId: string) =>\n` +
             `  \`${apiBase}${viewPath(view).replace(/\{[^}]+\}/, '${aggregateId}')}\`;`),
     );
+    // A filtered read path over the same view type. Criteria are the operation's
+    // query parameters, so an optional one is optional here too.
+    if (view.search) {
+      const criteria = view.search.criteria
+        .map((c) => `  ${c.name}${c.required ? '' : '?'}: ${c.tsType};`)
+        .join('\n');
+      out.push(
+        `/** Query of \`GET ${apiBase}${view.search.endpoint}\` — filters \`${view.id}\`. */\n` +
+          `export interface ${naming.criteria(view.id)} {\n${criteria}\n}\n\n` +
+          `export const ${constName(view.id)}_SEARCH_ENDPOINT = '${apiBase}${view.search.endpoint}';`,
+      );
+    }
   }
   if (out.length === 1) out.push('export {};');
   return out.join('\n\n') + '\n';
@@ -172,18 +184,23 @@ function api(page) {
   const types = [
     ...page.commands.map((c) => naming.payload(c.id)),
     ...page.views.map((v) => naming.view(v.id)),
+    ...page.views.filter((v) => v.search).map((v) => naming.criteria(v.id)),
   ];
   const endpoints = [
     ...page.commands.map((c) => `${constName(c.id)}_ENDPOINT`),
     ...page.views.map((v) =>
       v.collection ? `${constName(v.id)}_ENDPOINT` : `${naming.camel(v.id)}Endpoint`,
     ),
+    ...page.views.filter((v) => v.search).map((v) => `${constName(v.id)}_SEARCH_ENDPOINT`),
   ];
   const contractsPath = `./${page.contractsFile.replace(/\.ts$/, '')}`;
 
   const lines = [GEN, `import { Injectable, inject } from '@angular/core';`];
+  const anySearch = page.views.some((v) => v.search);
   if (types.length) {
-    lines.push(`import { HttpClient } from '@angular/common/http';`);
+    lines.push(
+      `import { HttpClient${anySearch ? ', HttpParams' : ''} } from '@angular/common/http';`,
+    );
     lines.push(`import { firstValueFrom } from 'rxjs';`);
     lines.push(`import type {\n${types.map((t) => `  ${t},`).join('\n')}\n} from '${contractsPath}';`);
     lines.push(`import {\n${endpoints.map((t) => `  ${t},`).join('\n')}\n} from '${contractsPath}';`);
@@ -212,6 +229,28 @@ function api(page) {
     lines.push(`  ${naming.getMethod(v.id)}(${v.collection ? '' : 'aggregateId: string'}): Promise<${type}> {`);
     lines.push(`    return firstValueFrom(this.http.get<${type}>(${url}));`);
     lines.push('  }');
+    if (v.search) {
+      const listType = `${naming.view(v.id)}[]`;
+      lines.push('');
+      lines.push(`  /** \`GET\` the \`${v.id}\` read model, filtered. Same projection as ${naming.getMethod(v.id)}(). */`);
+      lines.push(
+        `  ${naming.searchMethod(v.id)}(criteria: ${naming.criteria(v.id)}): Promise<${listType}> {`,
+      );
+      lines.push('    let params = new HttpParams();');
+      for (const c of v.search.criteria) {
+        if (c.required) {
+          lines.push(`    params = params.set('${c.name}', criteria.${c.name});`);
+        } else {
+          lines.push(`    if (criteria.${c.name} !== undefined) {`);
+          lines.push(`      params = params.set('${c.name}', criteria.${c.name});`);
+          lines.push('    }');
+        }
+      }
+      lines.push(
+        `    return firstValueFrom(this.http.get<${listType}>(${constName(v.id)}_SEARCH_ENDPOINT, { params }));`,
+      );
+      lines.push('  }');
+    }
   }
   if (!types.length) {
     lines.push('  // standalone page: uis.md wires it to no command and no read model');
@@ -224,6 +263,7 @@ function store(page) {
   const types = [
     ...page.commands.map((c) => naming.payload(c.id)),
     ...page.views.map((v) => naming.view(v.id)),
+    ...page.views.filter((v) => v.search).map((v) => naming.criteria(v.id)),
   ];
   const contractsPath = `./${page.contractsFile.replace(/\.ts$/, '')}`;
 
@@ -264,6 +304,16 @@ function store(page) {
     );
     lines.push('    });');
     lines.push('  }');
+    if (v.search) {
+      lines.push('');
+      lines.push(`  async ${naming.searchMethod(v.id)}(criteria: ${naming.criteria(v.id)}): Promise<void> {`);
+      lines.push(`    await this.run(async () => {`);
+      lines.push(
+        `      this.${naming.viewSignal(v.id)}.set(await this.api.${naming.searchMethod(v.id)}(criteria));`,
+      );
+      lines.push('    });');
+      lines.push('  }');
+    }
   }
   for (const c of page.commands) {
     lines.push('');

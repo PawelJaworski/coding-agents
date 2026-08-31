@@ -42,11 +42,13 @@ const naming = {
   // so they live in the GENERATED contracts file, never hand-written.
   payload: (commandId) => `${pascal(commandId)}Payload`,
   view: (readModelId) => `${pascal(readModelId)}View`,
+  criteria: (readModelId) => `${pascal(readModelId)}SearchCriteria`,
 
   // Store members
   triggerMethod: (commandId) => camel(commandId),
   viewSignal: (readModelId) => camel(readModelId),
   loadMethod: (readModelId) => `load${pascal(readModelId)}`,
+  searchMethod: (readModelId) => `search${pascal(readModelId)}`,
   // Api members — mirror the generated Spring controllers one-for-one
   postMethod: (commandId) => camel(commandId),
   getMethod: (readModelId) => `get${pascal(readModelId)}`,

@@ -44,13 +44,30 @@ scaffolding.
    That is a defect in the event model, owned by the architect. Escalate — never work
    around it in code.
 
-4. **Implement GWT scenarios** — delegate to `backend-implement`, once per
+4. **Publish the API contract.** Once the generated sources compile, export the
+   OpenAPI contract the frontend consumes:
+   ```
+   mvn verify
+   ```
+   This boots the app on a dedicated port, scrapes `/v3/api-docs` and writes
+   `api/openapi.json`. Run it after EVERY codegen run that added or changed a command
+   or read model — the contract is derived from the running controllers, so it is stale
+   the moment the model changes.
+
+   The generator does not do this itself, and must not: `scripts/codegen` is a pure
+   model -> source transform, shared by every project, and knows nothing about Maven or
+   Spring. Compiling and booting an app is the build tool's job.
+
+   **Never commit `api/openapi.json`.** Regenerate it, report that it changed, and leave
+   it in the working tree. Committing is a human decision.
+
+5. **Implement GWT scenarios** — delegate to `backend-implement`, once per
    `<docs>/gwt-*.md` scenario. Nothing else in this pipeline writes logic.
 
-5. **Verify.** `mvn clean verify` must be green, and `node .opencode/skills/backend-development/scripts/codegen --check` must report
+6. **Verify.** `mvn clean verify` must be green, and `node .opencode/skills/backend-development/scripts/codegen --check` must report
    `up to date`.
 
-6. **Review** — delegate to `backend-code-reviewer`.
+7. **Review** — delegate to `backend-code-reviewer`.
 
 # File ownership — memorize this
 | header in the file | who owns it |

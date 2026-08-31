@@ -757,3 +757,126 @@ test('renderPage includes GWT modal CSS styles', () => {
   assert.match(pageHtml, /\.gwt-modal-content\{/);
   assert.match(pageHtml, /\.gwt-scenario\{/);
 });
+
+// ---------------------------------------------------------------------------
+// Interactivity (reference/interactivity.js) — upstream focus filter
+// ---------------------------------------------------------------------------
+
+/*
+ * Loads reference/interactivity.js in a vm sandbox against a minimal fake DOM
+ * built from a list of cards and arrows, then returns a helper to click a card
+ * and read back which cards ended up dimmed.
+ */
+function loadInteractivity({ cards, arrows }) {
+  const vm = require('node:vm');
+
+  const mkNode = (attrs) => {
+    const classes = new Set();
+    return {
+      _attrs: attrs,
+      classList: {
+        toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
+        add: (c) => classes.add(c),
+        remove: (c) => classes.remove(c),
+        contains: (c) => classes.has(c),
+      },
+      has: (c) => classes.has(c),
+      getAttribute: (k) => (k in attrs ? attrs[k] : null),
+      addEventListener: function (ev, fn) {
+        this._click = fn;
+      },
+      click: function () {
+        this._click({ stopPropagation() {} });
+      },
+    };
+  };
+
+  const cardNodes = cards.map((id) => mkNode({ 'data-element': id }));
+  const arrowNodes = arrows.map(([from, to, kind]) =>
+    mkNode({ 'data-from': from, 'data-to': to, 'data-kind': kind }));
+
+  const noop = mkNode({});
+  const document = {
+    querySelectorAll(sel) {
+      if (sel === '.card') return cardNodes;
+      if (sel === '[data-from]') return arrowNodes;
+      return [];
+    },
+    querySelector() { return noop; },
+    getElementById() { return noop; },
+    addEventListener() {},
+  };
+
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'reference', 'interactivity.js'), 'utf8');
+  vm.runInNewContext(src, { document, window: {} });
+
+  return {
+    clickCard(id) {
+      cardNodes[cards.indexOf(id)].click();
+      return {
+        dimmed: cards.filter((c, i) => cardNodes[i].has('dim')),
+        highlighted: cards.filter((c, i) => !cardNodes[i].has('dim')),
+      };
+    },
+  };
+}
+
+/*
+ * Fixture shaped like a real diagram containing BOTH kinds of UI card:
+ *
+ *   issue-policy(UI) --triggers--> issue-policy(cmd) --produces--> policy-issued(evt)
+ *   policy-issued(evt) --observes--> policy-details(rm) --displays--> policy-details(UI)
+ *   unrelated-view(rm) --displays--> issue-policy(UI)
+ */
+const INTERACTIVITY_FIXTURE = {
+  cards: ['ui-issue-policy', 'cmd-issue-policy', 'evt-policy-issued',
+          'rm-policy-details', 'ui-policy-details', 'rm-unrelated'],
+  arrows: [
+    ['ui-issue-policy', 'cmd-issue-policy', 'triggers'],
+    ['cmd-issue-policy', 'evt-policy-issued', 'produces'],
+    ['evt-policy-issued', 'rm-policy-details', 'observes'],
+    ['rm-policy-details', 'ui-policy-details', 'displays'],
+    ['rm-unrelated', 'ui-issue-policy', 'displays'],
+  ],
+};
+
+test('clicking an output UI keeps its upstream chain undimmed (not everything greyed)', () => {
+  const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
+  const { highlighted, dimmed } = dom.clickCard('ui-policy-details');
+
+  // The whole upstream slice behind the clicked UI stays visible.
+  assert.deepEqual(highlighted.sort(), [
+    'cmd-issue-policy',
+    'evt-policy-issued',
+    'rm-policy-details',
+    'ui-issue-policy',
+    'ui-policy-details',
+  ].sort());
+
+  // ...and only the genuinely unrelated card is dimmed.
+  assert.deepEqual(dimmed, ['rm-unrelated']);
+});
+
+test('a UI reached as an ancestor is still terminal — its displays edge is not walked', () => {
+  const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
+  const { highlighted } = dom.clickCard('rm-policy-details');
+
+  // ui-issue-policy is pulled in via its "triggers" edge, but the read model
+  // it happens to display (rm-unrelated) must NOT be.
+  assert.deepEqual(highlighted.sort(), [
+    'cmd-issue-policy',
+    'evt-policy-issued',
+    'rm-policy-details',
+    'ui-issue-policy',
+  ].sort());
+});
+
+test('clicking an input UI dims everything downstream of it', () => {
+  const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
+  const { highlighted } = dom.clickCard('ui-issue-policy');
+
+  // Start node follows its own displays edge, so its source read model shows;
+  // the command/event/read model it triggers are downstream and stay dimmed.
+  assert.deepEqual(highlighted.sort(), ['rm-unrelated', 'ui-issue-policy'].sort());
+});

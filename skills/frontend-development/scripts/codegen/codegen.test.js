@@ -8,7 +8,7 @@ import { parseModel, parseSections, parseField } from './parse.js';
 import { emit, component, store, contracts, api, template } from './emit.js';
 import naming from './naming.js';
 
-function withModel({ uis, commands = '', readmodels = '', definitions = null }, fn) {
+function withModel({ uis, commands = '', readmodels = '', definitions = null, openapi = null }, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fecodegen-'));
   fs.writeFileSync(path.join(dir, 'uis.md'), uis);
   fs.writeFileSync(path.join(dir, 'commands.md'), commands);
@@ -16,8 +16,13 @@ function withModel({ uis, commands = '', readmodels = '', definitions = null }, 
   if (definitions !== null) {
     fs.writeFileSync(path.join(dir, 'business-definitions-raw.md'), definitions);
   }
+  let openapiPath = null;
+  if (openapi !== null) {
+    openapiPath = path.join(dir, 'openapi.json');
+    fs.writeFileSync(openapiPath, JSON.stringify(openapi));
+  }
   try {
-    return fn(parseModel({ modelDir: dir }));
+    return fn(parseModel({ modelDir: dir, openapiPath }));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -317,5 +322,173 @@ test('the model still parses when no business definitions file exists', () => {
   withModel({ uis: COVERAGE_UIS, commands: COVERAGE_COMMANDS }, (m) => {
     assert.deepEqual(m.objectTypes, []);
     assert.deepEqual(m.commands[0].fields.map((f) => f.tsType), ['string', 'string']);
+  });
+});
+
+// ---- openapi.json as the contract source ----------------------------------
+// The backend publishes what it actually serves. When present it decides field
+// names, field types and URLs; the event model keeps page structure, route
+// shape, labels and [bracketed] hints.
+
+const OPENAPI_UIS = `# UIs
+## issue-policy
+Type: html
+Name: Issue Policy
+
+## policy-status
+Type: html
+Name: Policy Status
+
+## underwriting-queue
+Type: html
+Name: Underwriting Queue
+`;
+
+const schemaRef = (name) => ({ $ref: `#/components/schemas/${name}` });
+
+const OPENAPI = {
+  openapi: '3.1.0',
+  paths: {
+    '/issue-policy': {
+      post: {
+        requestBody: { content: { 'application/json': { schema: schemaRef('IssuePolicyCmd') } } },
+        responses: { 200: { content: { '*/*': { schema: { type: 'string' } } } } },
+      },
+    },
+    '/policy-status': {
+      get: {
+        responses: {
+          200: { content: { '*/*': { schema: { type: 'array', items: schemaRef('PolicyStatus') } } } },
+        },
+      },
+    },
+    '/underwriting-queue/{aggregateId}': {
+      get: { responses: { 200: { content: { '*/*': { schema: schemaRef('UnderwritingQueue') } } } } },
+    },
+  },
+  components: {
+    schemas: {
+      IssuePolicyCmd: {
+        type: 'object',
+        properties: {
+          policyHolder: { type: 'string' },
+          policyNumber: { type: 'string', format: 'uuid' },
+          premium: { type: 'integer' },
+          coverage: schemaRef('Coverage'),
+        },
+      },
+      Coverage: {
+        type: 'object',
+        properties: { coveragePeriod: { type: 'string' }, riskList: { type: 'array', items: { type: 'string' } } },
+      },
+      PolicyStatus: { type: 'object', properties: { policyNumber: { type: 'string' }, status: { type: 'string' } } },
+      UnderwritingQueue: { type: 'object', properties: { applicant: { type: 'string' } } },
+    },
+  },
+};
+
+const OPENAPI_COMMANDS = `# Commands
+## issue-policy
+Name: Issue Policy
+Produces: policy-issued
+* policy holder
+* [policy number]:uuid
+* premium
+* coverage
+`;
+
+test('openapi.json decides field types, including numbers and nested objects', () => {
+  withModel(
+    { uis: OPENAPI_UIS, commands: OPENAPI_COMMANDS, readmodels: READMODELS, openapi: OPENAPI },
+    (m) => {
+      const cmd = m.commands[0];
+      assert.deepEqual(
+        cmd.fields.map((f) => [f.name, f.tsType]),
+        [
+          ['policyHolder', 'string'],
+          ['policyNumber', 'string'],
+          ['premium', 'number'],
+          ['coverage', 'Coverage'],
+        ],
+      );
+      // A markdown-only run would have typed `premium` as a string.
+      assert.equal(cmd.fields[3].object.fields.map((f) => f.tsType).join(','), 'string,string[]');
+    },
+  );
+});
+
+test('the event model still owns [bracketed], so a form never collects it', () => {
+  withModel(
+    { uis: OPENAPI_UIS, commands: OPENAPI_COMMANDS, readmodels: READMODELS, openapi: OPENAPI },
+    (m) => {
+      const cmd = m.commands[0];
+      assert.equal(cmd.fields.find((f) => f.name === 'policyNumber').bracketed, true);
+      assert.deepEqual(cmd.inputFields.map((f) => f.name), ['policyHolder', 'premium', 'coverage']);
+      assert.match(contracts(m.pages[0], '/api'), /do not collect in a form \*\/\n  policyNumber\?: string;/);
+    },
+  );
+});
+
+test('endpoint constants come from the published paths', () => {
+  withModel(
+    { uis: OPENAPI_UIS, commands: OPENAPI_COMMANDS, readmodels: READMODELS, openapi: OPENAPI },
+    (m) => {
+      const byId = Object.fromEntries(m.pages.map((p) => [p.id, contracts(p, '/api')]));
+      assert.match(byId['issue-policy'], /ISSUE_POLICY_ENDPOINT = '\/api\/issue-policy';/);
+      assert.match(byId['policy-status'], /POLICY_STATUS_ENDPOINT = '\/api\/policy-status';/);
+      assert.match(byId['underwriting-queue'], /`\/api\/underwriting-queue\/\$\{aggregateId\}`/);
+    },
+  );
+});
+
+test('a command the backend does not serve is a loud error, not a guess', () => {
+  const missing = { ...OPENAPI, paths: { ...OPENAPI.paths } };
+  delete missing.paths['/issue-policy'];
+  assert.throws(
+    () =>
+      withModel(
+        { uis: OPENAPI_UIS, commands: OPENAPI_COMMANDS, readmodels: READMODELS, openapi: missing },
+        () => {},
+      ),
+    /no POST \/issue-policy in openapi\.json/,
+  );
+});
+
+test('a field in the model but not in the contract is reported as drift', () => {
+  assert.throws(
+    () =>
+      withModel(
+        {
+          uis: OPENAPI_UIS,
+          commands: `${OPENAPI_COMMANDS}* broker fee\n`,
+          readmodels: READMODELS,
+          openapi: OPENAPI,
+        },
+        () => {},
+      ),
+    /CONTRACT DRIFT[\s\S]*not in openapi\.json: brokerFee/,
+  );
+});
+
+test('a :Key read model served as a single aggregate is a contract disagreement', () => {
+  const swapped = JSON.parse(JSON.stringify(OPENAPI));
+  swapped.paths['/policy-status/{aggregateId}'] = {
+    get: { responses: { 200: { content: { '*/*': { schema: schemaRef('PolicyStatus') } } } } },
+  };
+  delete swapped.paths['/policy-status'];
+  assert.throws(
+    () =>
+      withModel(
+        { uis: OPENAPI_UIS, commands: OPENAPI_COMMANDS, readmodels: READMODELS, openapi: swapped },
+        () => {},
+      ),
+    /disagree about the projection strategy/,
+  );
+});
+
+test('without openapiPath the generator behaves exactly as before', () => {
+  withModel({ uis: OPENAPI_UIS, commands: OPENAPI_COMMANDS, readmodels: READMODELS }, (m) => {
+    assert.deepEqual(m.commands[0].fields.map((f) => f.tsType), ['string', 'string', 'string', 'string']);
+    assert.equal(m.contractSource, null);
   });
 });

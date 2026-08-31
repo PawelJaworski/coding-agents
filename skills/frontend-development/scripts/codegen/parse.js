@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import naming from './naming.js';
+import { loadOpenApi, indexOpenApi, mergeFields } from './openapi.js';
 
 export function parseSections(text) {
   const sections = [];
@@ -119,7 +120,7 @@ function typeOf(field, byKey) {
   return byKey.get(naming.words(field.label).join(' ')) || { tsType: field.tsType, object: null };
 }
 
-export function parseModel({ modelDir }) {
+export function parseModel({ modelDir, openapiPath = null }) {
   const read = (f) => {
     const p = path.join(modelDir, f);
     if (!fs.existsSync(p)) throw new Error(`Missing model file: ${p}`);
@@ -137,12 +138,30 @@ export function parseModel({ modelDir }) {
   );
   const decorate = (fields) => fields.map((f) => ({ ...f, ...typeOf(f, byKey) }));
 
+  // When the backend publishes an OpenAPI document it — not the markdown field
+  // lists — is the truth about the wire. The model still owns page structure,
+  // route shape, labels and [bracketed] hints; see openapi.js for the split.
+  const contract = openapiPath ? indexOpenApi(loadOpenApi(openapiPath)) : null;
+
   const commands = parseSections(read('commands.md')).map((s) => {
-    const fields = decorate(s.fields);
+    let fields = decorate(s.fields);
+    let endpoint = `/${s.id}`;
+    if (contract) {
+      const op = contract.commands.get(s.id);
+      if (!op) {
+        throw new Error(
+          `Command "${s.id}" has no POST /${s.id} in openapi.json. ` +
+            `The backend does not serve it — rebuild the service, or remove it from commands.md.`,
+        );
+      }
+      fields = mergeFields(op.fields, fields, `command ${s.id}`);
+      endpoint = op.endpoint;
+    }
     return {
       id: s.id,
       name: s.props.name || s.id,
       producesId: s.props.produces || null,
+      endpoint,
       // Bracketed fields are decided downstream (server side). A form only ever
       // collects the plain ones, so the split is part of the model, not a view concern.
       fields,
@@ -151,17 +170,41 @@ export function parseModel({ modelDir }) {
   });
   const commandById = new Map(commands.map((c) => [c.id, c]));
 
-  const readModels = parseSections(read('readmodels.md')).map((s) => ({
-    id: s.id,
-    name: s.props.name || s.id,
-    aggregate: s.aggregate,
-    keyed: s.keyed,
+  const readModels = parseSections(read('readmodels.md')).map((s) => {
+    let fields = decorate(s.fields);
     // A `:Key` read model is listable across aggregates -> the page renders a
     // collection. An `:Id` one is replayed for a single aggregate -> one object.
-    collection: Boolean(s.keyed),
-    subscribes: list(s.props.subscribes),
-    fields: decorate(s.fields),
-  }));
+    const collection = Boolean(s.keyed);
+    let endpoint = collection ? `/${s.id}` : `/${s.id}/{aggregateId}`;
+    if (contract) {
+      const op = contract.views.get(s.id);
+      if (!op) {
+        throw new Error(
+          `Read model "${s.id}" has no GET /${s.id} in openapi.json. ` +
+            `The backend does not serve it — rebuild the service, or remove it from readmodels.md.`,
+        );
+      }
+      if (op.collection !== collection) {
+        throw new Error(
+          `Read model "${s.id}" is declared \`${s.aggregate}:${s.keyed ? 'Key' : 'Id'}\` in readmodels.md ` +
+            `but openapi.json serves it as ${op.collection ? 'a collection' : 'a single aggregate'} ` +
+            `(GET ${op.endpoint}). The two sides disagree about the projection strategy.`,
+        );
+      }
+      fields = mergeFields(op.fields, fields, `read model ${s.id}`);
+      endpoint = op.endpoint;
+    }
+    return {
+      id: s.id,
+      name: s.props.name || s.id,
+      aggregate: s.aggregate,
+      keyed: s.keyed,
+      collection,
+      endpoint,
+      subscribes: list(s.props.subscribes),
+      fields,
+    };
+  });
   const readModelById = new Map(readModels.map((r) => [r.id, r]));
 
   const uis = parseSections(read('uis.md')).map((s) => ({
@@ -229,7 +272,8 @@ export function parseModel({ modelDir }) {
     pages,
     commands,
     readModels,
-    objectTypes,
+    objectTypes: contract ? contract.objectTypes : objectTypes,
+    contractSource: openapiPath,
     skipped: uis.filter((u) => u.type !== 'html'),
   };
 }

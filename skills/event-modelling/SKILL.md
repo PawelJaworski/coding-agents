@@ -391,14 +391,21 @@ focus. The layout never reflows on click.
 Each arrow also carries a `data-kind` attribute — `triggers` (UI→command),
 `produces` (command→event), `observes`/`observes-cmd` (event→read-model or
 event→system-command), or `displays` (read-model→UI) — so the traversal can
-distinguish edge semantics. UI cards are **terminal ancestors**: a UI is
-included in the upstream set via its `triggers` edge into the command it
-triggers, but the backward walk does **not** continue past a UI through its
-`displays` edge into whatever read model that UI happens to show — that's an
-unrelated causal chain. E.g. clicking a read model highlights the event that
-produced it, the command behind that event, and the UI card(s) that trigger
-that command, but not any *other* read model those UI cards happen to
-display.
+distinguish edge semantics. UI cards are **terminal ancestors**: a UI
+*reached as an ancestor of another card* is included in the upstream set via
+its `triggers` edge into the command it triggers, but the backward walk does
+**not** continue past it through its `displays` edge into whatever read model
+that UI happens to show — that's an unrelated causal chain. E.g. clicking a
+read model highlights the event that produced it, the command behind that
+event, and the UI card(s) that trigger that command, but not any *other* read
+model those UI cards happen to display.
+
+**Exception — the clicked card itself.** When the *start* of the walk is an
+output UI, its own `displays` edge **is** its causal chain and is followed.
+Clicking an output UI therefore highlights the read model it displays, the
+events feeding that read model, and the commands/UIs behind them — rather
+than dimming the entire diagram (which is what happens if a UI is treated as
+terminal even when it's the clicked card).
 
 ## Colors (reference palette)
 

@@ -32,9 +32,13 @@ An agent's only job here is what a machine cannot derive — how the page *looks
    ```
    node .opencode/skills/frontend-development/scripts/codegen
    ```
-   Reads `<docs>/{uis,commands,readmodels}.md`. Reports what it created / updated /
-   preserved / skipped. That is the complete inventory of frontend scaffolding — do not
-   add to it.
+   Reads `<docs>/{uis,commands,readmodels}.md` for structure and the backend's
+   `openapi.json` (config key `openapiPath`) for the wire contract. Reports what it
+   created / updated / preserved / skipped, and which contract source it used. That
+   is the complete inventory of frontend scaffolding — do not add to it.
+
+   `openapi.json` is a build artefact of the backend repo. **Rebuild the service
+   before regenerating**, or you generate against a stale contract.
 
 2. **Read the output, not the codebase.** The generator tells you every file it touched.
    You do NOT need to explore `src/app` to learn which pages exist, what a component is
@@ -43,7 +47,8 @@ An agent's only job here is what a machine cannot derive — how the page *looks
 
 3. **Stop if the model is wrong.** The generator fails loudly with a `MODEL ERROR`
    (a UI triggering an unknown command, a `ConsistsOf:` naming a read model that does not
-   exist, two UIs collapsing to the same folder). That is a defect in the event model,
+   exist, two UIs collapsing to the same folder, or a `CONTRACT DRIFT` between the model
+   and `openapi.json`). That is a defect in the event model or a stale backend build,
    owned by the architect. Escalate — never work around it in code.
 
 4. **Wire the routes once.** `app.routes.ts` is yours, so the generator only warns. Spread
@@ -85,18 +90,37 @@ Per `Type: html` UI, in `src/app/pages/<ui-id>/`:
 Plus one `src/app/pages/pages.routes.ts` (GENERATED) holding every page route.
 
 # The API contract is derived, not written
-The backend generator emits, from the same model:
+The backend publishes `openapi.json`; `openapiPath` in `fecodegen.config.json` points
+at it. That document — what the service *actually serves* — decides every property
+name, every property type and every URL:
 
 | model element | endpoint | response |
 |---|---|---|
-| command `<id>` | `POST <apiBase>/<id>`, body = the `Cmd` record | the new aggregate id |
+| command `<id>` | `POST <apiBase>/<id>`, body = the request-body schema | the new aggregate id |
 | read model `<agg>:Key` | `GET <apiBase>/<id>` | `View[]` (listable across aggregates) |
 | read model `<agg>:Id` | `GET <apiBase>/<id>/{aggregateId}` | one `View` |
 
-`<id>.api.ts` mirrors that one-for-one, and `<id>.contracts.ts` mirrors the `Cmd` record
-component-for-component, so the two sides cannot drift without the model changing. **Never
-write a URL string in a store or a spec** — import the endpoint constant. A literal drifts
-silently; the constant cannot.
+The two sources split cleanly, and neither can cover for the other:
+
+| `openapi.json` decides | the event model decides |
+|---|---|
+| property names and types (incl. nested objects, arrays, numbers) | which UIs exist, what each triggers and renders |
+| the URL of every operation | `:Key` vs `:Id`, and therefore the route shape |
+| | human labels used in forms and tables |
+| | `[bracketed]` — a server-side decision, never a form input |
+
+**Never write a URL string in a store or a spec** — import the endpoint constant.
+A literal drifts silently; the constant cannot.
+
+## Drift is an error, not something to absorb
+- a command or read model with no matching operation -> the backend does not serve it
+- a field present on one side only -> `CONTRACT DRIFT`, both directions listed
+- `:Key` in `readmodels.md` but aggregate-scoped in the document -> the sides
+  disagree about the projection strategy
+
+All three are `MODEL ERROR`s. The usual cause is a **stale `openapi.json`** — it is a
+build artefact of the backend repo. Rebuild the service first; only then suspect the
+model. Never work around it in code.
 
 # Where the seam is now
 `*Store` is the frontend's `*Decider`, but unlike a decider it is scaffolded *working*: it
@@ -130,15 +154,23 @@ a backend-rendered document, not a screen. Do not create a page for it.
 The generator is domain-agnostic. A project needs one thing at its root:
 ```json
 // fecodegen.config.json
-{ "modelDir": "../docs", "pagesRoot": "src/app/pages", "apiBase": "/api" }
+{
+  "modelDir": "../docs",
+  "pagesRoot": "src/app/pages",
+  "apiBase": "/api",
+  "openapiPath": "../insurance-company-service/api/openapi.json"
+}
 ```
-(`appRoot` defaults to `src/app`.) The app also needs `provideHttpClient()` in
-`app.config.ts` — the generated API clients inject `HttpClient`.
+(`appRoot` defaults to `src/app`. Omitting `openapiPath` falls back to typing fields
+from `business-definitions-raw.md` — weaker, since it can only guess `string` and
+`string[]`.) The app also needs `provideHttpClient()` in `app.config.ts` — the
+generated API clients inject `HttpClient`.
 
-`apiBase` must land on the backend's controller paths. The generated Spring mappings have
-no prefix (`@PostMapping("issue-policy")`), so with the usual dev setup —
-`proxy.conf.json` rewriting `^/api` to `` against `localhost:8080` — `apiBase: "/api"` is
-correct. If the backend gains a context path, change `apiBase`, not the generated calls.
+`apiBase` is prefixed to the paths taken from `openapi.json`. The generated Spring
+mappings have no prefix (`@PostMapping("issue-policy")`), so with the usual dev setup —
+`proxy.conf.json` rewriting `^/api` to `` against `localhost:8080` — `apiBase: "/api"`
+is correct. If the backend gains a context path, change `apiBase`, not the generated
+calls.
 
 Run the generator's own tests with
 `node --test .opencode/skills/frontend-development/scripts/codegen/codegen.test.js`.

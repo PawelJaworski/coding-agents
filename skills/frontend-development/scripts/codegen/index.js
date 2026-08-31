@@ -20,6 +20,10 @@ const DEFAULTS = {
   appRoot: 'src/app',
   pagesRoot: 'src/app/pages',
   apiBase: '/api',
+  // The backend's published contract. When set, it is the truth about field
+  // names, field types and URLs; the event model keeps owning page structure,
+  // route shape, labels and [bracketed] hints. Unset -> markdown-only, as before.
+  openapiPath: null,
 };
 
 const args = process.argv.slice(2);
@@ -57,11 +61,13 @@ if (!projectRoot) {
 
 const config = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(path.join(projectRoot, CONFIG_FILE), 'utf8')) };
 const modelDir = path.resolve(projectRoot, flag('model') || config.modelDir);
+const openapiRef = flag('openapi') || config.openapiPath;
+const openapiPath = openapiRef ? path.resolve(projectRoot, openapiRef) : null;
 
 let model;
 let files;
 try {
-  model = parseModel({ modelDir });
+  model = parseModel({ modelDir, openapiPath });
   if (args.includes('--json')) {
     console.log(JSON.stringify(model, null, 2));
     process.exit(0);
@@ -135,4 +141,7 @@ console.log(
   `\n  ${model.pages.length} page(s) from ${model.uis.length} UI(s) — ` +
     `${written.length} written, ${preserved.length} preserved, ` +
     `${files.length - written.length - preserved.length} unchanged`,
+);
+console.log(
+  `  contracts from ${openapiPath ? path.relative(projectRoot, openapiPath) : 'the event model (no openapiPath configured)'}`,
 );

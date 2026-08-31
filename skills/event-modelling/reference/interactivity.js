@@ -23,17 +23,23 @@
  * "observes-cmd" edges), i.e. its ancestors, never its descendants/
  * downstream siblings.
  *
- * UI cards are treated as TERMINAL ancestors: a UI is included in the
- * upstream set (via the "triggers" edge from that UI to the command it
- * triggers), but traversal does NOT continue backward past a UI through
- * its "displays" edge (read-model -> UI, i.e. "this UI happens to show
- * that read model"). Which read model a UI displays is a separate,
- * unrelated causal chain from what command that UI triggers, so walking
- * backward through "displays" would incorrectly pull in an unconnected
- * upstream slice. Concretely: clicking a read model highlights the event
- * that produced it, the command that produced that event, and the UI
- * card(s) that trigger that command — but not whatever read model those
- * UI cards happen to display.
+ * UI cards are treated as TERMINAL ancestors: a UI reached as an ancestor
+ * of some other card is included in the upstream set (via the "triggers"
+ * edge from that UI to the command it triggers), but traversal does NOT
+ * continue backward past it through its "displays" edge (read-model -> UI,
+ * i.e. "this UI happens to show that read model"). Which read model a UI
+ * displays is a separate, unrelated causal chain from what command that UI
+ * triggers, so walking backward through "displays" would incorrectly pull
+ * in an unconnected upstream slice. Concretely: clicking a read model
+ * highlights the event that produced it, the command that produced that
+ * event, and the UI card(s) that trigger that command — but not whatever
+ * read model those UI cards happen to display.
+ *
+ * EXCEPTION — the clicked card itself: when the START of the walk is an
+ * output UI, its own "displays" edge IS its causal chain, so it is
+ * followed. Clicking an output UI therefore highlights the read model it
+ * displays, the events feeding that read model, and the commands/UIs
+ * behind them — instead of dimming the entire diagram.
  */
 var EDGES=[];
 document.querySelectorAll('[data-from]').forEach(function(l){
@@ -43,18 +49,25 @@ var focused=null;
 function connectedSet(startId){
   // Upstream-only: walk backwards along data-from -> data-to edges,
   // i.e. from startId to whatever produced it (ancestors), never forwards
-  // to what it produces (descendants). UI cards are included as ancestors
-  // (via their "triggers" edge into a command) but are treated as a
-  // stopping point: we do not continue backward through a "displays"
-  // edge (read-model -> UI) into whatever read model feeds that UI, since
-  // that belongs to a separate causal chain.
+  // to what it produces (descendants). A UI reached as an ancestor is a
+  // stopping point: we do not continue backward through its "displays"
+  // edge (read-model -> UI) into whatever read model feeds it, since that
+  // belongs to a separate causal chain. The clicked card is the exception:
+  // an output UI's own "displays" edge is its own causal chain and IS
+  // followed.
   var seen={}; seen[startId]=true;
   var queue=[startId];
   while(queue.length){
     var id=queue.shift();
     EDGES.forEach(function(e){
-      if(e[1]===id && e[2]==='displays') return; // don't walk past a UI's Displays edge
-      if(e[1]===id && !seen[e[0]]){seen[e[0]]=true;queue.push(e[0]);}
+      if(e[1]!==id) return;
+      // Don't walk PAST a UI's "displays" edge when the UI was merely reached
+      // as an ancestor of something else. But when the clicked card IS the
+      // output UI itself, its "displays" edge is exactly its own causal chain,
+      // so it must be followed — otherwise clicking an output UI dims
+      // everything, including its genuine upstream read model/events/commands.
+      if(e[2]==='displays' && id!==startId) return;
+      if(!seen[e[0]]){seen[e[0]]=true;queue.push(e[0]);}
     });
   }
   return seen;

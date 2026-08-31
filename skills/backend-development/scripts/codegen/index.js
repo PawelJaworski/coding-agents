@@ -14,6 +14,7 @@ import path from 'node:path';
 import { parseModel } from './parse.js';
 import { emit } from './emit.js';
 import { parseScaffoldVersion, stampScaffoldVersion, misplacedSpecs } from './scaffold.js';
+import { mergeGenerated } from './merge.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
@@ -115,6 +116,7 @@ const preserved = [];
 const stale = [];
 const staleScaffold = [];
 const restamped = [];
+const needsManualMerge = [];
 
 for (const file of files) {
   const root = file.test ? testRoot : mainRoot;
@@ -143,7 +145,36 @@ for (const file of files) {
     preserved.push(rel);
     continue;
   }
-  if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === file.content) continue;
+
+  // GENERATED files are ADD-ONLY once they exist: a fresh member (a new record
+  // component, enum constant, or class member — the model grew) is inserted; an
+  // existing member is NEVER rewritten or removed, even if the model's version
+  // of it now differs — that's exactly the room a hand-added extension (e.g. a
+  // search endpoint on a persisting projector) needs to survive regeneration.
+  if (!file.once && exists) {
+    const current = fs.readFileSync(target, 'utf8');
+    if (current === file.content) {
+      preserved.push(rel);
+      continue;
+    }
+    const merged = mergeGenerated(current, file.content);
+    if (merged === null) {
+      needsManualMerge.push(rel);
+      preserved.push(rel);
+      continue;
+    }
+    if (merged.added.length === 0) {
+      preserved.push(rel);
+      continue;
+    }
+    if (check) {
+      stale.push(`${rel}  (would add: ${merged.added.join(', ')})`);
+      continue;
+    }
+    fs.writeFileSync(target, merged.content);
+    written.push(`merged   ${rel}  (added: ${merged.added.join(', ')})`);
+    continue;
+  }
 
   if (check) {
     stale.push(rel);
@@ -151,7 +182,7 @@ for (const file of files) {
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, file.content);
-  written.push(`${exists ? 'updated' : 'created'}  ${rel}`);
+  written.push(`created  ${rel}`);
 }
 
 // Reported separately from `stale`: these are YOURS, so the fix is a hand-ported
@@ -170,6 +201,22 @@ function reportStaleScaffold() {
   );
 }
 
+// A GENERATED file the merge step doesn't recognise the shape of (not a single
+// top-level record/class/interface/enum). Overwriting could destroy a hand
+// extension, so the generator refuses and asks a human to reconcile it.
+function reportNeedsManualMerge() {
+  console.error(
+    `\n  NEEDS MANUAL MERGE  ${needsManualMerge.length} generated file(s) differ from the model\n` +
+      `  in a shape the generator doesn't know how to merge safely:`,
+  );
+  needsManualMerge.forEach((f) => console.error(`    ${f}`));
+  console.error(
+    `\n  The generator only adds missing record components / enum constants / class\n` +
+      `  members — it never rewrites what's there. This file's structure doesn't match\n` +
+      `  that (e.g. more than one top-level type). Reconcile it by hand.\n`,
+  );
+}
+
 if (check) {
   if (stale.length) {
     console.error(`\n  OUT OF DATE  ${stale.length} generated file(s) differ from the model:`);
@@ -177,7 +224,8 @@ if (check) {
     console.error(`\n  Run the codegen script to refresh them.\n`);
   }
   if (staleScaffold.length) reportStaleScaffold();
-  if (stale.length || staleScaffold.length) process.exit(1);
+  if (needsManualMerge.length) reportNeedsManualMerge();
+  if (stale.length || staleScaffold.length || needsManualMerge.length) process.exit(1);
   console.log('codegen: up to date');
   process.exit(0);
 }
@@ -188,7 +236,7 @@ if (restamped.length) {
   restamped.forEach((s) => console.log(`    ${s}`));
 }
 if (preserved.length) {
-  console.log(`\n  kept (yours, scaffolded once):`);
+  console.log(`\n  kept (yours, scaffolded once / hand-extended):`);
   preserved.forEach((s) => console.log(`    ${s}`));
 }
 console.log(
@@ -197,5 +245,9 @@ console.log(
 );
 if (staleScaffold.length) {
   reportStaleScaffold();
+  process.exit(1);
+}
+if (needsManualMerge.length) {
+  reportNeedsManualMerge();
   process.exit(1);
 }

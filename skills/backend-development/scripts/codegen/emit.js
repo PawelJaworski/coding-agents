@@ -30,14 +30,59 @@ const importBlock = (imports) =>
 
 const components = (fields) => fields.map((f) => `${f.javaType} ${f.name}`).join(', ');
 
+// --- collaborators -----------------------------------------------------------
+// A collaborator is a constructor dependency of a generated class. The generator
+// knows only three things about one: what to declare as a field, how a TEST
+// instantiates it, and (optionally) a file to scaffold for it.
+//
+// It deliberately does NOT know what the dependency MEANS. "Decider" is not a
+// concept here — it is merely the collaborator the [bracket] convention happens
+// to produce today. A validator, a clock, a sequence or an ID generator would be
+// added as another producer of this same shape, touching no emitter and no
+// call site, because every emitter below consumes the LIST, never a named flag.
+//
+//   fieldName          constructor field name (Lombok @RequiredArgsConstructor
+//                      derives the ctor signature from declaration order)
+//   className          declared type
+//   testInstantiation  expression a *Ability uses to build/obtain it. Varies by
+//                      kind — `new FooDecider()` for a fresh instance, a shared
+//                      static like `FooAbility.FOO_REPOSITORY` for a registered
+//                      one — which is exactly why this is per-collaborator data
+//                      and not a rule baked into the ability emitter.
+//   imports            imports the declaration needs (may be empty/same package)
+//   scaffold           optional () => file, emitted alongside the owner
+const collaborator = ({ fieldName, className, testInstantiation, imports = [], scaffold = null }) => ({
+  fieldName,
+  className,
+  testInstantiation,
+  imports,
+  scaffold,
+});
+
+const fieldDeclarations = (collaborators) =>
+  collaborators.map((c) => `    private final ${c.className} ${c.fieldName};`).join('\n');
+
+const constructorArgs = (collaborators) =>
+  collaborators.map((c) => c.testInstantiation).join(', ');
+
+const collaboratorImports = (collaborators) => collaborators.flatMap((c) => c.imports);
+
+const collaboratorScaffolds = (collaborators) =>
+  collaborators.filter((c) => c.scaffold).map((c) => c.scaffold());
+
 // --- expression resolution for a target field --------------------------------
-// This is where the [bracket] convention pays off: everything derivable is derived,
-// everything decided is delegated to the once-scaffolded decider and throws until
-// a GWT scenario forces it into existence.
-function resolveArg(field, { sourceFields, sourceExpr, deciderVar, deciderArgs = '', fallback }) {
+// This is where the [bracket] convention pays off: everything derivable is
+// derived; anything that is not is DELEGATED to a collaborator. `delegate`
+// names the collaborator field and the arguments to pass it — the resolver
+// itself has no notion of what that collaborator is for.
+function resolveArg(field, { sourceFields, sourceExpr, delegate, fallback }) {
   if (field.convention) return { expr: field.conventionExpr, imports: field.imports };
   if (field.bracketed) {
-    return { expr: `${deciderVar}.${field.name}(${deciderArgs})`, imports: [], decided: true };
+    return {
+      expr: `${delegate.fieldName}.${field.name}(${delegate.args ?? ''})`,
+      imports: [],
+      delegated: true,
+    };
   }
   const match = sourceFields.find((f) => f.name === field.name);
   if (match) return { expr: `${sourceExpr}.${field.name}()`, imports: [] };
@@ -122,13 +167,27 @@ public record ${c.className}(${components(c.fields)}) {
 function commandHandler(c, e, base) {
   const args = [];
   const extraImports = [];
-  let needsDecider = false;
 
+  const eventStream = collaborator({
+    fieldName: 'eventStream',
+    className: 'EventStream',
+    testInstantiation: 'EventStreamAbility.INSTANCE',
+    imports: [`${base}.eventstream.EventStream`],
+  });
+  // Produced by the [bracket] convention, consumed as a plain collaborator.
+  const decider = collaborator({
+    fieldName: 'decider',
+    className: c.deciderClassName,
+    testInstantiation: `new ${c.deciderClassName}()`,
+    scaffold: () => commandDecider(c, e),
+  });
+
+  let delegated = false;
   for (const f of e.fields) {
     const r = resolveArg(f, {
       sourceFields: c.fields,
       sourceExpr: 'command',
-      deciderVar: 'decider',
+      delegate: decider,
     });
     if (!r) {
       throw new Error(
@@ -136,14 +195,14 @@ function commandHandler(c, e, base) {
           `and is not [bracketed]. Either add it to the command or bracket it.`,
       );
     }
-    if (r.decided) needsDecider = true;
+    if (r.delegated) delegated = true;
     extraImports.push(...r.imports);
     args.push(r.expr);
   }
 
   // Lombok writes the constructor from the final fields, in declaration order — the
   // same signature the generated abilities call, with none of the boilerplate.
-  const deciderField = needsDecider ? `\n    private final ${c.deciderClassName} decider;` : '';
+  const collaborators = delegated ? [eventStream, decider] : [eventStream];
 
   const imports = importBlock([
     'java.util.List',
@@ -155,8 +214,8 @@ function commandHandler(c, e, base) {
     'org.springframework.web.bind.annotation.RequestBody',
     'org.springframework.web.bind.annotation.RestController',
     `${base}.eventstream.CommandHandler`,
-    `${base}.eventstream.EventStream`,
     `${e.package}.${e.className}`,
+    ...collaboratorImports(collaborators),
     ...extraImports,
   ]);
 
@@ -176,7 +235,7 @@ ${imports}
 @RequiredArgsConstructor
 public class ${c.handlerClassName} implements CommandHandler<${c.className}> {
 
-    private final EventStream eventStream;${deciderField}
+${fieldDeclarations(collaborators)}
 
     @PostMapping("${c.postMapping}")
     @Override
@@ -189,7 +248,7 @@ ${argList})));
     }
 }
 `,
-    needsDecider,
+    collaborators,
   };
 }
 
@@ -241,18 +300,31 @@ ${imports ? imports + '\n\n' : ''}public record ${rm.className}(${components(rm.
 
 function projector(rm, eventsById, base) {
   const extraImports = [];
-  let needsDecider = false;
+
+  const eventStream = collaborator({
+    fieldName: 'eventStream',
+    className: 'EventStream',
+    testInstantiation: 'EventStreamAbility.INSTANCE',
+    imports: [`${base}.eventstream.EventStream`],
+  });
+  const decider = collaborator({
+    fieldName: 'decider',
+    className: rm.deciderClassName,
+    testInstantiation: `new ${rm.deciderClassName}()`,
+    scaffold: () => projectionDecider(rm, eventsById),
+  });
+
+  let delegated = false;
   const applies = rm.subscribes.map((eid) => {
     const e = eventsById.get(eid);
     const args = rm.fields.map((f) => {
       const r = resolveArg(f, {
         sourceFields: e.fields,
         sourceExpr: 'event',
-        deciderVar: 'decider',
-        deciderArgs: 'state, event',
+        delegate: { ...decider, args: 'state, event' },
         fallback: (field) => `state == null ? null : state.${field.name}()`,
       });
-      if (r.decided) needsDecider = true;
+      if (r.delegated) delegated = true;
       extraImports.push(...r.imports);
       return r.expr;
     });
@@ -264,7 +336,7 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     }`;
   });
 
-  const deciderField = needsDecider ? `\n    private final ${rm.deciderClassName} decider;` : '';
+  const collaborators = delegated ? [eventStream, decider] : [eventStream];
 
   const imports = importBlock([
     'java.util.UUID',
@@ -273,8 +345,8 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     'org.springframework.web.bind.annotation.GetMapping',
     'org.springframework.web.bind.annotation.PathVariable',
     'org.springframework.web.bind.annotation.RestController',
-    `${base}.eventstream.EventStream`,
     `${base}.eventstream.StateProjector`,
+    ...collaboratorImports(collaborators),
     ...extraImports,
   ]);
 
@@ -282,7 +354,7 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     package: rm.package,
     className: rm.projectorClassName,
     overwrite: true,
-    needsDecider,
+    collaborators,
     content: `${HEADER('readmodels.md + events.md')}package ${rm.package};
 
 ${imports}
@@ -292,7 +364,7 @@ ${imports}
 @RequiredArgsConstructor
 public class ${rm.projectorClassName} implements StateProjector<${rm.className}> {
 
-    private final EventStream eventStream;${deciderField}
+${fieldDeclarations(collaborators)}
 
     @GetMapping("${rm.getMapping}")
     public ${rm.className} ${rm.getterMethod}(@PathVariable UUID aggregateId) {
@@ -519,8 +591,7 @@ public interface EventStreamAbility {
   };
 }
 
-function commandAbility(c, base, needsDecider) {
-  const deciderArg = needsDecider ? `, new ${c.deciderClassName}()` : '';
+function commandAbility(c, base, collaborators) {
   return {
     test: true,
     package: c.package,
@@ -538,7 +609,7 @@ public interface ${c.abilityClassName} extends EventStreamAbility {
 
     // Qualify when you need the instance itself: ${c.abilityClassName}.INSTANCE
     ${c.handlerClassName} INSTANCE =
-            new ${c.handlerClassName}(EventStreamAbility.INSTANCE${deciderArg});
+            new ${c.handlerClassName}(${constructorArgs(collaborators)});
 
     default ${c.handlerClassName} get${c.handlerClassName}() {
         return ${c.abilityClassName}.INSTANCE;
@@ -555,8 +626,7 @@ public interface ${c.abilityClassName} extends EventStreamAbility {
   };
 }
 
-function projectorAbility(rm, base, needsDecider) {
-  const deciderArg = needsDecider ? `, new ${rm.deciderClassName}()` : '';
+function projectorAbility(rm, base, collaborators) {
   return {
     test: true,
     package: rm.package,
@@ -574,7 +644,7 @@ public interface ${rm.abilityClassName} extends EventStreamAbility {
 
     // Qualify when you need the instance itself: ${rm.abilityClassName}.INSTANCE
     ${rm.projectorClassName} INSTANCE =
-            new ${rm.projectorClassName}(EventStreamAbility.INSTANCE${deciderArg});
+            new ${rm.projectorClassName}(${constructorArgs(collaborators)});
 
     default ${rm.projectorClassName} get${rm.projectorClassName}() {
         return ${rm.abilityClassName}.INSTANCE;
@@ -728,19 +798,34 @@ public class ${rm.inMemoryRepositoryClassName} implements ${rm.repositoryClassNa
 
 function persistingProjector(rm, eventsById, base) {
   const extraImports = [];
-  let needsDecider = false;
 
+  // The repository is a collaborator like any other — note its
+  // testInstantiation is a shared registered static, not `new ...()`. Before
+  // collaborators were a list, this difference forced it to be special-cased
+  // separately from the decider in every emitter.
+  const repository = collaborator({
+    fieldName: 'repository',
+    className: rm.repositoryClassName,
+    testInstantiation: `${rm.abilityClassName}.${rm.repositoryConstant}`,
+  });
+  const decider = collaborator({
+    fieldName: 'decider',
+    className: rm.deciderClassName,
+    testInstantiation: `new ${rm.deciderClassName}()`,
+    scaffold: () => projectionDecider(rm, eventsById),
+  });
+
+  let delegated = false;
   const applies = rm.subscribes.map((eid) => {
     const e = eventsById.get(eid);
     const args = rm.fields.map((f) => {
       const r = resolveArg(f, {
         sourceFields: e.fields,
         sourceExpr: 'event',
-        deciderVar: 'decider',
-        deciderArgs: 'state, event',
+        delegate: { ...decider, args: 'state, event' },
         fallback: (field) => `state == null ? null : state.${field.name}()`,
       });
-      if (r.decided) needsDecider = true;
+      if (r.delegated) delegated = true;
       extraImports.push(...r.imports);
       return r.expr;
     });
@@ -756,7 +841,7 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     }`;
   });
 
-  const deciderField = needsDecider ? `\n    private final ${rm.deciderClassName} decider;` : '';
+  const collaborators = delegated ? [repository, decider] : [repository];
 
   const imports = importBlock([
     'java.util.List',
@@ -768,6 +853,7 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     `${base}.eventstream.DomainEvent`,
     `${base}.eventstream.PersistingProjector`,
     `${base}.eventstream.StateProjector`,
+    ...collaboratorImports(collaborators),
     ...extraImports,
   ]);
 
@@ -775,7 +861,7 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     package: rm.package,
     className: rm.projectorClassName,
     overwrite: true,
-    needsDecider,
+    collaborators,
     content: `${HEADER('readmodels.md + events.md')}package ${rm.package};
 
 ${imports}
@@ -786,7 +872,7 @@ ${imports}
 public class ${rm.projectorClassName}
         implements StateProjector<${rm.className}>, PersistingProjector {
 
-    private final ${rm.repositoryClassName} repository;${deciderField}
+${fieldDeclarations(collaborators)}
 
     @GetMapping("${rm.getMapping}")
     public List<${rm.className}> ${rm.getterMethod}() {
@@ -811,8 +897,7 @@ ${applies.join('\n\n')}
   };
 }
 
-function persistingProjectorAbility(rm, base, needsDecider) {
-  const deciderArg = needsDecider ? `, new ${rm.deciderClassName}()` : '';
+function persistingProjectorAbility(rm, base, collaborators) {
   return {
     test: true,
     package: rm.package,
@@ -835,7 +920,7 @@ public interface ${rm.abilityClassName} extends EventStreamAbility {
 
     // Qualify when you need the instance itself: ${rm.abilityClassName}.INSTANCE
     ${rm.projectorClassName} INSTANCE = EventStreamAbility.register(
-            new ${rm.projectorClassName}(${rm.abilityClassName}.${rm.repositoryConstant}${deciderArg}),
+            new ${rm.projectorClassName}(${constructorArgs(collaborators)}),
             ${rm.abilityClassName}.${rm.repositoryConstant}::deleteAll);
 
     default ${rm.projectorClassName} get${rm.projectorClassName}() {
@@ -869,12 +954,16 @@ export function emit(model) {
   files.push(serde(model.events, base));
   files.push(eventStreamAbility(base));
 
+  // A slice emits its owner, whatever files its collaborators bring with them,
+  // and its ability — with no branch anywhere on what KIND of collaborator it
+  // is. A new collaborator kind plugs in by being produced above; nothing here
+  // changes.
   for (const c of model.commands) {
     const e = eventsById.get(c.producesId);
     const handler = commandHandler(c, e, base);
     files.push(command(c), handler);
-    if (handler.needsDecider) files.push(commandDecider(c, e));
-    files.push(commandAbility(c, base, handler.needsDecider));
+    files.push(...collaboratorScaffolds(handler.collaborators));
+    files.push(commandAbility(c, base, handler.collaborators));
   }
 
   for (const rm of model.readModels) {
@@ -888,15 +977,27 @@ export function emit(model) {
         readModelInMemoryRepository(rm),
         p,
       );
-      if (p.needsDecider) files.push(projectionDecider(rm, eventsById));
-      files.push(persistingProjectorAbility(rm, base, p.needsDecider));
+      files.push(...collaboratorScaffolds(p.collaborators));
+      files.push(persistingProjectorAbility(rm, base, p.collaborators));
       continue;
     }
     const p = projector(rm, eventsById, base);
     files.push(readModel(rm), p);
-    if (p.needsDecider) files.push(projectionDecider(rm, eventsById));
-    files.push(projectorAbility(rm, base, p.needsDecider));
+    files.push(...collaboratorScaffolds(p.collaborators));
+    files.push(projectorAbility(rm, base, p.collaborators));
   }
 
   return files;
 }
+
+// Exported for unit tests. The collaborator helpers are the generic seam that
+// replaced the old `needsDecider` flag, so they are worth pinning down: a
+// regression here silently changes every generated constructor signature.
+export {
+  collaborator,
+  fieldDeclarations,
+  constructorArgs,
+  collaboratorImports,
+  collaboratorScaffolds,
+  resolveArg,
+};

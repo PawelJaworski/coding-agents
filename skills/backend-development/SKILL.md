@@ -61,6 +61,29 @@ scaffolding.
 `*Decider` classes are the ONLY place business logic lives. They are scaffolded once, with
 one `UnsupportedOperationException` stub per `[bracketed]` model field.
 
+## STALE SCAFFOLD — a `once` file that predates its template
+`once` files are never rewritten, so when a runtime template gains a new contract, a
+project scaffolded earlier keeps the old code and the build breaks in a GENERATED caller,
+far from the cause. Every `once` file therefore carries `// scaffold-version: N`, and the
+generator compares it to the template:
+
+```
+STALE SCAFFOLD  1 once-owned file(s) predate the current template:
+  src/.../DomainEventEntity.java  (on disk: v0, template: v2)
+```
+
+This FAILS `--check`. Re-running the generator does nothing — the file is yours. Diff it
+against its template in `scripts/codegen/runtime.js`, port the delta by hand, then record
+the reconciliation:
+
+```
+node .opencode/skills/backend-development/scripts/codegen --accept-scaffold
+```
+
+`--accept-scaffold` only rewrites the version marker; it never touches the body, so
+hand-written logic is safe. Bump a template's version in `runtime.js` whenever you change
+a contract that generated code depends on.
+
 # Why brackets matter
 Everything derivable is derived. A field that flows command -> event -> read model is wired
 automatically by name. A `[bracketed]` field has no upstream source, so it must be *decided* —

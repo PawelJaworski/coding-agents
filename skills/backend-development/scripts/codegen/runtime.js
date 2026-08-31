@@ -5,16 +5,32 @@
 // They are all `once: true`: scaffolded when absent, then owned by the project.
 // The model-dependent parts of the runtime (DomainEventType, StateProjector,
 // DomainEventSerdeWrapper, DomainEventSerde) live in emit.js and ARE regenerated.
+//
+// VERSIONING — read before editing a template below.
+// Because `once` files are never rewritten, a project scaffolded from an older
+// version of this file keeps the old code forever, and the resulting breakage
+// surfaces in a GENERATED caller rather than here. So: whenever you change a
+// template's contract (a constructor signature, a method a generated file
+// calls), BUMP that entry's version. The generator then reports the drift and
+// fails `--check` instead of letting the project discover it via javac.
+//
+// History:
+//   EventStreamImpl   v2 - takes Collection<PersistingProjector>; pushes each
+//                          appended event to persisting projections.
+//   DomainEventEntity v2 - serialize() delegates to the GENERATED
+//                          DomainEventSerde instead of an inlined switch.
 
-const HEADER =
+const HEADER = (version) =>
   `// SCAFFOLDED ONCE by the backend codegen — this file is YOURS.\n` +
+  `// scaffold-version: ${version}\n` +
   `// Domain-independent event-sourcing runtime; adapt it freely.\n`;
 
-const file = (base, pkg, className, body) => ({
+const file = (base, pkg, className, body, version = 1) => ({
   once: true,
+  version,
   package: `${base}.${pkg}`,
   className,
-  content: `${HEADER}package ${base}.${pkg};\n\n${body}`,
+  content: `${HEADER(version)}package ${base}.${pkg};\n\n${body}`,
 });
 
 export function runtimeFiles(base) {
@@ -106,7 +122,7 @@ public class EventStreamImpl implements EventStream {
                 .toList();
     }
 }
-`),
+`, 2),
 
     file(base, 'infrastructure', 'DomainEventRepository', `import java.util.List;
 import java.util.Optional;
@@ -221,6 +237,6 @@ public class DomainEventEntity {
         return eventJson.event();
     }
 }
-`),
+`, 2),
   ];
 }

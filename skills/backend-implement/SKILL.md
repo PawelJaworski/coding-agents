@@ -9,7 +9,9 @@ description: >
   # When to use
   Use after scaffolding has been generated (see backend-development), when a
   `<docs>/gwt-*.md` scenario must be turned into working behavior. One invocation per
-  scenario.
+  scenario. Also use for a small ad-hoc implementation improvement that needs NO model
+  change and has no GWT file — a search criterion, a repository query, an endpoint
+  filter or sort over fields a read model already has.
   # **Important** This skill is parametrized
   * parameters: <docs> is passed from outside. You have to know it before starting.
 ---
@@ -22,6 +24,17 @@ description: >
 Do NOT read `commands.md`, `events.md`, `readmodels.md`, the whole `src/` tree, or any
 other slice. The scaffolding is already correct by construction; re-deriving it wastes
 context and risks contradicting the generator.
+
+# Two kinds of work
+| you were asked to | path |
+|---|---|
+| implement a `<docs>/gwt-*.md` scenario | the flow below — logic lands in a `*Decider` |
+| add a query/filter/sort/search over fields a read model ALREADY has | **ad-hoc extension** — same red/green discipline, but logic lands in the slice's projector/repository. See `.opencode/skills/backend-development/reference/ad-hoc-extensions.md` |
+
+An ad-hoc improvement has no GWT file, so its spec name is plainly descriptive instead
+of a scenario heading, and it needs no `[bracketed]` field and therefore no decider. It
+is still test-first. Anything that would require a new *field* or a new *event* is a
+model change, not ad-hoc — escalate.
 
 # Flow — red, then green, nothing else
 
@@ -36,6 +49,27 @@ context and risks contradicting the generator.
   - projector DSL: `expect_policy_document(id) { it.policyNumber() == "P-1" }`
   - `reset_event_stream()` in `setup()` — abilities share a static in-memory stream.
 - Groovy note: Lombok builders are fluent, so write `it.field("v")`, not `it.field = "v"`.
+
+### `reset_event_stream()` does NOT reset decider state
+It clears the event stream and the registered projections — nothing else. A `*Decider`
+holding a sequence or counter is shared across every spec via the static ability
+instance, so a new spec that issues commands silently perturbs an already-green one and
+the failure surfaces as test *ordering*:
+
+```
+Condition not satisfied:
+expect_policy_details(firstId) { it.policyNumber() == "P-1" }   // got P-4
+```
+
+If a decider is stateful, give it an explicit reset (it is yours) and call it in
+`setup()` in **every** spec exercising that slice:
+
+```groovy
+def setup() {
+    reset_event_stream()
+    IssuePolicyDecider.reset()
+}
+```
 
 Run it. It MUST compile. A red-but-compiling test here is the expected state.
 
@@ -62,10 +96,17 @@ naming the GWT scenario that justifies it.
 Lombok failures. Then `node .opencode/skills/backend-development/scripts/codegen --check` must still report `up to date`.
 
 # Hard boundaries
-- **Never edit a `// GENERATED ... DO NOT EDIT` file.** If one looks wrong, the MODEL is
-  wrong — escalate to the architect. Editing it is pointless; the next run overwrites it.
+- **Never rewrite an existing member of a `// GENERATED ... DO NOT EDIT` file.** Changing
+  a generated method's signature or body is not preserved intent — and it breaks the
+  generated `*Ability` that calls it, far from your edit. If a generated member looks
+  wrong, the MODEL is wrong — escalate to the architect.
+  *Adding* a member to a generated projector/repository for an ad-hoc extension IS
+  allowed and survives regeneration; see `reference/ad-hoc-extensions.md`.
 - **Never write scaffolding.** No new commands, events, read models, handlers, projectors,
-  abilities or serde wrappers. If something is missing, the model is missing it.
+  abilities or serde wrappers. A missing command/event/read model means the model is
+  missing it — escalate. (A missing *query* over existing fields is ad-hoc, not missing
+  scaffolding.)
+- **Never edit a generated `*Ability`.** That fails `--check`.
 - **Never edit the event-modelling docs or the GWT files.**
 - If the scenario cannot be satisfied by a decision in a decider — because it needs a field
   the model does not have, or the business intent is ambiguous — STOP and escalate. Do not

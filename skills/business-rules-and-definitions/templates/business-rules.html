@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Business Rules</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 2rem;
+    background: #f7f8fa;
+    color: #222;
+  }
+  h1 {
+    margin-bottom: 1rem;
+  }
+  .search-bar {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  .search-bar input {
+    flex: 1;
+    min-width: 220px;
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  thead th {
+    background: #2c3e50;
+    color: #fff;
+    text-align: left;
+    padding: 0.75rem 1rem;
+    position: sticky;
+    top: 0;
+  }
+  tbody td {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) {
+    background: #f3f5f7;
+  }
+  tbody tr:hover {
+    background: #eaf1fb;
+  }
+  td.aggregate-col {
+    font-weight: 600;
+    white-space: nowrap;
+    width: 220px;
+  }
+  ul.def-list {
+    margin: 0.25rem 0 0 0;
+    padding-left: 1.1rem;
+  }
+  ul.def-list li {
+    margin-bottom: 0.35rem;
+  }
+  .no-results {
+    text-align: center;
+    padding: 1.5rem;
+    color: #777;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+<h1>Business Rules</h1>
+
+<div class="search-bar">
+  <input type="text" id="searchAggregate" placeholder="Search by aggregate..." />
+  <input type="text" id="searchRule" placeholder="Search by rule..." />
+</div>
+
+<table id="rulesTable">
+  <thead>
+    <tr>
+      <th>Aggregate</th>
+      <th>Rule</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr data-aggregate="aggregate name" data-rule="rule 1 a rule 1 must be applied">
+      <td class="aggregate-col">Aggregate name</td>
+      <td>
+        <strong>Rule 1</strong><br/>
+        A rule 1 must be applied
+      </td>
+    </tr>
+    <tr data-aggregate="aggregate 2 name" data-rule="rule 2 a rule 2 must be applied">
+      <td class="aggregate-col">Aggregate 2 name</td>
+      <td>
+        <strong>Rule 2</strong><br/>
+        A rule 2 must be applied
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<p id="noResults" class="no-results" style="display:none;">No matching rules found.</p>
+
+<script>
+  const aggregateInput = document.getElementById('searchAggregate');
+  const ruleInput = document.getElementById('searchRule');
+  const rows = Array.from(document.querySelectorAll('#rulesTable tbody tr'));
+  const noResults = document.getElementById('noResults');
+
+  function filterRows() {
+    const aggregateQuery = aggregateInput.value.trim().toLowerCase();
+    const ruleQuery = ruleInput.value.trim().toLowerCase();
+    let visibleCount = 0;
+
+    rows.forEach(row => {
+      const aggregate = row.getAttribute('data-aggregate') || '';
+      const rule = row.getAttribute('data-rule') || '';
+      const matchesAggregate = aggregate.includes(aggregateQuery);
+      const matchesRule = rule.includes(ruleQuery);
+      const visible = matchesAggregate && matchesRule;
+      row.style.display = visible ? '' : 'none';
+      if (visible) visibleCount++;
+    });
+
+    noResults.style.display = visibleCount === 0 ? 'block' : 'none';
+  }
+
+  aggregateInput.addEventListener('input', filterRows);
+  ruleInput.addEventListener('input', filterRows);
+</script>
+</body>
+</html>

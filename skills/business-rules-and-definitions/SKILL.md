@@ -63,11 +63,11 @@ show the expected raw input shape for each.
      `templates/business-rules.html` for the current visual baseline.
    * Content rendered as an html `<table>` with columns: `Aggregate | Rule`,
      one row per rule. In the raw file, blocks are separated by an `------`
-     line; the **first** `#` heading of a block is the aggregate name itself
-     (e.g. `# Aggregate name`), and every following `# ...` heading in that
-     block is one rule row carrying that aggregate in the first column.
-   * The Rule cell renders the rule's `#` heading as `<strong>` followed by
-     `<br>` and the rule body.
+     line; each block is exactly one rule: its single `#` heading is the
+     aggregate name (e.g. `# Aggregate name`) and everything below it is the
+     rule description. An aggregate may appear in several blocks — each block
+     is still its own row.
+   * The Rule cell renders the rule description as-is (no rule heading).
    * Two independent search inputs above the table:
      - "Search by aggregate" — filters rows by matching the Aggregate column
        (case-insensitive substring).
@@ -86,5 +86,5 @@ show the expected raw input shape for each.
      - Use `<br>` tags to preserve line breaks and structure exactly as written.
      - Do NOT reformat with bullet points, arrows, or other styling changes.
      - Keep original spacing, typos, and wording intact.
-     - Use `<strong>` only for the rule heading and for section headers that
-       were already emphasized in the source.
+     - Use `<strong>` only for section headers that were already emphasized in
+       the source.

@@ -65,10 +65,9 @@ scaffolding.
    **Never commit `api/openapi.json`.** Regenerate it, report that it changed, and leave
    it in the working tree. Committing is a human decision.
 
-5. **Derive GWT scenarios from the business rules.** `<docs>/business-rules-raw.md` is
-   an *implicit* source of scenarios: every rule is behavior that must be proven by a
-   test, whether or not anyone wrote a `gwt-*.md` for it. See
-   "Business rules are implicit GWTs" below.
+5. **Cover the business rules.** `<docs>/business-rules-raw.md` constrains commands that
+   already exist, so it needs no model change and no `gwt-*.md` — each rule becomes a
+   spec plus a guard in that command's decider. See "Business rules" below.
 
 6. **Implement GWT scenarios** — delegate to `backend-implement`, once per
    `<docs>/gwt-*.md` scenario. An ad-hoc improvement with no GWT file (a search
@@ -83,9 +82,12 @@ scaffolding.
 9. **Report.** Write `development-report.md` (see "The development report" below).
 
 # The model is frozen during development — never escalate, report instead
-Changing the event model (`<eventModel>/commands.md`, `events.md`, `readmodels.md`,
-`uis.md`, the diagram) during the development phase is **strictly forbidden**. Do not edit
-it, and do not ask the architect to edit it either — there is no escalation path from here.
+Every document that describes the model — `<eventModel>/commands.md`, `events.md`,
+`readmodels.md`, `uis.md`, `<docs>/business-rules-raw.md`, `business-definitions-raw.md`,
+**every `gwt-*.md`**, the diagram — is READ-ONLY during development. Do not edit one, do
+not create one, and do not ask the architect to either; there is no escalation path from
+here. If you catch yourself writing a scenario down, stop: **a test IS the scenario
+written down**, and it belongs in `src/test/groovy`, not in the model.
 
 So when you hit something the model cannot express — a rule with no command, a GWT needing
 a field or event that does not exist, a `MODEL ERROR`, an ambiguous business intent:
@@ -126,31 +128,23 @@ model changes in it; describe the gap and let the modelling phase decide.
 **Never commit `development-report.md`.** Write it, say it changed, leave it in the
 working tree.
 
-# Business rules are implicit GWTs
-`<docs>/business-rules-raw.md` lists, per aggregate, rules the system must enforce. They
-are NOT scaffolding input — the generator never reads them — but each one is a behavior
-that must end up covered by a unit test.
+# Business rules
+`<docs>/business-rules-raw.md` lists, per aggregate, rules the system must enforce. The
+generator never reads them, and they need NO model change and NO `gwt-*.md`: a rule
+constrains a **command**, not a field, so it does not depend on the `[bracket]`
+convention. Every command already has the seam a rule lands in — `<Command>Decider.check(cmd)`,
+scaffolded empty and called by the generated handler before the event is appended.
 
 For every rule in the file:
+1. **Find its command** in `<eventModel>/commands.md` — the rule's aggregate names the
+   slice, the rule text names the behavior. If no command matches, skip it and record it
+   in the report; never invent one.
+2. **Delegate to `backend-implement`**, one invocation per rule, quoting the rule
+   verbatim. It writes the spec first (named after the rule), watches it fail, then adds
+   the guard to `check`. Nothing is written to any `.md`.
 
-1. **Match it to a command.** The rule's aggregate names the slice; the rule text names
-   the behavior. Find the command in `<eventModel>/commands.md` on that aggregate whose
-   handling the rule constrains. A rule usually maps to exactly one command.
-2. **If no command matches, skip the rule.** A rule with no command to attach to means
-   either the rule or the model is wrong — never invent a command, and never edit
-   `<eventModel>/*.md`. Write no GWT for it, record it under "not implemented" in the
-   report, and move to the next rule.
-3. **Write the scenario down first.** Add it to the aggregate's `<docs>/gwt-<slice>.md`
-   in the existing format (`## when <command> then <expected>`, `given:` / `when:` /
-   `then:`), phrased in the rule's own words. A rule that already has a matching scenario
-   is done — do not duplicate it.
-4. **Then delegate to `backend-implement`**, one invocation per scenario, exactly as for
-   a hand-written GWT. It writes the Spock spec first, watches it fail on the named
-   decider method, and implements the minimum that makes it green.
-
-Two hard boundaries: a rule NEVER justifies hand-writing scaffolding, and a rule that
-requires a new field or a new event is a model change — skip it and report it, never
-bracket a field yourself.
+A rule that needs a field or an event the model does not have is a model change: skip it
+and report it.
 
 # File ownership — memorize this
 | header in the file | who owns it |
@@ -226,6 +220,12 @@ the generator delegates it to a decider that throws until a GWT scenario forces 
 existence. **Brackets in the model mark exactly, and only, what a human or a GWT scenario
 must decide.** `[field]:now` and `[field]:uuid` are conventional and implemented for you.
 
+Brackets say what must be DECIDED; they say nothing about what must be ENFORCED. So the
+decider is the command's ONE seam and exists for EVERY command, bracketed or not:
+`check(cmd)` — empty, for preconditions/business rules — plus one throwing method per
+`[bracketed]` field. That is why a rule never needs a bracket, a model edit, or a new
+generated class.
+
 # Setup in a new project
 The generator is domain-agnostic. A project needs two things at its root:
 1. `codegen.config.json`:
@@ -238,10 +238,11 @@ The first run also scaffolds the domain-independent event-sourcing runtime
 (`DomainEvent`, `EventStream`, `DomainEventEntity`, repositories, ...) as once-owned files.
 
 # Boundaries
-Never edit the event-modelling docs (`<eventModel>/commands.md`, `events.md`,
-`readmodels.md`, `uis.md`), the generated diagram, or the diagram generator — the model is
-frozen during development and there is no escalation path; skip and report instead. Never rewrite an existing member of a `// GENERATED` file, and never edit a
-generated `*Ability` — both fail `--check` or break a generated caller. Never write
+Never edit ANY model document — `<eventModel>/commands.md`, `events.md`, `readmodels.md`,
+`uis.md`, `<docs>/gwt-*.md`, `business-rules-raw.md`, `business-definitions-raw.md`, the
+generated diagram or the diagram generator. They are frozen and owned elsewhere; skip and
+report instead. Never rewrite an existing member of a `// GENERATED` file, and never edit
+a generated `*Ability` — both fail `--check` or break a generated caller. Never write
 scaffolding by hand. *Adding* a member for an ad-hoc extension is allowed; see
 `reference/ad-hoc-extensions.md`. Appending a scenario to `<docs>/gwt-*.md` derived from
 an existing business rule IS allowed — but never edit `<docs>/business-rules-raw.md`

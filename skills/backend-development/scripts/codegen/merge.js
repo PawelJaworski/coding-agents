@@ -29,6 +29,79 @@
 // alter a body) — only ever add one that's entirely missing. Modifying
 // something that already exists is exactly the class of change this project
 // wants to require a deliberate human hand for.
+//
+// SAFETY INVARIANT: this module rewrites files that already exist, so it must
+// never emit something it cannot re-parse. Every structural scan runs over a
+// MASKED copy of the source (comments and string literals blanked, length and
+// line structure preserved) — a brace, semicolon or quote that is really prose
+// must never look like structure — and the merged result is re-parsed before it
+// is handed back. Anything that fails those checks returns null (-> the caller's
+// "needs manual merge" path) instead of writing corrupt Java.
+
+// ---- masking ---------------------------------------------------------------
+// All three return a string of EXACTLY the same length as the input, so an index
+// into the mask is also an index into the original and slices stay byte-verbatim.
+
+/** Blank `//` line comments and `/* *\/` blocks (javadoc included). */
+function maskComments(src) {
+  const out = src.split('');
+  const n = src.length;
+  const blank = (from, to) => {
+    for (let k = from; k < to && k < n; k++) if (out[k] !== '\n') out[k] = ' ';
+  };
+  let i = 0;
+  while (i < n) {
+    if (src[i] === '/' && src[i + 1] === '/') {
+      let j = i;
+      while (j < n && src[j] !== '\n') j++;
+      blank(i, j);
+      i = j;
+    } else if (src[i] === '/' && src[i + 1] === '*') {
+      let j = i + 2;
+      while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++;
+      j = Math.min(j + 2, n);
+      blank(i, j);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return out.join('');
+}
+
+/** Blank text blocks, string and char literals (escapes respected). */
+function maskStrings(src) {
+  const out = src.split('');
+  const n = src.length;
+  const blank = (from, to) => {
+    for (let k = from; k < to && k < n; k++) if (out[k] !== '\n') out[k] = ' ';
+  };
+  let i = 0;
+  while (i < n) {
+    const c = src[i];
+    if (c === '"' && src[i + 1] === '"' && src[i + 2] === '"') {
+      const close = src.indexOf('"""', i + 3);
+      const j = close === -1 ? n : close + 3;
+      blank(i, j);
+      i = j;
+    } else if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < n) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === c || src[j] === '\n') { j++; break; }
+        j++;
+      }
+      blank(i, j);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return out.join('');
+}
+
+/** Comments AND literals blanked — the view every brace/semicolon scan uses. */
+const maskNonCode = (src) => maskStrings(maskComments(src));
 
 // ---- structural helpers ----------------------------------------------------
 
@@ -62,13 +135,17 @@ function declaredName(param) {
  * concatenating the result reproduces the input exactly. Braces nested inside
  * a member (a method body, a lambda, ...) never end the member early; only a
  * `;` or a `}` seen back at depth 0 does.
+ *
+ * Counting happens on the masked view, so a javadoc `{@code X}` or a `"}"`
+ * literal cannot chop a member in half.
  */
 function splitTopLevelMembers(body) {
+  const masked = maskNonCode(body);
   const members = [];
   let depth = 0;
   let start = 0;
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i];
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
     if (c === '{') depth++;
     else if (c === '}') {
       depth--;
@@ -111,17 +188,22 @@ function splitTopLevelMembers(body) {
 const MAPPING_ANNOTATION_RE = /@(Get|Post|Put|Delete|Patch|Request)Mapping\s*\(([^)]*)\)/;
 
 function memberKey(member) {
-  const mapping = MAPPING_ANNOTATION_RE.exec(member);
+  // Comments are dropped so a reworded javadoc is not a "different" member, but
+  // string literals are KEPT: a mapping's route is part of the member's identity.
+  const noComments = maskComments(member);
+  const structural = maskStrings(noComments);
+
+  const mapping = MAPPING_ANNOTATION_RE.exec(noComments);
   if (mapping) return `${mapping[1]}Mapping(${mapping[2].replace(/\s+/g, ' ').trim()})`;
 
-  let idx = member.length;
-  for (let i = 0; i < member.length; i++) {
-    if (member[i] === '{' || member[i] === ';') {
+  let idx = structural.length;
+  for (let i = 0; i < structural.length; i++) {
+    if (structural[i] === '{' || structural[i] === ';') {
       idx = i;
       break;
     }
   }
-  const header = member
+  const header = noComments
     .slice(0, idx)
     .split('\n')
     .filter((line) => !/^\s*@/.test(line.trim()))
@@ -143,10 +225,71 @@ function memberKey(member) {
   return header;
 }
 
-/** First top-level `{` opens the type body; the matching last `}` closes it. */
+// ---- locating the top-level type -------------------------------------------
+
+const TYPE_DECL_RE = /\b(?:class|interface|enum|record)\s+\w+/g;
+
+const parenDepthAt = (mask, idx) => {
+  let depth = 0;
+  for (let i = 0; i < idx; i++) {
+    if (mask[i] === '(') depth++;
+    else if (mask[i] === ')') depth--;
+  }
+  return depth;
+};
+
+/**
+ * Index of the `{` that opens the top-level type's body, or -1.
+ *
+ * The naive "first `{` in the file" is wrong and was actively corrupting files:
+ * in real sources the first brace is routinely inside a javadoc
+ * (`* @JsonSubTypes({`) or an annotation argument (`@JsonSubTypes({`), and
+ * splitting there makes the annotation tail and the type declaration look like
+ * class MEMBERS — which the merge then happily "adds", emitting two top-level
+ * types. So: find a type keyword that is real code at paren depth 0, then take
+ * the first `{` after it.
+ */
+function typeBodyBrace(mask) {
+  TYPE_DECL_RE.lastIndex = 0;
+  let m;
+  while ((m = TYPE_DECL_RE.exec(mask)) !== null) {
+    if (parenDepthAt(mask, m.index) !== 0) continue;
+    for (let i = m.index + m[0].length; i < mask.length; i++) {
+      if (mask[i] === '{') return i;
+      if (mask[i] === ';') break; // no body (e.g. an annotation member decl)
+    }
+  }
+  return -1;
+}
+
+/** Number of type declarations sitting outside any braces — must be exactly 1. */
+function topLevelTypeCount(content) {
+  const mask = maskNonCode(content);
+  const depths = [];
+  let depth = 0;
+  for (let i = 0; i < mask.length; i++) {
+    depths[i] = depth;
+    if (mask[i] === '{') depth++;
+    else if (mask[i] === '}') depth--;
+  }
+  if (depth !== 0) return -1; // unbalanced: refuse
+
+  let count = 0;
+  TYPE_DECL_RE.lastIndex = 0;
+  let m;
+  while ((m = TYPE_DECL_RE.exec(mask)) !== null) {
+    if (depths[m.index] === 0 && parenDepthAt(mask, m.index) === 0) count++;
+  }
+  return count;
+}
+
+/** The merged text must still be one balanced, single-type compilation unit. */
+const isWellFormed = (content) => topLevelTypeCount(content) === 1;
+
 function splitFile(content) {
-  const firstBrace = content.indexOf('{');
-  const lastBrace = content.lastIndexOf('}');
+  const mask = maskNonCode(content);
+  const firstBrace = typeBodyBrace(mask);
+  const lastBrace = mask.lastIndexOf('}');
   if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
   return {
     prefix: content.slice(0, firstBrace + 1),
@@ -286,5 +429,10 @@ export function mergeGenerated(existingContent, generatedContent) {
 
   let content = `${prefix}${body}${existingSplit.suffix}`;
   content = mergeImports(content, generatedContent, added.join(' '));
+
+  // Last line of defence. If our structural assumptions were wrong anywhere
+  // above, the result is a file that does not compile — and it would be written
+  // silently, with `--check` reporting "up to date" ever after. Refuse instead.
+  if (!isWellFormed(content)) return null;
   return { content, added };
 }

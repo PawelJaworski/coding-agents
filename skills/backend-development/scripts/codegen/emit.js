@@ -16,13 +16,14 @@ const HEADER = (source) =>
 // Bump DECIDER_SCAFFOLD_VERSION only if the SHAPE of a scaffolded decider
 // changes (not when the model gains a field — a missing stub is already a loud
 // javac error naming the exact method).
-export const DECIDER_SCAFFOLD_VERSION = 1;
+//   v2 - command deciders gained the always-present `check(cmd)` precondition seam.
+export const DECIDER_SCAFFOLD_VERSION = 2;
 
 const ONCE_HEADER = (what) =>
   `// SCAFFOLDED ONCE by scripts/codegen — this file is YOURS.\n` +
   `// scaffold-version: ${DECIDER_SCAFFOLD_VERSION}\n` +
-  `// It holds the business decisions for ${what} ([bracketed] model fields).\n` +
-  `// Replace each UnsupportedOperationException by driving it from a GWT scenario (TDD).\n`;
+  `// It holds the hand-written logic for ${what}: preconditions (business rules) in\n` +
+  `// check(), and one decision per [bracketed] model field. Drive both in with a test.\n`;
 
 const uniq = (xs) => [...new Set(xs)].filter(Boolean);
 const importBlock = (imports) =>
@@ -182,7 +183,6 @@ function commandHandler(c, e, base) {
     scaffold: () => commandDecider(c, e),
   });
 
-  let delegated = false;
   for (const f of e.fields) {
     const r = resolveArg(f, {
       sourceFields: c.fields,
@@ -195,14 +195,16 @@ function commandHandler(c, e, base) {
           `and is not [bracketed]. Either add it to the command or bracket it.`,
       );
     }
-    if (r.delegated) delegated = true;
     extraImports.push(...r.imports);
     args.push(r.expr);
   }
 
-  // Lombok writes the constructor from the final fields, in declaration order — the
-  // same signature the generated abilities call, with none of the boilerplate.
-  const collaborators = delegated ? [eventStream, decider] : [eventStream];
+  // The decider is wired in ALWAYS, not only when a [bracket] delegates to it. It is
+  // the single seam where this command's hand-written logic lives — preconditions from
+  // business-rules-raw.md as well as [bracketed] decisions. Making the seam a
+  // by-product of bracket syntax would leave a rule on an unbracketed command with
+  // nowhere to go but a generated file or the model itself, and both are forbidden.
+  const collaborators = [eventStream, decider];
 
   const imports = importBlock([
     'java.util.List',
@@ -240,6 +242,7 @@ ${fieldDeclarations(collaborators)}
     @PostMapping("${c.postMapping}")
     @Override
     public UUID handle(@RequestBody ${c.className} command) {
+        decider.check(command);
         var aggregateId = UUID.randomUUID();
         eventStream.append(List.of(new ${e.className}(
                 aggregateId,
@@ -262,6 +265,17 @@ function commandDecider(c, e) {
     }`,
     )
     .join('\n\n');
+  // Always emitted, always empty. "No rule yet" is a legitimate steady state, so this
+  // does NOT throw — unlike a [bracketed] decision, which is loudly unimplemented.
+  // Business rules constraining this command become guard clauses here, driven in by a
+  // spec. The generator names no field and knows no rule: the seam is the contract.
+  const guard = `    /**
+     * Preconditions on "${c.id}" — the business rules that must hold for the command to
+     * be accepted. Empty until a rule drives one in (TDD); throw to reject the command.
+     */
+    public void check(${c.className} command) {
+    }`;
+  const body = [guard, methods].filter(Boolean).join('\n\n');
   const imports = importBlock([
     'org.springframework.stereotype.Component',
     ...decided.flatMap((f) => f.imports),
@@ -278,7 +292,7 @@ ${imports}
 @Component
 public class ${c.deciderClassName} {
 
-${methods}
+${body}
 }
 `,
   };
@@ -1000,4 +1014,6 @@ export {
   collaboratorImports,
   collaboratorScaffolds,
   resolveArg,
+  commandHandler,
+  commandDecider,
 };

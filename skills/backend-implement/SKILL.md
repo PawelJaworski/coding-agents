@@ -17,7 +17,9 @@ description: >
 ---
 
 # Context you need — and nothing more
-1. The single `<docs>/gwt-<read-model>.md` scenario you were asked to implement.
+1. The single `<docs>/gwt-<read-model>.md` scenario — or the single business rule, quoted
+   verbatim by the caller — you were asked to implement. Never go looking for, or writing,
+   a `.md`.
 2. The generated `*Ability` interfaces of the slices it mentions (`src/test/java/...`).
 3. The `*Decider` class(es) in those slices (`src/main/java/...`).
 
@@ -29,6 +31,7 @@ context and risks contradicting the generator.
 | you were asked to | path |
 |---|---|
 | implement a `<docs>/gwt-*.md` scenario | the flow below — logic lands in a `*Decider` |
+| enforce a business rule quoted from `business-rules-raw.md` | the flow below — the guard lands in `<Command>Decider.check(cmd)`, which is already generated and already called by the handler. The spec is named after the rule: a rule has no GWT file and you must NOT create one |
 | add a query/filter/sort/search over fields a read model ALREADY has | **ad-hoc extension** — same red/green discipline, but logic lands in the slice's projector/repository. See `.opencode/skills/backend-development/reference/ad-hoc-extensions.md` |
 
 An ad-hoc improvement has no GWT file, so its spec name is plainly descriptive instead
@@ -40,9 +43,10 @@ during development and must NOT be changed.
 # Flow — red, then green, nothing else
 
 ## 1. Write the test (it must compile; it may fail)
-`src/test/groovy/<base>/<readmodel-package>/<ReadModel>Spec.groovy`
+`src/test/groovy/<base>/<readmodel-package>/<ReadModel>Spec.groovy` — for a business rule,
+the command's own slice instead: `src/test/groovy/<base>/<command-package>/<Command>Spec.groovy`.
 
-- The test method name is the GWT scenario heading, verbatim.
+- The test method name is the GWT scenario heading verbatim, or the rule's own words.
 - given/when/then map 1:1 onto the GWT lines. No extra steps, no invented happy paths.
 - Use ONLY the generated ability DSLs. Never construct a handler, projector, repository
   or event yourself; never `new` a domain class in a test.
@@ -82,6 +86,10 @@ business decision with no GWT scenario yet
     at IssuePolicyDecider.policyNumber(IssuePolicyDecider.java:12)
 ```
 That stack trace IS the assignment. Open that decider, that method.
+
+For a business rule there is no stub to throw, so the red is the command *succeeding*
+when the rule says it must not — the spec fails on the assertion that no event was
+appended. Your target is that command's `check(cmd)`.
 
 ## 3. Implement the decision — in the decider, minimally
 Replace the `throw` with the simplest logic that satisfies the scenario. Add a comment

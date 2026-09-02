@@ -34,8 +34,10 @@ here; the only thing left for an agent is business logic, entered through TDD.
 | `parse.js` | model markdown -> normalised `model.json`, incl. value-object type resolution |
 | `emit.js` | `model.json` -> Java sources |
 | `runtime.js` | domain-independent event-sourcing runtime, scaffolded once per project |
+| `merge.js` | add-only reconciliation of an existing `GENERATED` file. The only module that rewrites existing files, so it masks comments/literals before any structural scan and refuses to emit anything it cannot re-parse. |
 | `index.js` | CLI, config resolution, ownership-aware writing |
 | `codegen.test.js` | unit tests for the grammar and naming rules |
+| `merge.test.js` | unit tests for add-only reconciliation |
 
 ## Configuration
 

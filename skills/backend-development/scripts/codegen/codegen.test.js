@@ -16,6 +16,8 @@ import {
   collaboratorImports,
   collaboratorScaffolds,
   resolveArg,
+  commandHandler,
+  commandDecider,
 } from './emit.js';
 
 const BASE = 'pl.pjaworski.insurance_company';
@@ -412,4 +414,46 @@ test('a fallback resolves what the source cannot supply', () => {
     fallback: (f) => `state == null ? null : state.${f.name}()`,
   });
   assert.equal(r.expr, 'state == null ? null : state.policyNumber()');
+});
+
+// --- the command's logic seam ------------------------------------------------
+// A business rule constrains a command, not a field, so it cannot depend on the
+// [bracket] convention. These pin the seam down: it must exist for EVERY command,
+// or a rule on an unbracketed command has nowhere to live but a generated file or
+// the model — and both are forbidden during development.
+
+const cmdField = (label, javaType = 'String') => ({ ...parseField(label), javaType, imports: [] });
+
+test('a command with NO bracketed field still gets its decider seam', () => {
+  const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
+  const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
+
+  const handler = commandHandler(c, e, BASE);
+  assert.match(handler.content, /private final IssuePolicyDecider decider;/);
+  assert.match(handler.content, /decider\.check\(command\);/);
+});
+
+test('check() is emitted empty — "no rule yet" is a legitimate state, unlike an undecided [bracket]', () => {
+  const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
+  const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
+
+  const scaffold = commandDecider(c, e);
+  assert.match(scaffold.content, /public void check\(IssuePolicyCmd command\) \{\n    \}/);
+  assert.doesNotMatch(scaffold.content, /check[\s\S]*UnsupportedOperationException/);
+  assert.equal(scaffold.once, true);
+});
+
+test('the seam carries no field, rule or validator name from the generator', () => {
+  const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
+  const e = {
+    ...naming.event(BASE, 'policy-issued'),
+    id: 'policy-issued',
+    fields: [cmdField('policy holder'), cmdField('[policy number]')],
+  };
+
+  const scaffold = commandDecider(c, e);
+  // The [bracketed] decision is still stubbed loudly...
+  assert.match(scaffold.content, /public String policyNumber\(\)[\s\S]*UnsupportedOperationException/);
+  // ...but nothing about the RULES is baked in: no per-attribute guard, no validator.
+  assert.doesNotMatch(scaffold.content, /surname|notBlank|Validator|required/i);
 });

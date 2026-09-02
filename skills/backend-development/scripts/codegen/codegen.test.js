@@ -132,7 +132,31 @@ Protection.
   ]);
 });
 
+test('bullets under "# examples" are sample values, not attributes', () => {
+  const defs = parseDefinitions(`# name Policy Holder
+# description
+A person.
+* Name
+* Surname
+
+# examples
+* John Snow
+------
+# name Policy Number
+# description
+A human readable identifier.
+
+# examples
+* POL-1
+* POL-2`);
+  assert.deepEqual(defs.map((d) => [d.name, d.attributes]), [
+    ['Policy Holder', ['Name', 'Surname']],
+    ['Policy Number', []],
+  ]);
+});
+
 // --- scaffold drift (A) ------------------------------------------------------
+
 
 test('a file with no marker reads as v0 — exactly what a pre-versioning file is', () => {
   assert.equal(parseScaffoldVersion('package com.x;\n\nclass Foo {}\n'), 0);

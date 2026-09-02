@@ -72,12 +72,26 @@ function parseField(raw) {
 
 // ---- business definitions -------------------------------------------------
 
+// Bullets under "# examples" are sample VALUES, never attributes. Only bullets
+// outside that section describe the concept's structure.
+function stripExamples(block) {
+  const lines = block.split('\n');
+  const kept = [];
+  let inExamples = false;
+  for (const line of lines) {
+    const heading = line.match(/^#\s*(\w+)/);
+    if (heading) inExamples = heading[1].toLowerCase() === 'examples';
+    if (!inExamples) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
 function parseDefinitions(text) {
   const defs = [];
   for (const block of text.split(/^-{3,}\s*$/m)) {
     const nameLine = block.match(/^#\s*name\s+(.+)$/m);
     if (!nameLine) continue;
-    const attrs = [...block.matchAll(/^\*\s+(.+)$/gm)].map((m) => m[1].trim());
+    const attrs = [...stripExamples(block).matchAll(/^\*\s+(.+)$/gm)].map((m) => m[1].trim());
     defs.push({ name: nameLine[1].trim(), attributes: attrs });
   }
   return defs;

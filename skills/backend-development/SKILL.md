@@ -80,6 +80,29 @@ scaffolding.
 `*Decider` classes are the ONLY place business logic for a `[bracketed]` field lives. They
 are scaffolded once, with one `UnsupportedOperationException` stub per bracketed field.
 
+## Sanity-check the generated domain types — add-only cannot self-heal
+Add-only is the right default for *your* edits, but it means a **wrong member the
+generator itself emitted is permanent**: fix the generator, re-run, and the file still
+reports `preserved` with the bad member intact. Regeneration will never remove it.
+
+So after the FIRST generation of a slice, read the emitted value objects in
+`domain/` and confirm each one against `business-definitions-raw.md`:
+
+- fields come only from the bullets describing the concept — a bullet under
+  `# examples` is a sample VALUE (`* John Snow`, `* POL-1`), never a field;
+- a concept with no structural bullets is a scalar `String`, and no record is emitted
+  for it at all;
+- a `... list` bullet is a `List<String>`.
+
+A record like `PolicyHolder(name, surname, johnSnow)` or `PolicyNumber(pol1, pol2)` is
+the signature of this bug. If you find one:
+1. fix `scripts/codegen/parse.js` and add a regression test to `codegen.test.js`;
+2. **delete the poisoned generated file(s)** — regenerating on top of them is a no-op;
+3. re-run the generator so they are recreated from scratch.
+
+Deleting a `// GENERATED` file is safe and is the only supported way to retract a
+member. Never delete a `once`-owned file that way — it may hold your logic.
+
 ## Ad-hoc extensions — not every request is a model change
 "Add a search criterion", "add a repository query", "filter/sort this endpoint" are
 implementation improvements over fields a read model ALREADY has. Nothing in the event

@@ -34,7 +34,8 @@ context and risks contradicting the generator.
 An ad-hoc improvement has no GWT file, so its spec name is plainly descriptive instead
 of a scenario heading, and it needs no `[bracketed]` field and therefore no decider. It
 is still test-first. Anything that would require a new *field* or a new *event* is a
-model change, not ad-hoc — escalate.
+model change, not ad-hoc — stop and report it back to the caller; the model is frozen
+during development and must NOT be changed.
 
 # Flow — red, then green, nothing else
 
@@ -99,15 +100,16 @@ Lombok failures. Then `node .opencode/skills/backend-development/scripts/codegen
 - **Never rewrite an existing member of a `// GENERATED ... DO NOT EDIT` file.** Changing
   a generated method's signature or body is not preserved intent — and it breaks the
   generated `*Ability` that calls it, far from your edit. If a generated member looks
-  wrong, the MODEL is wrong — escalate to the architect.
+  wrong, the MODEL is wrong — leave it alone and report it back to the caller.
   *Adding* a member to a generated projector/repository for an ad-hoc extension IS
   allowed and survives regeneration; see `reference/ad-hoc-extensions.md`.
 - **Never write scaffolding.** No new commands, events, read models, handlers, projectors,
   abilities or serde wrappers. A missing command/event/read model means the model is
-  missing it — escalate. (A missing *query* over existing fields is ad-hoc, not missing
+  missing it — stop and report it back to the caller. (A missing *query* over existing fields is ad-hoc, not missing
   scaffolding.)
 - **Never edit a generated `*Ability`.** That fails `--check`.
 - **Never edit the event-modelling docs or the GWT files.**
 - If the scenario cannot be satisfied by a decision in a decider — because it needs a field
-  the model does not have, or the business intent is ambiguous — STOP and escalate. Do not
+  the model does not have, or the business intent is ambiguous — STOP, implement nothing for
+  it, and report it back to the caller so it lands in `development-report.md`. Do not
   invent behavior, and do not weaken the test to make it pass.

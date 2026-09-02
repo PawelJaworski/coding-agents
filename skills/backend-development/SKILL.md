@@ -8,7 +8,9 @@ description: >
   business logic, and only when a GWT scenario demands it (delegated to backend-implement).
   # When to use
   Use when backend code must be created or changed: a command/event/read model was added
-  or updated in the event model, or a GWT scenario must be implemented.
+  or updated in the event model, a GWT scenario must be implemented, or a business rule in
+  `<docs>/business-rules-raw.md` was added or changed (rules are an implicit source of GWT
+  scenarios and must end up covered by a unit test).
   # **Important** This skill is parametrized
   * parameters: <docs>, <eventModel> are passed from outside. You have to know them
     before starting this skill execution. Don't ever execute this skill without exactly
@@ -41,8 +43,10 @@ scaffolding.
 
 3. **Stop if the model is wrong.** The generator fails loudly with a `MODEL ERROR`
    (unknown event, field an event needs but no command supplies, unknown convention).
-   That is a defect in the event model, owned by the architect. Escalate — never work
-   around it in code.
+   That is a defect in the event model. **Do not fix it and do not ask the architect to
+   fix it** — the model is frozen during development. Skip the affected fragment, keep
+   going with everything else, and record it for the report (step 9). Never work around
+   it in code.
 
 4. **Publish the API contract.** Once the generated sources compile, export the
    OpenAPI contract the frontend consumes:
@@ -61,15 +65,92 @@ scaffolding.
    **Never commit `api/openapi.json`.** Regenerate it, report that it changed, and leave
    it in the working tree. Committing is a human decision.
 
-5. **Implement GWT scenarios** — delegate to `backend-implement`, once per
+5. **Derive GWT scenarios from the business rules.** `<docs>/business-rules-raw.md` is
+   an *implicit* source of scenarios: every rule is behavior that must be proven by a
+   test, whether or not anyone wrote a `gwt-*.md` for it. See
+   "Business rules are implicit GWTs" below.
+
+6. **Implement GWT scenarios** — delegate to `backend-implement`, once per
    `<docs>/gwt-*.md` scenario. An ad-hoc improvement with no GWT file (a search
    criterion, a repository query) also goes to `backend-implement`. Nothing else in this
    pipeline writes logic.
 
-6. **Verify.** `mvn clean verify` must be green, and `node .opencode/skills/backend-development/scripts/codegen --check` must report
+7. **Verify.** `mvn clean verify` must be green, and `node .opencode/skills/backend-development/scripts/codegen --check` must report
    `up to date`.
 
-7. **Review** — delegate to `backend-code-reviewer`.
+8. **Review** — delegate to `backend-code-reviewer`.
+
+9. **Report.** Write `development-report.md` (see "The development report" below).
+
+# The model is frozen during development — never escalate, report instead
+Changing the event model (`<eventModel>/commands.md`, `events.md`, `readmodels.md`,
+`uis.md`, the diagram) during the development phase is **strictly forbidden**. Do not edit
+it, and do not ask the architect to edit it either — there is no escalation path from here.
+
+So when you hit something the model cannot express — a rule with no command, a GWT needing
+a field or event that does not exist, a `MODEL ERROR`, an ambiguous business intent:
+
+1. **Do not generate or implement that fragment.** Leave the code exactly as it is; do not
+   invent a command, a field, a bracket or a workaround to make it fit.
+2. **Note it** and move on to the next fragment. One blocked fragment never blocks the
+   rest of the run.
+3. **Report it at the end.** Everything skipped must appear in `development-report.md`.
+
+A blocked fragment is a normal, successful outcome of a run — an unreported one is not.
+
+# The development report
+At the end of every run, write `development-report.md` at the repo root with exactly
+these three sections:
+
+```markdown
+# Development report
+
+## 1. Problems met
+<every problem hit during the run: MODEL ERRORs, rules with no matching command,
+ambiguous intent, failing verification. One bullet each: what it was, where
+(file / rule / scenario), and what it blocked. "None." if there were none.>
+
+## 2. Left as is
+<everything deliberately NOT touched, and why: fragments skipped because the model
+would have had to change, generated members that look wrong but are add-only and
+cannot be retracted, pre-existing failures unrelated to this run.>
+
+## 3. Additional — not implemented
+<each scenario / rule / command that was not implemented, with the reason. This is
+the handover list for the next modelling phase.>
+```
+
+Keep it factual and specific — name the rule, the scenario, the file. Do not propose
+model changes in it; describe the gap and let the modelling phase decide.
+
+**Never commit `development-report.md`.** Write it, say it changed, leave it in the
+working tree.
+
+# Business rules are implicit GWTs
+`<docs>/business-rules-raw.md` lists, per aggregate, rules the system must enforce. They
+are NOT scaffolding input — the generator never reads them — but each one is a behavior
+that must end up covered by a unit test.
+
+For every rule in the file:
+
+1. **Match it to a command.** The rule's aggregate names the slice; the rule text names
+   the behavior. Find the command in `<eventModel>/commands.md` on that aggregate whose
+   handling the rule constrains. A rule usually maps to exactly one command.
+2. **If no command matches, skip the rule.** A rule with no command to attach to means
+   either the rule or the model is wrong — never invent a command, and never edit
+   `<eventModel>/*.md`. Write no GWT for it, record it under "not implemented" in the
+   report, and move to the next rule.
+3. **Write the scenario down first.** Add it to the aggregate's `<docs>/gwt-<slice>.md`
+   in the existing format (`## when <command> then <expected>`, `given:` / `when:` /
+   `then:`), phrased in the rule's own words. A rule that already has a matching scenario
+   is done — do not duplicate it.
+4. **Then delegate to `backend-implement`**, one invocation per scenario, exactly as for
+   a hand-written GWT. It writes the Spock spec first, watches it fail on the named
+   decider method, and implements the minimum that makes it green.
+
+Two hard boundaries: a rule NEVER justifies hand-writing scaffolding, and a rule that
+requires a new field or a new event is a model change — skip it and report it, never
+bracket a field yourself.
 
 # File ownership — memorize this
 | header in the file | who owns it |
@@ -110,7 +191,7 @@ model changes, so do NOT edit `<eventModel>/*.md`, the diagram, or `scripts/code
 They are still TDD, and the code lands as **added** members on the slice's generated
 projector/repository, which the add-only merge preserves.
 
-A new *field* or a new *event* is NOT ad-hoc — escalate to the architect.
+A new *field* or a new *event* is NOT ad-hoc — skip it and record it in the report.
 
 Full recipe and the traps (signature changes breaking generated abilities, stateful
 deciders leaking across specs): `reference/ad-hoc-extensions.md`.
@@ -158,8 +239,10 @@ The first run also scaffolds the domain-independent event-sourcing runtime
 
 # Boundaries
 Never edit the event-modelling docs (`<eventModel>/commands.md`, `events.md`,
-`readmodels.md`, `uis.md`), the generated diagram, or the diagram generator — owned by the
-architect. Never rewrite an existing member of a `// GENERATED` file, and never edit a
+`readmodels.md`, `uis.md`), the generated diagram, or the diagram generator — the model is
+frozen during development and there is no escalation path; skip and report instead. Never rewrite an existing member of a `// GENERATED` file, and never edit a
 generated `*Ability` — both fail `--check` or break a generated caller. Never write
 scaffolding by hand. *Adding* a member for an ad-hoc extension is allowed; see
-`reference/ad-hoc-extensions.md`.
+`reference/ad-hoc-extensions.md`. Appending a scenario to `<docs>/gwt-*.md` derived from
+an existing business rule IS allowed — but never edit `<docs>/business-rules-raw.md`
+itself; it is the source of truth, owned by the business.

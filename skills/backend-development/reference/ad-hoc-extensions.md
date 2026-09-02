@@ -14,12 +14,13 @@ This file is the complete recipe. Read it instead of reverse-engineering
 |---|---|
 | query/filter/sort/search over fields the read model ALREADY has | **ad-hoc** — implement it here |
 | a new way to read existing data (extra endpoint, extra repository method) | **ad-hoc** |
-| a new *field* on a command, event or read model | **model change** — escalate to the architect |
-| a new *event*, command or read model | **model change** — escalate |
+| a new *field* on a command, event or read model | **model change** — skip it and report it |
+| a new *event*, command or read model | **model change** — skip it and report it |
 | a `[bracketed]` decision needs implementing | **not ad-hoc** — that is a GWT scenario, see `backend-implement` |
 
 When in doubt: if you would have to add a line to `commands.md`, `events.md` or
-`readmodels.md` to describe it, it is a model change. Escalate rather than guess.
+`readmodels.md` to describe it, it is a model change. The model is frozen during
+development — skip it and record it in `development-report.md` rather than guess.
 
 ## It is still TDD
 

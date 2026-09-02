@@ -5,6 +5,8 @@
 //
 //   node <skill>/scripts/codegen                 regenerate (cwd = project root)
 //   node <skill>/scripts/codegen --check         CI gate: fail if stale
+//   node <skill>/scripts/codegen --next          "what should the agent do next?"
+//   node <skill>/scripts/codegen --next --json   ...as machine-readable JSON
 //   node <skill>/scripts/codegen --json          print the parsed model
 //   node <skill>/scripts/codegen --accept-scaffold  record once-files as reconciled
 //   node <skill>/scripts/codegen --project <dir> --model <dir>   explicit paths
@@ -13,8 +15,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseModel } from './parse.js';
 import { emit } from './emit.js';
-import { parseScaffoldVersion, stampScaffoldVersion, misplacedSpecs } from './scaffold.js';
-import { mergeGenerated } from './merge.js';
+import {
+  parseScaffoldVersion,
+  stampScaffoldVersion,
+  misplacedSpecs,
+  preservedReason,
+} from './scaffold.js';
+import { mergeGenerated, semanticDrift } from './merge.js';
+import { pendingWork, buildQueue } from './next.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
@@ -31,8 +39,32 @@ const flag = (name) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : null;
 };
-const check = args.includes('--check');
+const checkOnly = args.includes('--check');
+const nextMode = args.includes('--next');
+// Both modes are dry runs: neither ever writes to disk.
+const check = checkOnly || nextMode;
 const acceptScaffold = args.includes('--accept-scaffold');
+
+/**
+ * Print a `--next` result. As JSON with `--json` (machine-readable, for a
+ * calling agent or a loop), otherwise as short human-readable text.
+ */
+function printNext(result) {
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`\n  STATE: ${result.state}`);
+  if (result.next) {
+    console.log(`  NEXT (${result.next.kind}): ${JSON.stringify(result.next.detail)}`);
+    console.log(`\n  ${result.next.prompt}\n`);
+  } else {
+    console.log('  Nothing pending — model, code and specs all agree.\n');
+  }
+  if (result.queue && result.queue.length > 1) {
+    console.log(`  (${result.queue.length - 1} more item(s) queued after this one)\n`);
+  }
+}
 
 const projectRoot = findProjectRoot(path.resolve(flag('project') || process.cwd()));
 const configPath = projectRoot && path.join(projectRoot, CONFIG_FILE);
@@ -102,12 +134,29 @@ if (path.resolve(testRoot) !== path.resolve(groovyTestRoot)) {
 let files;
 try {
   const model = parseModel({ modelDir, basePackage: config.basePackage });
-  if (args.includes('--json')) {
+  // `--json` alone dumps the parsed model. Combined with `--next` it instead
+  // means "the --next result as JSON" — handled further down.
+  if (args.includes('--json') && !nextMode) {
     console.log(JSON.stringify(model, null, 2));
     process.exit(0);
   }
   files = emit(model);
 } catch (err) {
+  if (nextMode) {
+    printNext({
+      state: 'MODEL_ERROR',
+      next: {
+        kind: 'model-error',
+        detail: err.message,
+        prompt:
+          `Model error: ${err.message}. Do not fix it in code and do not edit the model — ` +
+          `skip this fragment, keep going with everything else, and record it in ` +
+          `development-report.md.`,
+      },
+      queue: [],
+    });
+    process.exit(1);
+  }
   die(`MODEL ERROR  ${err.message}`);
 }
 
@@ -115,6 +164,8 @@ const written = [];
 const preserved = [];
 const stale = [];
 const staleScaffold = [];
+const staleGenerated = [];
+const preservedByHand = [];
 const restamped = [];
 const needsManualMerge = [];
 
@@ -155,6 +206,23 @@ for (const file of files) {
     const current = fs.readFileSync(target, 'utf8');
     if (current === file.content) {
       preserved.push(rel);
+      continue;
+    }
+    // A member whose BODY differs from what fresh generation would emit is a
+    // deliberate deviation OR stale state — the generator cannot tell which.
+    // `// PRESERVED-BY-HAND: <reason>` declares intent and is tolerated; an
+    // unmarked one is flagged so the agent/human classifies it (the StateProjector
+    // `apply` body was exactly this, and old `--check` never caught it).
+    const drift = semanticDrift(current, file.content);
+    const preserveReason = preservedReason(current);
+    if (drift.length > 0) {
+      const list = `${rel}  (${drift.join(', ')})`;
+      if (preserveReason) {
+        preservedByHand.push(`${list}  // PRESERVED-BY-HAND: ${preserveReason}`);
+        preserved.push(rel);
+      } else {
+        staleGenerated.push(list);
+      }
       continue;
     }
     const merged = mergeGenerated(current, file.content);
@@ -217,16 +285,130 @@ function reportNeedsManualMerge() {
   );
 }
 
-if (check) {
+// A member of a GENERATED file whose body no longer matches what fresh generation
+// would emit, WITHOUT a `// PRESERVED-BY-HAND` marker. This is stale state (the
+// model grew or changed and the on-disk member wasn't re-emitted) or a hand edit
+// that forgot to declare itself. Either way the agent/human must classify it:
+// mark it preserved, or delete-and-regenerate the file.
+function reportStaleGenerated() {
+  console.error(
+    `\n  STALE GENERATED  ${staleGenerated.length} generated file(s) have member bodies that no longer\n` +
+      `  match the model, with no // PRESERVED-BY-HAND marker:`,
+  );
+  staleGenerated.forEach((f) => console.error(`    ${f}`));
+  console.error(
+    `\n  The add-only merge cannot repair a stale member body. Classify each one:\n` +
+      `    - intentional hand edit -> add "// PRESERVED-BY-HAND: <reason>" to the file's\n` +
+      `      leading comment block and re-run --check;\n` +
+      `    - genuine staleness     -> delete the generated file and regenerate it.\n`,
+  );
+}
+
+function reportPreservedByHand() {
+  console.log(`\n  preserved by hand (intentional deviations from the model):`);
+  preservedByHand.forEach((f) => console.log(`    ${f}`));
+}
+
+if (checkOnly) {
   if (stale.length) {
     console.error(`\n  OUT OF DATE  ${stale.length} generated file(s) differ from the model:`);
     stale.forEach((f) => console.error(`    ${f}`));
     console.error(`\n  Run the codegen script to refresh them.\n`);
   }
   if (staleScaffold.length) reportStaleScaffold();
+  if (staleGenerated.length) reportStaleGenerated();
   if (needsManualMerge.length) reportNeedsManualMerge();
-  if (stale.length || staleScaffold.length || needsManualMerge.length) process.exit(1);
+  if (preservedByHand.length) {
+    console.log(`\n  preserved by hand (intentional deviations from the model):`);
+    preservedByHand.forEach((f) => console.log(`    ${f}`));
+  }
+  if (stale.length || staleScaffold.length || staleGenerated.length || needsManualMerge.length) {
+    process.exit(1);
+  }
   console.log('codegen: up to date');
+  process.exit(0);
+}
+
+// `--next` turns everything above into ONE decision instead of a human reading
+// free-text output and deciding what it implies. Codegen-level problems (a
+// stale file, an unresolved scaffold) ARE the next step when they exist. Once
+// codegen is clean, the queue is built by cross-referencing the model's rules
+// and GWT scenarios against existing Spock spec names (backend-implement names
+// a spec after the rule/scenario verbatim, so a name with no matching spec is
+// unimplemented work) — see reference/edit-classification.md and next.js.
+if (nextMode) {
+  if (stale.length) {
+    printNext({
+      state: 'OUT_OF_DATE',
+      next: {
+        kind: 'regenerate',
+        detail: `${stale.length} generated file(s) differ from the model`,
+        prompt: 'Run `node <skill>/scripts/codegen` (no flags) to regenerate, then re-run --next.',
+      },
+      queue: [],
+    });
+    process.exit(1);
+  }
+  if (staleScaffold.length) {
+    printNext({
+      state: 'STALE_SCAFFOLD',
+      next: {
+        kind: 'reconcile-scaffold',
+        detail: staleScaffold,
+        prompt:
+          'These once-owned files predate their template. Diff each against ' +
+          'scripts/codegen/runtime.js, port the delta by hand, then run --accept-scaffold.',
+      },
+      queue: [],
+    });
+    process.exit(1);
+  }
+  if (staleGenerated.length) {
+    printNext({
+      state: 'STALE_GENERATED',
+      next: {
+        kind: 'reconcile-drift',
+        detail: staleGenerated,
+        prompt:
+          'These generated member bodies no longer match the model, with no ' +
+          '// PRESERVED-BY-HAND marker. Classify each: mark it preserved if the ' +
+          'deviation is intentional, otherwise delete the file and regenerate it.',
+      },
+      queue: [],
+    });
+    process.exit(1);
+  }
+  if (needsManualMerge.length) {
+    printNext({
+      state: 'NEEDS_MANUAL_MERGE',
+      next: {
+        kind: 'manual-merge',
+        detail: needsManualMerge,
+        prompt: 'The merge could not recognise this file\'s shape. Reconcile it by hand.',
+      },
+      queue: [],
+    });
+    process.exit(1);
+  }
+
+  const gwtFiles = walk(modelDir)
+    .filter((f) => /^gwt-.*\.md$/.test(path.basename(f)))
+    .map((f) => ({ name: path.basename(f), content: fs.readFileSync(f, 'utf8') }));
+  const businessRulesPath = path.join(modelDir, 'business-rules-raw.md');
+  const businessRulesRaw = fs.existsSync(businessRulesPath)
+    ? fs.readFileSync(businessRulesPath, 'utf8')
+    : '';
+  const specContents = walk(groovyTestRoot)
+    .filter((f) => f.endsWith('.groovy'))
+    .map((f) => fs.readFileSync(f, 'utf8'));
+
+  const queue = buildQueue(pendingWork({ businessRulesRaw, gwtFiles, specContents }));
+
+  if (queue.length === 0) {
+    printNext({ state: 'DONE', next: null, queue: [] });
+    process.exit(0);
+  }
+  printNext({ state: 'PENDING', next: queue[0], queue });
   process.exit(0);
 }
 
@@ -239,10 +421,15 @@ if (preserved.length) {
   console.log(`\n  kept (yours, scaffolded once / hand-extended):`);
   preserved.forEach((s) => console.log(`    ${s}`));
 }
+if (preservedByHand.length) reportPreservedByHand();
 console.log(
   `\n  ${written.length} written, ${preserved.length} preserved, ` +
     `${files.length - written.length - preserved.length} unchanged`,
 );
+if (staleGenerated.length) {
+  reportStaleGenerated();
+  process.exit(1);
+}
 if (staleScaffold.length) {
   reportStaleScaffold();
   process.exit(1);

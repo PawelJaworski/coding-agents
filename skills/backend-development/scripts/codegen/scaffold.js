@@ -18,8 +18,25 @@
 // touching a filesystem.
 
 export const VERSION_TAG = 'scaffold-version';
+export const PRESERVE_TAG = 'PRESERVED-BY-HAND';
 
 const VERSION_RE = new RegExp(`^//\\s*${VERSION_TAG}:\\s*(\\d+)\\s*$`, 'm');
+
+/**
+ * A hand-written edit on a GENERATED file is an explicit, deliberate deviation
+ * from the model (e.g. `risk` became an enum the model can't express, or a value
+ * object gained a type the abstraction doesn't cover). The generator can't
+ * distinguish intent from staleness on its own, so the human/agent that makes
+ * the edit stamps it with `// PRESERVED-BY-HAND: <reason>`. `--check` then
+ * tolerates that file while still failing on unmarked drift.
+ */
+export const PRESERVE_RE = new RegExp(`^//\\s*${PRESERVE_TAG}:\\s*(.+)$`, 'm');
+
+/** The reason a generated file was deliberately hand-edited, or null. */
+export function preservedReason(content) {
+  const m = PRESERVE_RE.exec(content);
+  return m ? m[1].trim() : null;
+}
 
 /** Files predating the marker read as 0, which is exactly what they are. */
 export function parseScaffoldVersion(content) {

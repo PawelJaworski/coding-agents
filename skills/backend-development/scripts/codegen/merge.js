@@ -395,6 +395,50 @@ function mergeImports(content, generatedContent, addedText) {
 // ---- orchestration ------------------------------------------------------------
 
 /**
+ * Detect stale member bodies on a GENERATED file.
+ *
+ * The add-only merge only ever ADDS missing members; it cannot see a member that
+ * already exists on disk but whose BODY no longer matches what fresh generation
+ * would emit (signature unchanged, implementation drift — the classic
+ * `StateProjector.apply` case). This is the one kind of drift the merge silently
+ * tolerates and `--check` has never caught.
+ *
+ * Two members are the same SLOT (same identity key) but DRIFTED when their full
+ * source differs excluding their leading `//` comment block (so a reworded
+ * comment is not drift).
+ *
+ * @returns array of strings describing each drifted member, or [] if none.
+ */
+export function semanticDrift(existingContent, generatedContent) {
+  // Compare the members INSIDE the top-level type's body (like mergeMembers
+  // does), not the file as a whole — a whole-file split collapses the interface
+  // into one giant member and flags everything.
+  const existingSplit = splitFile(existingContent);
+  const generatedSplit = splitFile(generatedContent);
+  if (!existingSplit || !generatedSplit) return [];
+
+  // Comments are masked so a hand-reworded javadoc is not body drift.
+  const stripComment = (m) => maskComments(m).trim();
+
+  const generatedByKey = new Map();
+  for (const m of splitTopLevelMembers(generatedSplit.body)) {
+    const k = memberKey(m);
+    // Prefer the first occurrence (overloads share a key only by accident here).
+    if (!generatedByKey.has(k)) generatedByKey.set(k, m);
+  }
+
+  const drift = [];
+  for (const existing of splitTopLevelMembers(existingSplit.body)) {
+    const k = memberKey(existing);
+    const generated = generatedByKey.get(k);
+    // No same-slot member in fresh output, or it's identical -> not drift.
+    if (!generated || stripComment(existing) === stripComment(generated)) continue;
+    drift.push(k);
+  }
+  return drift;
+}
+
+/**
  * @returns {{content: string, added: string[]} | null} null means "don't know
  * how to merge this shape safely" — caller must not overwrite.
  */

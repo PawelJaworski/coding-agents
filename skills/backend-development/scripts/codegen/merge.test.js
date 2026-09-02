@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeGenerated } from './merge.js';
+import { mergeGenerated, semanticDrift } from './merge.js';
 
 const typeCount = (src, decl) => (src.match(new RegExp(decl, 'g')) || []).length;
 
@@ -250,4 +250,86 @@ public class A {
 }
 `;
   assert.equal(mergeGenerated(twoTypes, generated), null);
+});
+
+// --- semantic drift: a member whose BODY diverges from fresh generation ------
+
+const pristine = `package p.eventstream;
+
+import java.util.Collection;
+import p.domain.events.PolicyIssuedEvent;
+
+public interface StateProjector<S> {
+
+    default S hydrate(S state, Collection<DomainEvent> events) {
+        return events.stream().reduce(state, this::apply, (_, s2) -> s2);
+    }
+
+    private S apply(S state, DomainEvent event) {
+        return switch (event.eventType()) {
+            case POLICY_ISSUED -> apply(state, (PolicyIssuedEvent) event);
+            default -> state;
+        };
+    }
+
+    default S apply(S state, PolicyIssuedEvent event) {
+        return state;
+    }
+}
+`;
+
+test('semanticDrift: nothing when the file already matches fresh generation', () => {
+  assert.deepEqual(semanticDrift(pristine, pristine), []);
+});
+
+test('semanticDrift: a stale member body IS flagged (the StateProjector bug)', () => {
+  const stale = pristine.replace(
+    '        return switch (event.eventType()) {\n            case POLICY_ISSUED -> apply(state, (PolicyIssuedEvent) event);\n            default -> state;\n        };',
+    '        return state;',
+  );
+  const drift = semanticDrift(stale, pristine);
+  assert.ok(drift.length > 0, 'expected the stale apply(S, DomainEvent) body to be flagged');
+  assert.ok(
+    drift.some((d) => d.includes('apply')),
+    `expected apply to appear in drift, got: ${drift}`,
+  );
+});
+
+test('semanticDrift: a merely reworded javadoc is NOT flagged as drift', () => {
+  const withComment = pristine.replace(
+    'public interface StateProjector<S> {',
+    '// added note for a future reader\npublic interface StateProjector<S> {',
+  );
+  assert.deepEqual(semanticDrift(withComment, pristine), []);
+});
+
+test('semanticDrift: a member that exists only on disk (never in fresh output) is not drift', () => {
+  const withExtra = `package p.eventstream;
+
+import java.util.Collection;
+import p.domain.events.PolicyIssuedEvent;
+
+public interface StateProjector<S> {
+
+    String extraHandMember() {
+        return "x";
+    }
+
+    default S hydrate(S state, Collection<DomainEvent> events) {
+        return events.stream().reduce(state, this::apply, (_, s2) -> s2);
+    }
+
+    private S apply(S state, DomainEvent event) {
+        return switch (event.eventType()) {
+            case POLICY_ISSUED -> apply(state, (PolicyIssuedEvent) event);
+            default -> state;
+        };
+    }
+
+    default S apply(S state, PolicyIssuedEvent event) {
+        return state;
+    }
+}
+`;
+  assert.deepEqual(semanticDrift(withExtra, pristine), []);
 });

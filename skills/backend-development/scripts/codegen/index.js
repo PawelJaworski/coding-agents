@@ -20,8 +20,10 @@ import {
   stampScaffoldVersion,
   misplacedSpecs,
   preservedReason,
+  leadingCommentBlock,
 } from './scaffold.js';
 import { mergeGenerated, semanticDrift } from './merge.js';
+import { computeAdvisory, isLogicFile } from './advisory.js';
 import { pendingWork, buildQueue } from './next.js';
 
 const CONFIG_FILE = 'codegen.config.json';
@@ -165,6 +167,7 @@ const preserved = [];
 const stale = [];
 const staleScaffold = [];
 const staleGenerated = [];
+const advisoryDrifts = [];
 const preservedByHand = [];
 const restamped = [];
 const needsManualMerge = [];
@@ -197,22 +200,50 @@ for (const file of files) {
     continue;
   }
 
-  // GENERATED files are ADD-ONLY once they exist: a fresh member (a new record
+  // Logic-bearing classes (handlers, projectors, repositories, entities) are scaffolded
+  // on creation and never overwritten when they exist. When the model changes, the
+  // generator computes exact advisory instructions rather than blindly modifying the code.
+  if (isLogicFile(file) && exists) {
+    let current = fs.readFileSync(target, 'utf8');
+    // The leading comment block is ownership metadata, never business logic. It
+    // must stay honest about how the file is treated, so reconcile it whenever
+    // it drifts from the template — without touching the hand-written body.
+    const genHeader = leadingCommentBlock(file.content);
+    const curHeader = leadingCommentBlock(current);
+    if (curHeader !== genHeader) {
+      const body = current.slice(curHeader.length).replace(/^\n+/, '');
+      if (check) {
+        stale.push(`${rel}  (header would be reconciled)`);
+      } else {
+        fs.writeFileSync(target, `${genHeader}\n${body}`);
+        written.push(`header   ${rel}`);
+        current = `${genHeader}\n${body}`;
+      }
+    }
+    const adv = computeAdvisory({ currentContent: current, generatedContent: file.content, relPath: rel });
+    if (adv) {
+      if (adv.isPreserved) {
+        preservedByHand.push(`${rel}  // PRESERVED-BY-HAND: ${adv.reason}`);
+        preserved.push(rel);
+      } else {
+        advisoryDrifts.push(adv);
+        preserved.push(rel);
+      }
+    } else {
+      preserved.push(rel);
+    }
+    continue;
+  }
+
+  // Pure DATA / CONTRACT files are ADD-ONLY once they exist: a fresh member (a new record
   // component, enum constant, or class member — the model grew) is inserted; an
-  // existing member is NEVER rewritten or removed, even if the model's version
-  // of it now differs — that's exactly the room a hand-added extension (e.g. a
-  // search endpoint on a persisting projector) needs to survive regeneration.
+  // existing member is NEVER rewritten or removed.
   if (!file.once && exists) {
     const current = fs.readFileSync(target, 'utf8');
     if (current === file.content) {
       preserved.push(rel);
       continue;
     }
-    // A member whose BODY differs from what fresh generation would emit is a
-    // deliberate deviation OR stale state — the generator cannot tell which.
-    // `// PRESERVED-BY-HAND: <reason>` declares intent and is tolerated; an
-    // unmarked one is flagged so the agent/human classifies it (the StateProjector
-    // `apply` body was exactly this, and old `--check` never caught it).
     const drift = semanticDrift(current, file.content);
     const preserveReason = preservedReason(current);
     if (drift.length > 0) {
@@ -309,6 +340,19 @@ function reportPreservedByHand() {
   preservedByHand.forEach((f) => console.log(`    ${f}`));
 }
 
+function reportAdvisoryDrifts() {
+  console.error(
+    `\n  ADVISORY: MODEL DRIFT DETECTED  ${advisoryDrifts.length} logic file(s) differ from the event model:`,
+  );
+  for (const adv of advisoryDrifts) {
+    console.error(`\n================================================================================`);
+    console.error(`  Target: ${adv.relPath}`);
+    console.error(`--------------------------------------------------------------------------------`);
+    console.error(adv.prompt);
+    console.error(`================================================================================\n`);
+  }
+}
+
 if (checkOnly) {
   if (stale.length) {
     console.error(`\n  OUT OF DATE  ${stale.length} generated file(s) differ from the model:`);
@@ -317,12 +361,13 @@ if (checkOnly) {
   }
   if (staleScaffold.length) reportStaleScaffold();
   if (staleGenerated.length) reportStaleGenerated();
+  if (advisoryDrifts.length) reportAdvisoryDrifts();
   if (needsManualMerge.length) reportNeedsManualMerge();
   if (preservedByHand.length) {
     console.log(`\n  preserved by hand (intentional deviations from the model):`);
     preservedByHand.forEach((f) => console.log(`    ${f}`));
   }
-  if (stale.length || staleScaffold.length || staleGenerated.length || needsManualMerge.length) {
+  if (stale.length || staleScaffold.length || staleGenerated.length || advisoryDrifts.length || needsManualMerge.length) {
     process.exit(1);
   }
   console.log('codegen: up to date');
@@ -378,6 +423,22 @@ if (nextMode) {
     });
     process.exit(1);
   }
+  if (advisoryDrifts.length) {
+    printNext({
+      state: 'ADVISORY_DRIFT',
+      next: {
+        kind: 'apply-scaffold',
+        detail: advisoryDrifts[0].relPath,
+        prompt: advisoryDrifts[0].prompt,
+      },
+      queue: advisoryDrifts.slice(1).map((a) => ({
+        kind: 'apply-scaffold',
+        detail: a.relPath,
+        prompt: a.prompt,
+      })),
+    });
+    process.exit(1);
+  }
   if (needsManualMerge.length) {
     printNext({
       state: 'NEEDS_MANUAL_MERGE',
@@ -429,6 +490,9 @@ console.log(
 if (staleGenerated.length) {
   reportStaleGenerated();
   process.exit(1);
+}
+if (advisoryDrifts.length) {
+  reportAdvisoryDrifts();
 }
 if (staleScaffold.length) {
   reportStaleScaffold();

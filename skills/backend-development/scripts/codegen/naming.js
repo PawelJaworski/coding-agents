@@ -6,19 +6,32 @@
 const words = (s) => String(s).trim().toLowerCase().split(/[\s\-_]+/).filter(Boolean);
 
 const pascal = (s) => words(s).map((w) => w[0].toUpperCase() + w.slice(1)).join('');
+// Capitalize the first letter of an already-camel name (policyHolder -> PolicyHolder).
+// Unlike pascal(), it does NOT split on words: a foo-bar id would come through as a
+// single token, which is correct for turning a generated camel field name into a
+// Lombok getter name.
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const camel = (s) => {
   const p = pascal(s);
   return p[0].toLowerCase() + p.slice(1);
 };
 const screamingSnake = (s) => words(s).join('_').toUpperCase();
+// database column naming: camelCase -> snake_case (policyHolder -> policy_holder)
+const snake = (s) =>
+  String(s)
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .toLowerCase();
 // slice package: kebab collapses to a single lowercase segment (issue-policy -> issuepolicy)
 const slicePackage = (s) => words(s).join('');
 
 const naming = {
   words,
   pascal,
+  cap,
   camel,
   screamingSnake,
+  snake,
   slicePackage,
 
   command: (base, id) => ({
@@ -52,6 +65,7 @@ const naming = {
     dslMethod: `expect_${words(id).join('_')}`,
     // persisting-only names
     entityClassName: `${pascal(id)}Entity`,
+    idClassName: `${pascal(id)}Key`,
     repositoryClassName: `${pascal(id)}Repository`,
     jpaRepositoryClassName: `${pascal(id)}JpaRepository`,
     inMemoryRepositoryClassName: `${pascal(id)}InMemoryRepository`,

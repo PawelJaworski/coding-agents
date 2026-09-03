@@ -480,3 +480,10 @@ export function mergeGenerated(existingContent, generatedContent) {
   if (!isWellFormed(content)) return null;
   return { content, added };
 }
+
+export {
+  memberKey,
+  splitTopLevelMembers,
+  splitFile,
+};
+

@@ -141,13 +141,43 @@ initialised with it (JLS 12.4.1), so a spec `implements PolicyListProjectorAbili
 registered before `setup()` runs. `EventStreamImpl` keeps the projector collection **by
 reference** for the same reason — copying it would drop late registrations.
 
+## Persisting projections: embeddables, composite keys and search
+
+Persisting projections are keyed by their natural attributes or by `aggregateId`. A field on
+a persisting read model can be marked with a trailing `:Key` (e.g. `* policy number:Key`):
+
+- when `:Key` field(s) are present: the generator emits a `<Name>Key` `@Embeddable record`
+  composed of those key fields. The entity uses `@EmbeddedId private <Name>Key id;`, and
+  repositories/lookups operate on `<Name>Key` instead of `UUID aggregateId`. Multiple
+  aggregates project into distinct rows identified by their business keys;
+- when no field carries `:Key`: the entity falls back to `UUID aggregateId` as `@Id`.
+
+A value-object field on the read model becomes:
+
+- a scalar-only value object (all `String` attributes) -> the record is `@Embeddable` and the
+  entity embeds it with `@Embedded` + `@AttributeOverrides`, flattening its attributes into
+  prefixed columns (`policyHolder.name` -> `policy_holder_name`), so they are queryable;
+- a value object carrying a list -> stored as JSON (`@JdbcTypeCode(SqlTypes.JSON)`), because a
+  list cannot be an embeddable.
+
+The persisting projector's `GET <id>` list endpoint accepts search params: every scalar
+field of the read model (and every scalar attribute of an embedded value object) becomes a
+`@RequestParam Map<String, String> search` key. `policy-list?policyHolder.name=oh` becomes a
+server-side `LOWER(column) LIKE '%oh%'` predicate: the projector calls
+`repository.findAllBySearch(search)`, and the JPA repository implements it with a
+`JpaSpecificationExecutor` + `Specification` (`findAll(Specification)`), so filtering
+happens in the database, not in memory. The in-memory test repository mirrors the same
+AND-over-present-keys semantics, and the sibling `<Name>ProjectorAbility` exposes an
+`expect_x(Map search, Predicate)` overload to drive the search from a spec.
+
 ## Not supported yet
 
-Persisting projections are keyed by `aggregateId` (one row per aggregate) and value-object
-columns are stored as JSON. Composite keys, derived keys and queryable criteria endpoints
-are not generated.
+Composite keys and derived keys are not generated; search is a `LIKE` containment filter over
+a scalar String (or embedded scalar) field only — list-bearing JSON value objects are not
+searchable by an individual element.
 
-Criteria endpoints therefore live in the slice as a hand-added member on the generated
+Hand-added criteria that need more than a plain `LIKE` (e.g. exact match, numeric range, a
+join) therefore live in the slice as a hand-added member on the generated
 projector/repository — the add-only merge exists to preserve exactly that. See
 `../../reference/ad-hoc-extensions.md` for the recipe. Extending the model's vocabulary
 instead is a generator change, and a deliberate architect decision.

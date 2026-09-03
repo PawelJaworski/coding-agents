@@ -55,7 +55,17 @@ function parseSections(text) {
 }
 
 function parseField(raw) {
-  // [policy number]:uuid  |  [policy number]  |  policy holder
+  // [policy number]:uuid  |  [policy number]  |  policy holder  |  policy number:Key
+  // A trailing `:Key` marks the field as part of a persisting read model's composite
+  // (natural) id; it is mutually exclusive with a [bracket] and a :convention.
+  const keyMatch = raw.match(/^(.*?):Key$/);
+  if (keyMatch) {
+    const base = parseField(keyMatch[1].trim());
+    if (base.bracketed || base.convention) {
+      throw new Error(`":Key" goes on a plain field, not a [bracketed]/:convention one ("${raw}")`);
+    }
+    return { ...base, key: true };
+  }
   const m = raw.match(/^(\[)?([^\]]+?)(\])?(?::(\w+))?$/);
   if (!m) throw new Error(`Cannot parse field: "${raw}"`);
   const bracketed = Boolean(m[1] && m[3]);
@@ -108,16 +118,29 @@ function resolveTypes(defs, base) {
       continue;
     }
     const vo = naming.valueObject(base, def.name);
-    byKey.set(key, { javaType: vo.className, imports: [`${vo.package}.${vo.className}`] });
+    const attrs = def.attributes.map((a) => ({
+      name: naming.field(a),
+      // a "... list" attribute is a list of names; everything else is a plain String
+      javaType: /\blist$/i.test(a.trim()) ? 'List<String>' : 'String',
+    }));
+    // A value object with only scalar String attributes can be a JPA @Embeddable and
+    // is stored as flattened columns on an owning entity; one carrying a list cannot
+    // be embedded and keeps its JSON column.
+    const embeds = attrs.every((a) => a.javaType === 'String');
+    byKey.set(key, {
+      javaType: vo.className,
+      imports: [`${vo.package}.${vo.className}`],
+      valueObject: vo,
+      embeds,
+      attrs,
+    });
     valueObjects.push({
       kind: 'value-object',
       className: vo.className,
       package: vo.package,
-      fields: def.attributes.map((a) => ({
-        name: naming.field(a),
-        // a "... list" attribute is a list of names; everything else is a plain String
-        javaType: /\blist$/i.test(a.trim()) ? 'List<String>' : 'String',
-      })),
+      fields: attrs,
+      attrs,
+      embeds,
     });
   }
   return { byKey, valueObjects };
@@ -146,7 +169,13 @@ export function parseModel({ modelDir, basePackage }) {
   const decorate = (fields) =>
     fields.map((f) => {
       const t = typeOf(f, byKey);
-      return { ...f, javaType: t.javaType, imports: t.imports, conventionExpr: t.expr || null };
+      return {
+        ...f,
+        javaType: t.javaType,
+        imports: t.imports,
+        conventionExpr: t.expr || null,
+        ...(t.valueObject ? { valueObject: t.valueObject, embeds: t.embeds, attrs: t.attrs } : {}),
+      };
     });
 
   const events = parseSections(read('events.md')).map((s) => {
@@ -194,6 +223,15 @@ export function parseModel({ modelDir, basePackage }) {
           `persisting one (JPA entity kept up to date on append, listable across aggregates).`,
       );
     }
+    const decorated = decorate(s.fields);
+    const keyFields = decorated.filter((f) => f.key);
+    if (keyFields.length && !s.keyed) {
+      throw new Error(
+        `Read model "${s.id}" marks field(s) with ":Key" but is not a persisting ` +
+          `("<aggregate>:Key") projection. ":Key" fields are only meaningful on a ` +
+          `persisting read model, where they compose its composite id.`,
+      );
+    }
     return {
       id: s.id,
       name: s.props.name || s.id,
@@ -201,7 +239,8 @@ export function parseModel({ modelDir, basePackage }) {
       onDemand: !s.keyed,
       keyed: s.keyed,
       subscribes,
-      fields: decorate(s.fields),
+      fields: decorated,
+      keyFields,
       ...naming.readModel(basePackage, s.id, { keyed: s.keyed }),
     };
   });

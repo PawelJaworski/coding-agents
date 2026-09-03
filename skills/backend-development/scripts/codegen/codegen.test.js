@@ -18,7 +18,16 @@ import {
   collaboratorScaffolds,
   resolveArg,
   commandHandler,
+  command,
   commandDecider,
+  valueObject,
+  readModelEntity,
+  readModelKey,
+  readModelRepository,
+  readModelJpaRepository,
+  readModelInMemoryRepository,
+  persistingProjector,
+  persistingProjectorAbility,
 } from './emit.js';
 
 const BASE = 'pl.pjaworski.insurance_company';
@@ -469,4 +478,253 @@ test('the seam carries no field, rule or validator name from the generator', () 
   assert.match(scaffold.content, /public String policyNumber\(\)[\s\S]*UnsupportedOperationException/);
   // ...but nothing about the RULES is baked in: no per-attribute guard, no validator.
   assert.doesNotMatch(scaffold.content, /surname|notBlank|Validator|required/i);
+});
+
+// --- read model entity: embeddable value objects become flattened columns ------
+
+const VA_ENT = 'pl.pjaworski.insurance_company.policylist';
+
+const vaRm = () => ({
+  id: 'policy-list',
+  className: 'PolicyList',
+  package: VA_ENT,
+  getterMethod: 'getPolicyList',
+  getMapping: 'policy-list',
+  dslMethod: 'expect_policy_list',
+  entityClassName: 'PolicyListEntity',
+  idClassName: 'PolicyListKey',
+  projectorClassName: 'PolicyListProjector',
+  abilityClassName: 'PolicyListProjectorAbility',
+  repositoryClassName: 'PolicyListRepository',
+  inMemoryRepositoryClassName: 'PolicyListInMemoryRepository',
+  repositoryConstant: 'POLICY_LIST_REPOSITORY',
+  tableName: 'policy_list',
+  subscribes: ['policy-issued'],
+  keyFields: [],
+  fields: [
+    {
+      name: 'policyHolder',
+      label: 'policy holder',
+      javaType: 'PolicyHolder',
+      imports: ['pl.pjaworski.insurance_company.domain.PolicyHolder'],
+      valueObject: { className: 'PolicyHolder', package: 'pl.pjaworski.insurance_company.domain' },
+      embeds: true,
+      attrs: [
+        { name: 'name', javaType: 'String' },
+        { name: 'surname', javaType: 'String' },
+      ],
+    },
+    { name: 'policyNumber', label: 'policy number', javaType: 'String', imports: [] },
+    {
+      name: 'coverage',
+      label: 'coverage',
+      javaType: 'PolicyCoverage',
+      imports: ['pl.pjaworski.insurance_company.domain.PolicyCoverage'],
+      valueObject: { className: 'PolicyCoverage', package: 'pl.pjaworski.insurance_company.domain' },
+      embeds: false,
+      attrs: [],
+    },
+  ],
+});
+
+test('readModelEntity embeds scalar value objects via @Embedded + @AttributeOverrides', () => {
+  const ent = readModelEntity(vaRm());
+  assert.match(ent.content, /@Embedded\s+@AttributeOverrides\(\{[^}]*policy_holder_name/s);
+  assert.match(ent.content, /@AttributeOverride\(name = "name", column = @Column\(name = "policy_holder_name"\)\)/);
+  assert.match(ent.content, /@AttributeOverride\(name = "surname", column = @Column\(name = "policy_holder_surname"\)\)/);
+  assert.match(ent.content, /import jakarta.persistence.AttributeOverride;/);
+  assert.match(ent.content, /import jakarta.persistence.Embedded;/);
+});
+
+test('readModelEntity keeps a list-bearing value object as JSON, not embedded', () => {
+  const ent = readModelEntity(vaRm());
+  assert.match(ent.content, /@JdbcTypeCode\(SqlTypes\.JSON\)\s+private PolicyCoverage coverage;/);
+  assert.match(ent.content, /import org.hibernate.annotations.JdbcTypeCode;/);
+  assert.doesNotMatch(ent.content, /@Embedded\s+private PolicyCoverage coverage;/);
+});
+
+test('valueObject marks scalar-only records @Embeddable and leaves list-bearing ones plain', () => {
+  const scalar = valueObject({ className: 'PolicyHolder', package: 'x.domain', fields: [
+    { name: 'name', javaType: 'String' },
+    { name: 'surname', javaType: 'String' },
+  ] });
+  assert.match(scalar.content, /@Embeddable/);
+  assert.match(scalar.content, /import jakarta.persistence.Embeddable;/);
+
+  const listy = valueObject({ className: 'PolicyCoverage', package: 'x.domain', fields: [
+    { name: 'coveragePeriod', javaType: 'String' },
+    { name: 'riskList', javaType: 'List<String>' },
+  ] });
+  assert.doesNotMatch(listy.content, /@Embeddable/);
+});
+
+// --- persisting projector GET: server-side search on the list endpoint ----------
+
+test('persistingProjector delegates search to the repository, no in-memory filter', () => {
+  const eventsById = new Map([
+    ['policy-issued', { id: 'policy-issued', name: 'Policy Issued', aggregate: 'policy', fields: [
+      { name: 'policyHolder', javaType: 'PolicyHolder' },
+      { name: 'policyNumber', javaType: 'String' },
+    ] }],
+  ]);
+  const p = persistingProjector(vaRm(), eventsById, BASE);
+  assert.match(p.content, /getPolicyList\(@RequestParam Map<String, String> search\)/);
+  // Server-side: the projector asks the repository to run the search, never findAll()+filter.
+  assert.match(p.content, /return repository\.findAllBySearch\(search\)\.stream\(\)/);
+  assert.doesNotMatch(p.content, /\.filter\(e -> matches/);
+  assert.doesNotMatch(p.content, /repository\.findAll\(\)/);
+});
+
+test('persistingProjectorAbility exposes a search-capable DSL overload', () => {
+  const a = persistingProjectorAbility(vaRm(), BASE, []);
+  assert.match(a.content, /getPolicyList\(Map\.of\(\)\)/);
+  assert.match(a.content, /expect_policy_list\(Map<String, String> search, Predicate<List<PolicyList>> testCase\)/);
+  assert.match(a.content, /import java.util.Map;/);
+});
+
+// --- server-side repository search ---------------------------------------------
+
+test('repository interface exposes findAllBySearch', () => {
+  const r = readModelRepository(vaRm());
+  assert.match(r.content, /List<PolicyListEntity> findAllBySearch\(Map<String, String> search\);/);
+  assert.match(r.content, /import java.util.Map;/);
+});
+
+test('JPA repository searches server-side via Specification per field', () => {
+  const j = readModelJpaRepository(vaRm());
+  assert.match(j.content, /JpaSpecificationExecutor<PolicyListEntity>/);
+  assert.match(j.content, /default List<PolicyListEntity> findAllBySearch\(Map<String, String> search\)/);
+  assert.match(j.content, /cb\.like\(cb\.lower\(root\.get\("policyHolder"\)\.get\("name"\)\), "%" \+ search\.get\("policyHolder\.name"\)\.toLowerCase\(\) \+ "%"\)/);
+  assert.match(j.content, /cb\.like\(cb\.lower\(root\.get\("policyHolder"\)\.get\("surname"\)\)/);
+  assert.match(j.content, /cb\.like\(cb\.lower\(root\.get\("policyNumber"\)\)/);
+  assert.match(j.content, /import org.springframework.data.jpa.domain.Specification;/);
+  assert.match(j.content, /import org.springframework.data.jpa.repository.JpaSpecificationExecutor;/);
+});
+
+test('in-memory repository search mirrors the server-side semantics', () => {
+  const i = readModelInMemoryRepository(vaRm());
+  assert.match(i.content, /findAllBySearch\(Map<String, String> search\)/);
+  assert.match(i.content, /case "policyHolder\.name" ->/);
+  assert.match(i.content, /e\.getPolicyHolder\(\)\.name\(\)\.toLowerCase\(\)\.contains\(value\.toLowerCase\(\)\)/);
+  assert.match(i.content, /case "policyNumber" ->/);
+});
+
+// --- field-level :Key composite key --------------------------------------------
+
+const keyedRm = () => ({
+  id: 'policy-list',
+  className: 'PolicyList',
+  package: VA_ENT,
+  getterMethod: 'getPolicyList',
+  getMapping: 'policy-list',
+  dslMethod: 'expect_policy_list',
+  entityClassName: 'PolicyListEntity',
+  idClassName: 'PolicyListKey',
+  projectorClassName: 'PolicyListProjector',
+  abilityClassName: 'PolicyListProjectorAbility',
+  repositoryClassName: 'PolicyListRepository',
+  jpaRepositoryClassName: 'PolicyListJpaRepository',
+  inMemoryRepositoryClassName: 'PolicyListInMemoryRepository',
+  repositoryConstant: 'POLICY_LIST_REPOSITORY',
+  tableName: 'policy_list',
+  subscribes: ['policy-issued'],
+  fields: [
+    { name: 'policyNumber', label: 'policy number', javaType: 'String', imports: [], key: true },
+    {
+      name: 'policyHolder',
+      label: 'policy holder',
+      javaType: 'PolicyHolder',
+      imports: ['pl.pjaworski.insurance_company.domain.PolicyHolder'],
+      valueObject: { className: 'PolicyHolder', package: 'pl.pjaworski.insurance_company.domain' },
+      embeds: true,
+      attrs: [
+        { name: 'name', javaType: 'String' },
+        { name: 'surname', javaType: 'String' },
+      ],
+    },
+  ],
+  keyFields: [
+    { name: 'policyNumber', label: 'policy number', javaType: 'String', imports: [], key: true },
+  ],
+});
+
+test('parseField recognizes trailing :Key', () => {
+  const f = parseField('policy number:Key');
+  assert.equal(f.name, 'policyNumber');
+  assert.equal(f.key, true);
+  assert.equal(f.bracketed, false);
+});
+
+test('readModelKey emits @Embeddable record with key fields', () => {
+  const keyClass = readModelKey(keyedRm());
+  assert.equal(keyClass.className, 'PolicyListKey');
+  assert.match(keyClass.content, /@Embeddable\s+public record PolicyListKey\(\s+String policyNumber\)/);
+});
+
+test('readModelEntity uses @EmbeddedId PolicyListKey when keyFields present', () => {
+  const ent = readModelEntity(keyedRm());
+  assert.match(ent.content, /@EmbeddedId\s+private PolicyListKey id;/);
+  assert.doesNotMatch(ent.content, /UUID aggregateId/);
+  assert.match(ent.content, /return new PolicyList\(id\.policyNumber\(\), policyHolder\);/);
+});
+
+test('persistingProjector saves entity with composite key when keyFields present', () => {
+  const eventsById = new Map([
+    ['policy-issued', {
+      id: 'policy-issued',
+      name: 'Policy Issued',
+      package: 'pl.pjaworski.insurance_company.domain.events',
+      className: 'PolicyIssuedEvent',
+      fields: [
+        { name: 'policyHolder', javaType: 'PolicyHolder' },
+        { name: 'policyNumber', javaType: 'String' },
+      ],
+    }],
+  ]);
+  const p = persistingProjector(keyedRm(), eventsById, BASE);
+  assert.match(p.content, /repository\.save\(new PolicyListEntity\(new PolicyListKey\(projected\.policyNumber\(\)\), projected\.policyHolder\(\)\)\);/);
+  assert.match(p.content, /repository\.findById\(new PolicyListKey\(event\.policyNumber\(\)\)\)/);
+  assert.doesNotMatch(p.content, /event\.aggregateId\(\)/);
+});
+
+test('repositories use PolicyListKey as ID type when keyFields present', () => {
+  const repo = readModelRepository(keyedRm());
+  assert.match(repo.content, /Optional<PolicyListEntity> findById\(PolicyListKey id\);/);
+
+  const jpa = readModelJpaRepository(keyedRm());
+  assert.match(jpa.content, /JpaRepository<PolicyListEntity, PolicyListKey>/);
+
+  const mem = readModelInMemoryRepository(keyedRm());
+  assert.match(mem.content, /Map<PolicyListKey, PolicyListEntity> entities/);
+  assert.match(mem.content, /entities\.put\(entity\.getId\(\), entity\);/);
+});
+
+// --- header ownership wording --------------------------------------------------
+// `logic` classes are scaffolded then owned: the header must say hand edits are
+// kept and drift is reported — never "edits here are overwritten". Data/contract
+// files keep the plain add-only wording.
+
+test('logic files advertise additive ownership, not overwriting', () => {
+  const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
+  const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
+
+  const handler = commandHandler(c, e, BASE);
+  assert.match(handler.content, /Scaffolded once, then additive: keep hand edits; model drift is reported/);
+  assert.doesNotMatch(handler.content, /edits here are overwritten/);
+
+  const rm = keyedRm();
+  const entity = readModelEntity(rm);
+  const repo = readModelRepository(rm);
+  const projector = persistingProjector(rm, new Map([['policy-issued', e]]), BASE);
+  for (const f of [entity, repo, projector]) {
+    assert.match(f.content, /Scaffolded once, then additive: keep hand edits; model drift is reported/);
+    assert.doesNotMatch(f.content, /edits here are overwritten/);
+  }
+});
+
+test('data/contract files keep the overwrite wording', () => {
+  const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
+  const cmdFile = command(c);
+  assert.match(cmdFile.content, /edits here are overwritten/);
+  assert.doesNotMatch(cmdFile.content, /Scaffolded once, then additive/);
 });

@@ -1,31 +1,33 @@
 # Edit classification — when the agent may touch a generated file
 
-The generator is deterministic and add-only: it inserts members the model grew and
-touches nothing that already exists. That keeps hand-added extensions alive (see
-`ad-hoc-extensions.md`), but it has one blind spot: it cannot tell whether a generated
-member whose **body** no longer matches fresh output is a deliberate hand edit or stale
-state. The `// PRESERVED-BY-HAND: <reason>` marker resolves that ambiguity.
+The generator is deterministic: it inserts members the model grew and reconciles
+headers. The agent owns **implementation** — method bodies, private members, helper
+classes. The agent does **not** own the **contract** — public API shape, class hierarchy,
+architecture.
 
-`node <skill>/scripts/codegen --next` already tells you, reactively, what to do when it
-detects a problem (`STALE_GENERATED`, `STALE_SCAFFOLD`, ...) — its prompt is generated
-from the same code that enforces it, so it can't drift from actual behavior. This doc is
-for the decision `--next` **cannot** make: it only fires after something has already
-deviated, so *before* you touch a generated file at all, classify what you're about to do.
+## The rule
+
+| Layer | Owner | Agent may... |
+|-------|-------|-------------|
+| **Contract** (public shape) | Generator | Never change: class signature, public method names/signatures, interfaces, package |
+| **Implementation** (details) | Agent | Rewrite freely: method bodies (including `@Override`), private methods/fields, helper classes |
+
+The agent is responsible for compilation. If a body rewrite breaks something, fix it.
 
 ## Classify before you touch a generated file
 
 | # | Kind | Example | Where it belongs |
 |---|------|---------|------------------|
 | 1 | **Model change** | new event / command / read model / field | `<docs>/events.md`, `commands.md`, `readmodels.md`, `business-definitions-raw.md` — run codegen, it emits it |
-| 2 | **Implementation change (allowed)** | make `risk` an enum; rename a value-object field; add a query over existing fields | the generated file itself, marked `// PRESERVED-BY-HAND` — see below |
+| 2 | **Implementation change (allowed)** | rewrite a method body; make `risk` an enum; rename a value-object field; add a query over existing fields | the generated file itself — body rewrite needs no marker; structural changes (new type, renamed field) need `// PRESERVED-BY-HAND` |
 | 3 | **Stale generated member** | a member's body predates a model change nobody re-ran codegen for | run `node <skill>/scripts/codegen --next` — it will tell you |
 
-**Never edit a `// GENERATED` file mechanically.** Classify first, and only proceed as
-kind 1 (model → regenerate) or kind 2 (marked). If you're not sure whether something
-has already drifted (kind 3) rather than needing a fresh decision, that's what `--next`
-is for — run it before guessing.
+**Body rewrites need no marker.** The generator's advisory compares bodies, but a body
+that differs from the template is the agent's implementation choice — it compiles or it
+doesn't. Only **structural deviations** (the file's shape differs from what the model
+would emit) need `// PRESERVED-BY-HAND`.
 
-## Declaring a kind-2 edit
+## Declaring a kind-2 structural edit
 
 The model is an abstraction; reality sometimes needs a type, structure or logic it
 can't express (an enum, a range, a third-party type). When that's genuinely the case:
@@ -46,9 +48,8 @@ projector member is NOT kind 2 — put logic in the right seam instead.
 
 ## Summary
 
-- Generated files are still add-only by default — don't hand-write scaffolding.
-- The **decision** to deviate is yours; the generator only checks the **declaration**
-  (the marker).
+- Generated files keep their **contract** (public shape) intact.
+- The agent owns **implementation** — rewrite bodies, add private members, create helpers.
 - Model says "no"; reality says "yes" → kind 2, mark it, done.
 - Anything reactive — a file that's already gone stale, a scaffold that predates its
   template — isn't decided here. Run `--next` and follow its prompt.

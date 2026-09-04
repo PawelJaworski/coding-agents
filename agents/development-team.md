@@ -21,7 +21,6 @@ permission:
   read: allow
   todowrite: allow
   external_directory: allow
-model: claude-sonnet-5
 ---
 
 # Skills

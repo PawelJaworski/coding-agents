@@ -102,29 +102,48 @@ export function computeAdvisory({ currentContent, generatedContent, relPath }) {
   }
 
   const promptSections = [];
-  promptSections.push(`Update file: \`${relPath}\` to align with event model changes.`);
+  promptSections.push(
+    `HAND-OWNED FILE — \`${relPath}\` differs from the event model.\n` +
+      `Not a request to "sync" the file. Apply the per-section rule below; the two\n` +
+      `sections have OPPOSITE rules. When in doubt, do nothing and report.`,
+  );
 
   if (missingMembers.length > 0) {
-    promptSections.push(`\n### Missing member(s) to add:`);
+    promptSections.push(
+      `\n### ADDITIVE — in the model, absent here. Agent MAY add these.\n` +
+        `Adding a member cannot destroy existing logic. Add one only when it is\n` +
+        `actually needed: the file no longer compiles without it, or a test needs the\n` +
+        `new model capability. Do not bulk-paste the rest.`,
+    );
     for (const m of missingMembers) {
-      promptSections.push(`\n\`\`\`java\n${m.snippet}\n\`\`\``);
+      promptSections.push(`\nMember \`${m.key}\`:\n\`\`\`java\n${m.snippet}\n\`\`\``);
     }
   }
 
   if (driftedMembers.length > 0) {
-    promptSections.push(`\n### Member(s) requiring update:`);
+    promptSections.push(
+      `\n### EXISTING LOGIC — do NOT rewrite. This is hand-written work.\n` +
+        `Never paste the model's version over a member that already exists; that is\n` +
+        `destroying the developer's logic, even if the model "looks right".\n` +
+        `ONLY exception: it no longer compiles after a model change. Then make the\n` +
+        `MINIMAL edit that restores compilation (e.g. pass the new constructor\n` +
+        `argument) and preserve the surrounding intent. Anything beyond that is the\n` +
+        `developer's call.`,
+    );
     for (const d of driftedMembers) {
       promptSections.push(
         `\nMember \`${d.key}\`:\n` +
-          `Expected implementation from model:\n` +
+          `Model's version — REFERENCE ONLY, do not apply wholesale:\n` +
           `\`\`\`java\n${d.expectedSnippet}\n\`\`\``,
       );
     }
   }
 
   promptSections.push(
-    `\nIncorporate the changes above into \`${relPath}\` while preserving existing custom logic ` +
-      `or mark with \`// PRESERVED-BY-HAND: <reason>\` if custom behavior is intentional.`,
+    `\nIf the hand-written logic is intentional, the developer may add\n` +
+      `\`// PRESERVED-BY-HAND: <reason>\` to silence this report. Choosing to align\n` +
+      `working logic with the model is the developer's decision, not the agent's —\n` +
+      `report it instead of doing it.`,
   );
 
   return {

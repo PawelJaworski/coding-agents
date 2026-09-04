@@ -24,7 +24,7 @@ import {
 } from './scaffold.js';
 import { mergeGenerated, semanticDrift } from './merge.js';
 import { computeAdvisory, isLogicFile } from './advisory.js';
-import { pendingWork, buildQueue } from './next.js';
+import { pendingWork, buildQueue, parseSpecNames } from './next.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
@@ -134,8 +134,9 @@ if (path.resolve(testRoot) !== path.resolve(groovyTestRoot)) {
 }
 
 let files;
+let model;
 try {
-  const model = parseModel({ modelDir, basePackage: config.basePackage });
+  model = parseModel({ modelDir, basePackage: config.basePackage });
   // `--json` alone dumps the parsed model. Combined with `--next` it instead
   // means "the --next result as JSON" — handled further down.
   if (args.includes('--json') && !nextMode) {
@@ -205,9 +206,21 @@ for (const file of files) {
   // generator computes exact advisory instructions rather than blindly modifying the code.
   if (isLogicFile(file) && exists) {
     let current = fs.readFileSync(target, 'utf8');
+
+    // Check preserved-by-hand FIRST — if the file declares an intentional
+    // deviation, skip header reconciliation entirely. The header is part of
+    // the deliberate deviation and must not be stripped.
+    const adv = computeAdvisory({ currentContent: current, generatedContent: file.content, relPath: rel });
+    if (adv && adv.isPreserved) {
+      preservedByHand.push(`${rel}  // PRESERVED-BY-HAND: ${adv.reason}`);
+      preserved.push(rel);
+      continue;
+    }
+
     // The leading comment block is ownership metadata, never business logic. It
     // must stay honest about how the file is treated, so reconcile it whenever
     // it drifts from the template — without touching the hand-written body.
+    // Skip this for preserved-by-hand files (handled above).
     const genHeader = leadingCommentBlock(file.content);
     const curHeader = leadingCommentBlock(current);
     if (curHeader !== genHeader) {
@@ -220,15 +233,9 @@ for (const file of files) {
         current = `${genHeader}\n${body}`;
       }
     }
-    const adv = computeAdvisory({ currentContent: current, generatedContent: file.content, relPath: rel });
     if (adv) {
-      if (adv.isPreserved) {
-        preservedByHand.push(`${rel}  // PRESERVED-BY-HAND: ${adv.reason}`);
-        preserved.push(rel);
-      } else {
-        advisoryDrifts.push(adv);
-        preserved.push(rel);
-      }
+      advisoryDrifts.push(adv);
+      preserved.push(rel);
     } else {
       preserved.push(rel);
     }
@@ -342,7 +349,12 @@ function reportPreservedByHand() {
 
 function reportAdvisoryDrifts() {
   console.error(
-    `\n  ADVISORY: MODEL DRIFT DETECTED  ${advisoryDrifts.length} logic file(s) differ from the event model:`,
+    `\n  ADVISORY: ${advisoryDrifts.length} hand-owned logic file(s) differ from the event model.` +
+      `\n  Not a "sync the file" task. Two rules, per section:` +
+      `\n    ADDITIVE (in model, missing here) -> may be added when needed to compile` +
+      `\n                                         or to satisfy a test.` +
+      `\n    EXISTING LOGIC (body differs)     -> do NOT rewrite. Only a minimal` +
+      `\n                                         compile fix is ever allowed.`,
   );
   for (const adv of advisoryDrifts) {
     console.error(`\n================================================================================`);
@@ -367,7 +379,7 @@ if (checkOnly) {
     console.log(`\n  preserved by hand (intentional deviations from the model):`);
     preservedByHand.forEach((f) => console.log(`    ${f}`));
   }
-  if (stale.length || staleScaffold.length || staleGenerated.length || advisoryDrifts.length || needsManualMerge.length) {
+  if (stale.length || staleScaffold.length || staleGenerated.length || needsManualMerge.length) {
     process.exit(1);
   }
   console.log('codegen: up to date');
@@ -423,22 +435,10 @@ if (nextMode) {
     });
     process.exit(1);
   }
-  if (advisoryDrifts.length) {
-    printNext({
-      state: 'ADVISORY_DRIFT',
-      next: {
-        kind: 'apply-scaffold',
-        detail: advisoryDrifts[0].relPath,
-        prompt: advisoryDrifts[0].prompt,
-      },
-      queue: advisoryDrifts.slice(1).map((a) => ({
-        kind: 'apply-scaffold',
-        detail: a.relPath,
-        prompt: a.prompt,
-      })),
-    });
-    process.exit(1);
-  }
+  // ADVISORY_DRIFT is informational only — it reports where the model and
+  // hand-written logic diverge. It does NOT block the state machine.
+  // The developer decides whether to align the code with the model or mark
+  // the file with // PRESERVED-BY-HAND: <reason>.
   if (needsManualMerge.length) {
     printNext({
       state: 'NEEDS_MANUAL_MERGE',
@@ -459,11 +459,23 @@ if (nextMode) {
   const businessRulesRaw = fs.existsSync(businessRulesPath)
     ? fs.readFileSync(businessRulesPath, 'utf8')
     : '';
-  const specContents = walk(groovyTestRoot)
+  const parsedSpecs = walk(groovyTestRoot)
     .filter((f) => f.endsWith('.groovy'))
-    .map((f) => fs.readFileSync(f, 'utf8'));
+    .flatMap((f) => parseSpecNames(fs.readFileSync(f, 'utf8'), path.relative(projectRoot, f)));
 
-  const queue = buildQueue(pendingWork({ businessRulesRaw, gwtFiles, specContents }));
+  // Slice-aware queue: each scenario/rule is matched against the slice it MUST
+  // live in (a same-named method anywhere in the tree no longer counts), and
+  // every prompt carries the exact spec path so the agent never guesses.
+  const queue = buildQueue(
+    pendingWork({
+      businessRulesRaw,
+      gwtFiles,
+      parsedSpecs,
+      commands: model.commands,
+      readModels: model.readModels,
+    }),
+    { groovyRoot: config.groovyTestSourceRoot, base: config.basePackage },
+  );
 
   if (queue.length === 0) {
     printNext({ state: 'DONE', next: null, queue: [] });

@@ -24,11 +24,27 @@ test('detectState: NEEDS_MANUAL_MERGE → RECONCILE', () => {
   assert.equal(detectState({ state: 'NEEDS_MANUAL_MERGE' }, {}), 'RECONCILE');
 });
 
-test('detectState: ADVISORY_DRIFT → RECONCILE', () => {
-  assert.equal(detectState({ state: 'ADVISORY_DRIFT' }, {}), 'RECONCILE');
+test('detectState: ADVISORY_DRIFT → GENERATE (falls through — not a blocking state)', () => {
+  // ADVISORY_DRIFT is informational only and never blocks the state machine.
+  // When codegen returns it with no other blocking states, the flow continues
+  // to PENDING/DONE. This test covers the edge case where ADVISORY_DRIFT
+  // arrives alone (codegen --next no longer produces this, but main-flow
+  // should handle it gracefully).
+  assert.equal(detectState({ state: 'ADVISORY_DRIFT' }, {}), 'GENERATE');
 });
 
 test('detectState: PENDING with queue → IMPLEMENT', () => {
+  const cg = {
+    state: 'PENDING',
+    queue: [{ kind: 'gwt-scenario', detail: { scenario: 'S1' }, prompt: 'do S1' }],
+  };
+  assert.equal(detectState(cg, {}), 'IMPLEMENT');
+});
+
+test('detectState: PENDING with queue and advisory drifts → IMPLEMENT (advisory is ignored)', () => {
+  // Codegen no longer returns ADVISORY_DRIFT as a blocking state. When there
+  // are advisory drifts alongside pending work, the state is PENDING and the
+  // flow should proceed to IMPLEMENT.
   const cg = {
     state: 'PENDING',
     queue: [{ kind: 'gwt-scenario', detail: { scenario: 'S1' }, prompt: 'do S1' }],

@@ -98,8 +98,7 @@ export function detectState(cg, fsState) {
     cg &&
     (cg.state === 'STALE_SCAFFOLD' ||
       cg.state === 'STALE_GENERATED' ||
-      cg.state === 'NEEDS_MANUAL_MERGE' ||
-      cg.state === 'ADVISORY_DRIFT')
+      cg.state === 'NEEDS_MANUAL_MERGE')
   ) {
     return 'RECONCILE';
   }
@@ -132,8 +131,12 @@ const PROMPTS = {
     '  • STALE_SCAFFOLD: diff each once-owned file against its template in\n' +
     '    scripts/codegen/runtime.js, port the delta by hand, then run\n' +
     '    `codegen --accept-scaffold`.\n' +
-    '  • STALE_GENERATED: delete the file and regenerate.\n' +
-    '  • ADVISORY_DRIFT: apply the advisory instructions.\n\n' +
+    '  • STALE_GENERATED: delete the file and regenerate.\n\n' +
+    '  ADVISORY drift is NOT part of this step. Do not "sync" those files.\n' +
+    '  You MAY add a member the model has and the file lacks, and you MAY make\n' +
+    '  the minimal edit that restores compilation after a model change. You MUST\n' +
+    '  NOT rewrite an existing member body to match the model — that is the\n' +
+    '  developer\'s logic. Report it instead.\n\n' +
     'Then re-run main-flow.',
   VERIFY:
     'Run verification and write the development report:\n\n' +
@@ -146,7 +149,12 @@ const PROMPTS = {
     'If codegen --check reports STALE_SCAFFOLD or STALE_GENERATED,\n' +
     'go back to RECONCILE.',
   REVIEW:
-    'Delegate to backend-code-reviewer to review all code changes made in this session.',
+    'Delegate to backend-code-reviewer to review all code changes made in this\n' +
+    'session.\n\n' +
+    'Reviewing is READING. Do not edit code in this state.\n' +
+    'In particular, an ADVISORY from `codegen --check` is not a finding to fix:\n' +
+    '`--check` exiting `up to date` IS the pass. Never rewrite an existing\n' +
+    'member body to match the model — report the drift and finish.',
 };
 
 /**
@@ -230,7 +238,7 @@ function printTest() {
     },
     {
       name: 'RECONCILE',
-      detect: 'codegen --next → STALE_SCAFFOLD | STALE_GENERATED | NEEDS_MANUAL_MERGE | ADVISORY_DRIFT',
+      detect: 'codegen --next → STALE_SCAFFOLD | STALE_GENERATED | NEEDS_MANUAL_MERGE',
       prompt: 'Diff stale files against templates, port delta, accept-scaffold',
     },
     {

@@ -105,12 +105,19 @@ naming the GWT scenario that justifies it.
 Lombok failures. Then `node .opencode/skills/backend-development/scripts/codegen --check` must still report `up to date`.
 
 # Hard boundaries
-- **Never rewrite an existing member of a `// GENERATED ... DO NOT EDIT` file.** Changing
-  a generated method's signature or body is not preserved intent — and it breaks the
-  generated `*Ability` that calls it, far from your edit. If a generated member looks
-  wrong, the MODEL is wrong — leave it alone and report it back to the caller.
-  *Adding* a member to a generated projector/repository for an ad-hoc extension IS
-  allowed and survives regeneration; see `reference/ad-hoc-extensions.md`.
+- **Never change the contract of a `// GENERATED ... DO NOT EDIT` file.** The contract is
+  the public shape: class signature, public method names, method signatures, implemented
+  interfaces, package structure. Changing these breaks the generated `*Ability`, Spring
+  wiring, and serde wrappers. If the contract looks wrong, the MODEL is wrong — leave it
+  alone and report it back to the caller.
+- **Can rewrite method bodies.** The implementation inside any existing method — including
+  `@Override` methods — is the agent's to change. The generator creates the skeleton; the
+  agent owns the details. The agent is responsible for compilation.
+- **Can add private members.** Private methods, private fields, and helper classes may be
+  added to generated files. The add-only merge preserves them across regeneration.
+- **Can create new files.** Private helper classes, services, or utilities the agent
+  introduces are the agent's responsibility. They are not scaffolding — they are
+  implementation details.
 - **Never write scaffolding.** No new commands, events, read models, handlers, projectors,
   abilities or serde wrappers. A missing command/event/read model means the model is
   missing it — stop and report it back to the caller. (A missing *query* over existing fields is ad-hoc, not missing

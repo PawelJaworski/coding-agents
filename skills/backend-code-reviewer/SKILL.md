@@ -10,8 +10,21 @@ description: >
   Use after backend-development / backend-implement changed any backend code.
 ---
 
-# What you do NOT need to check
-The generator guarantees these by construction — do not spend context re-verifying them:
+# Never "sync" a file because of an ADVISORY
+`codegen --check` may print an `ADVISORY` listing hand-owned files that diverge from the
+model. It is not a task to align them, and `--check` still exits `up to date` — that IS
+the pass. Reviewing is reading. Judge an edit by intent:
+
+- **Rewriting an existing member's body to match the model = defect.** That is destroying
+  the developer's logic. Flag it, revert it, do not do it yourself.
+- **Adding a member the model has and the file lacks** (new event, new field) is legitimate
+  when it was needed to compile or to satisfy a test.
+- **A minimal edit that restores compilation** after a model change (new constructor
+  argument, renamed type) is legitimate. Anything broader than the compile fix is not.
+
+Your only valid action is to report the drift.
+
+# What you do NOT need to checkThe generator guarantees these by construction — do not spend context re-verifying them:
 naming and packaging, events carrying `aggregateId`, read-model brackets not leaking
 upstream, on-demand vs persisting projector choice, serde/enum/state-projector wiring,
 ability DSL shape, passthrough field mapping. If any of these is wrong, the generator or
@@ -19,13 +32,18 @@ the model is wrong, not the code.
 
 # What you DO check
 
-## 1. Ownership was respected (the top failure mode)
+## 1. Contract was respected (the top failure mode)
 - `node .opencode/skills/backend-development/scripts/codegen --check` must report
-  `up to date`. Added members do not disturb it; a **rewritten** generated member or an
-  edited `*Ability` will.
-- No existing member of a `// GENERATED ... DO NOT EDIT` file was **rewritten** (signature
-  or body changed). That both loses intent and breaks the generated `*Ability` that calls
-  it — a compile error far from the edit.
+  `up to date`. Added members and rewritten bodies do not disturb it; a changed
+  **contract** (public API shape, class hierarchy, architecture) or an edited `*Ability`
+  will.
+- No **contract** of a `// GENERATED ... DO NOT EDIT` file was changed: class signature,
+  public method names/signatures, implemented interfaces, package structure. Changing
+  these breaks the generated `*Ability`, Spring wiring, and serde wrappers.
+- **Method body rewrites** in generated files are allowed — the agent owns the
+  implementation inside the skeleton. Verify the rewrite compiles and passes tests.
+- **Added private members** on generated files are allowed and survive regeneration.
+  Verify they don't introduce unused imports or dead code.
 - **Added** members on a generated projector/repository are NOT a defect when they back an
   ad-hoc extension (a search endpoint, a derived query over fields the read model already
   has). The merge is add-only precisely so these survive. See
@@ -76,4 +94,4 @@ A missing *query* over fields that already exist is NOT a model gap — that is 
 # Notes
 - Lombok LSP/jdtls errors are false positives; only `mvn` is authoritative.
 - Report findings to backend-development for correction. Prefer "change the model" or
-  "change the decider" over any fix that rewrites a generated member.
+  "change the decider" over any fix that changes a generated file's contract.

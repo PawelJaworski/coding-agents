@@ -26,6 +26,25 @@ are working on the wrong thing: change the MODEL and regenerate.
 An agent's only job here is business logic, and it enters through TDD, never through
 scaffolding.
 
+# The other one rule: an ADVISORY is not a "sync the file" task
+Hand-owned files (`*Decider`, and any generated file the developer has edited) may drift
+from the model. `codegen --check` reports this and still exits `up to date`. It is not a
+request to align the file. Three cases, and only three:
+
+| situation | may the agent edit? |
+|---|---|
+| **ADDITIVE** — member in the model, absent on disk (new event, new field) | **Yes**, when it is needed to compile or to satisfy a test. Adding cannot destroy logic. Add what is needed, not everything offered. |
+| **Does not compile** after a model change (constructor arity, renamed type) | **Yes** — the MINIMAL edit that restores compilation, preserving the existing intent. |
+| **EXISTING LOGIC** — member exists, body differs from the model | **No.** Never paste the model's version over working hand-written logic. Report it. |
+
+A `*Decider` stub throwing `UnsupportedOperationException` is NOT drift — implementing it
+test-first is the normal job (see IMPLEMENT / backend-implement). A sketch implementation
+that makes a red test green is expected there.
+
+The test is intent, not file type: **"am I adding/repairing, or am I overwriting someone's
+decision?"** Overwriting is never the agent's call. When unsure, do nothing and record it
+in `development-report.md`.
+
 # Flow — drive the loop, don't carry the workflow
 
 The entire backend development flow is a **state machine** driven by `main-flow`.
@@ -65,9 +84,9 @@ outcome of a run — an unreported one is not.
 # Reference
 
 ## File ownership
-| header in the file | who owns it |
+| header in the file | who owns what |
 |---|---|
-| `// GENERATED ... DO NOT EDIT` | the generator. **Add-only** — never rewrite a generated member; to change what is emitted, change the model. Exception: `// PRESERVED-BY-HAND: <reason>` declares a deliberate deviation; `--check` tolerates it. See `reference/edit-classification.md`. |
+| `// GENERATED ... DO NOT EDIT` | **Contract** (public shape) is generator-owned: class signature, public method names/signatures, interfaces, package. **Implementation** (method bodies, private members) is the agent's: rewrite freely, add private methods/fields, create helper classes. The agent is responsible for compilation. Exception: `// PRESERVED-BY-HAND: <reason>` declares a deliberate deviation; `--check` tolerates it. See `reference/edit-classification.md`. |
 | `// SCAFFOLDED ONCE ... this file is YOURS` | the project. Written when absent, never touched again. |
 
 ## Brackets
@@ -90,6 +109,9 @@ has. They land as added members on the slice's projector/repository. See
 
 # Boundaries
 Never edit model documents, the generated diagram, or the diagram generator — they are
-owned by the architect. Never rewrite a generated member or edit a generated `*Ability`.
-Never write scaffolding by hand. Never commit `api/openapi.json` or
-`development-report.md`.
+owned by the architect. Never change the **contract** of a generated file (public API
+shape, class hierarchy, architecture). Never edit a generated `*Ability`. Never write
+scaffolding by hand. Never commit `api/openapi.json` or `development-report.md`.
+
+The agent owns **implementation**: method bodies in generated files, private members,
+helper classes, and everything inside deciders. The agent is responsible for compilation.

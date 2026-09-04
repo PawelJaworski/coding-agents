@@ -78,7 +78,7 @@ public class PolicyProjector {
   assert.equal(res.hasDrift, true);
   assert.equal(res.missingMembers.length, 1);
   assert.match(res.prompt, /PolicyCancelledEvent/);
-  assert.match(res.prompt, /Missing member\(s\) to add/);
+  assert.match(res.prompt, /ADDITIVE — in the model, absent here\. Agent MAY add these\./);
 });
 
 test('computeAdvisory: detects drifted method body and returns prompt with snippet', () => {
@@ -110,7 +110,9 @@ public class IssuePolicyHandler {
   assert.equal(res.hasDrift, true);
   assert.equal(res.driftedMembers.length, 1);
   assert.match(res.prompt, /decider\.check\(command\)/);
-  assert.match(res.prompt, /Member\(s\) requiring update/);
+  assert.match(res.prompt, /EXISTING LOGIC — do NOT rewrite/);
+  assert.match(res.prompt, /REFERENCE ONLY, do not apply wholesale/);
+  assert.match(res.prompt, /ONLY exception: it no longer compiles/);
 });
 
 test('computeAdvisory: tolerates custom hand-added methods not in generated model', () => {

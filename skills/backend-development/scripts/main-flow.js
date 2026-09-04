@@ -13,7 +13,7 @@
 //   node scripts/main-flow --test          print the full state machine
 //   node scripts/main-flow --help          this help
 
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -42,21 +42,39 @@ function callCodegen(projectRoot) {
     projectRoot,
     '.opencode/skills/backend-development/scripts/codegen',
   );
+  // The `--next --json` payload embeds the full read model / command detail and can
+  // exceed the OS pipe-buffer size (8 KB on macOS). Capturing it through a pipe via
+  // execSync/spawnSync silently truncates the single huge JSON line at the buffer
+  // boundary, so the parse fails and callCodegen returns null -> detectState falls
+  // back to GENERATE forever. Write the child's stdout straight to a temp file
+  // instead (child writes directly to the file, not through the parent's pipe),
+  // then read the whole file back. `codegen --next` exits non-zero for OUT_OF_DATE /
+  // STALE_* scaffolding states, so ignore the exit code and read the file it wrote.
+  const tmp = path.join(
+    projectRoot,
+    `.codegen-next-${process.pid}-${Date.now()}.json`,
+  );
+  // Give the child an open fd for its stdout so it writes straight to the temp
+  // file (no parent-side pipe, no shell). Pure Node API — identical on POSIX and
+  // Windows. `codegen --next` exits non-zero for OUT_OF_DATE / STALE_* scaffolding
+  // states; ignore the exit code and read whatever file it wrote.
+  const fd = fs.openSync(tmp, 'w');
   try {
-    const stdout = execSync(`node "${script}" --next --json`, {
-      cwd: projectRoot,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 30_000,
-    });
+    try {
+      spawnSync('node', [script, '--next', '--json'], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        stdio: ['pipe', fd, 'pipe'],
+        timeout: 30_000,
+      });
+    } catch { /* non-zero exit still wrote the file; read it below */ }
+    const stdout = fs.readFileSync(tmp, 'utf8');
     return JSON.parse(stdout.trim());
-  } catch (err) {
-    if (err.stdout) {
-      try {
-        return JSON.parse(err.stdout.trim());
-      } catch { /* fall through */ }
-    }
+  } catch {
     return null;
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(tmp, { force: true });
   }
 }
 

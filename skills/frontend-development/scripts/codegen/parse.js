@@ -31,7 +31,7 @@ export function parseSections(text) {
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('## ')) {
-      current = { id: line.slice(3).trim(), props: {}, fields: [], aggregate: null, keyed: false };
+      current = { id: line.slice(3).trim(), props: {}, fields: [], searchFields: [], aggregate: null, keyed: false };
       sections.push(current);
       continue;
     }
@@ -40,6 +40,11 @@ export function parseSections(text) {
     const field = line.match(/^[*-]\s+([^:]*\[?[^\]]*\]?(?::\w+)?)$/);
     if (field && !/^[A-Za-z][\w -]*:\s/.test(field[1])) {
       current.fields.push(parseField(field[1].trim()));
+      continue;
+    }
+    const searchField = line.match(/^\?\s+(.+)$/);
+    if (searchField) {
+      current.searchFields.push(parseField(searchField[1].trim()));
       continue;
     }
     const aggregate = line.match(/^-?\s*([A-Za-z][\w -]*):(Id|Key)$/);
@@ -73,12 +78,26 @@ const list = (v) => (v || '').split(',').map((x) => x.trim()).filter(Boolean);
 // same file and apply the same rules, so a field cannot be a record on one side
 // and a string on the other.
 
+// Bullets under "# examples" are sample VALUES, never attributes. Only bullets
+// outside that section describe the concept's structure.
+function stripExamples(block) {
+  const lines = block.split('\n');
+  const kept = [];
+  let inExamples = false;
+  for (const line of lines) {
+    const heading = line.match(/^#\s*(\w+)/);
+    if (heading) inExamples = heading[1].toLowerCase() === 'examples';
+    if (!inExamples) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
 export function parseDefinitions(text) {
   const defs = [];
   for (const block of text.split(/^-{3,}\s*$/m)) {
     const nameLine = block.match(/^#\s*name\s+(.+)$/m);
     if (!nameLine) continue;
-    const attrs = [...block.matchAll(/^\*\s+(.+)$/gm)].map((m) => m[1].trim());
+    const attrs = [...stripExamples(block).matchAll(/^\*\s+(.+)$/gm)].map((m) => m[1].trim());
     defs.push({ name: nameLine[1].trim(), attributes: attrs });
   }
   return defs;
@@ -138,10 +157,32 @@ export function parseModel({ modelDir, openapiPath = null }) {
   );
   const decorate = (fields) => fields.map((f) => ({ ...f, ...typeOf(f, byKey) }));
 
+  // Parse readmodels first to extract search fields for openapi expansion.
+  const readModelSections = parseSections(read('readmodels.md'));
+  const modelSearchFields = new Map();
+  for (const s of readModelSections) {
+    if (s.searchFields.length > 0) {
+      const decorated = decorate(s.searchFields);
+      // For embedded value objects, the backend uses dot notation (e.g. policyHolder.name).
+      // Each search field's searchKey is the wire-level query parameter name.
+      const expanded = [];
+      for (const f of decorated) {
+        if (f.object) {
+          for (const a of f.object.fields) {
+            expanded.push({ name: a.name, searchKey: `${f.name}.${a.name}`, tsType: 'string' });
+          }
+        } else {
+          expanded.push({ name: f.name, searchKey: f.name, tsType: f.tsType });
+        }
+      }
+      modelSearchFields.set(s.id, expanded);
+    }
+  }
+
   // When the backend publishes an OpenAPI document it — not the markdown field
   // lists — is the truth about the wire. The model still owns page structure,
   // route shape, labels and [bracketed] hints; see openapi.js for the split.
-  const contract = openapiPath ? indexOpenApi(loadOpenApi(openapiPath)) : null;
+  const contract = openapiPath ? indexOpenApi(loadOpenApi(openapiPath), modelSearchFields) : null;
 
   const commands = parseSections(read('commands.md')).map((s) => {
     let fields = decorate(s.fields);
@@ -170,7 +211,7 @@ export function parseModel({ modelDir, openapiPath = null }) {
   });
   const commandById = new Map(commands.map((c) => [c.id, c]));
 
-  const readModels = parseSections(read('readmodels.md')).map((s) => {
+  const readModels = readModelSections.map((s) => {
     let fields = decorate(s.fields);
     // A `:Key` read model is listable across aggregates -> the page renders a
     // collection. An `:Id` one is replayed for a single aggregate -> one object.

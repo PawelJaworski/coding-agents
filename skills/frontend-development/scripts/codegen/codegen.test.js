@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseModel, parseSections, parseField } from './parse.js';
-import { emit, component, store, contracts, api, template } from './emit.js';
+import { emit, component, store, contracts, api, template, pageImports } from './emit.js';
 import naming from './naming.js';
 
 function withModel({ uis, commands = '', readmodels = '', definitions = null, openapi = null }, fn) {
@@ -491,4 +491,198 @@ test('without openapiPath the generator behaves exactly as before', () => {
     assert.deepEqual(m.commands[0].fields.map((f) => f.tsType), ['string', 'string', 'string', 'string']);
     assert.equal(m.contractSource, null);
   });
+});
+
+// ---- search criteria from readmodels.md ? prefix ---------------------------
+// The `?` prefix in readmodels.md marks a field as searchable. The backend uses
+// @RequestParam Map<String, String> which collects ALL query params into a map.
+// The openapi.json represents this as a single param with type:object, and the
+// frontend codegen expands it into individual criteria based on the ? fields.
+
+const SEARCH_UIS = `# UIs
+## policy-list
+Type: html
+Name: Policy List
+`;
+
+const SEARCH_READMODELS = `# Read Models
+## policy-list
+Name: Policy List
+Subscribes: policy-issued
+policy:Key
+* policy holder
+* policy number
+? policy holder
+`;
+
+const SEARCH_DEFINITIONS = `# name Policy Holder
+# description
+The person who buys the policy.
+* name
+* surname
+* address
+`;
+
+const SEARCH_OPENAPI = {
+  openapi: '3.1.0',
+  paths: {
+    '/policy-list': {
+      get: {
+        parameters: [
+          {
+            name: 'search',
+            in: 'query',
+            required: true,
+            schema: { type: 'object', additionalProperties: { type: 'string' } },
+          },
+        ],
+        responses: {
+          200: { content: { '*/*': { schema: { type: 'array', items: schemaRef('PolicyList') } } } },
+        },
+      },
+    },
+  },
+  components: {
+    schemas: {
+      PolicyList: {
+        type: 'object',
+        properties: {
+          policyHolder: schemaRef('PolicyHolder'),
+          policyNumber: { type: 'string' },
+        },
+      },
+      PolicyHolder: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          surname: { type: 'string' },
+          address: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+test('parseSections collects ? lines as searchFields', () => {
+  const [s] = parseSections('## x\n* field one\n? search one\n');
+  assert.deepEqual(s.fields.map((f) => f.name), ['fieldOne']);
+  assert.deepEqual(s.searchFields.map((f) => f.name), ['searchOne']);
+});
+
+test('a Map<String,String> openapi param is expanded into individual criteria from ? fields', () => {
+  withModel(
+    {
+      uis: SEARCH_UIS,
+      readmodels: SEARCH_READMODELS,
+      definitions: SEARCH_DEFINITIONS,
+      openapi: SEARCH_OPENAPI,
+    },
+    (m) => {
+      const view = m.readModels[0];
+      assert.ok(view.search, 'search should be set');
+      const names = view.search.criteria.map((c) => c.name);
+      assert.deepEqual(names, ['policyHolder.name', 'policyHolder.surname', 'policyHolder.address']);
+      // All optional (the Map param itself is required, but individual keys are not)
+      assert.ok(view.search.criteria.every((c) => !c.required));
+    },
+  );
+});
+
+test('search contracts use quoted property names for dotted keys', () => {
+  withModel(
+    {
+      uis: SEARCH_UIS,
+      readmodels: SEARCH_READMODELS,
+      definitions: SEARCH_DEFINITIONS,
+      openapi: SEARCH_OPENAPI,
+    },
+    (m) => {
+      const ts = contracts(m.pages[0], '/api');
+      assert.match(ts, /'policyHolder\.name'\?: string;/);
+      assert.match(ts, /'policyHolder\.surname'\?: string;/);
+      assert.match(ts, /'policyHolder\.address'\?: string;/);
+    },
+  );
+});
+
+test('search API client uses bracket notation for dotted keys', () => {
+  withModel(
+    {
+      uis: SEARCH_UIS,
+      readmodels: SEARCH_READMODELS,
+      definitions: SEARCH_DEFINITIONS,
+      openapi: SEARCH_OPENAPI,
+    },
+    (m) => {
+      const ts = api(m.pages[0]);
+      assert.match(ts, /params\.set\('policyHolder\.name', criteria\['policyHolder\.name'\]\)/);
+      assert.match(ts, /params\.set\('policyHolder\.surname', criteria\['policyHolder\.surname'\]\)/);
+      assert.match(ts, /params\.set\('policyHolder\.address', criteria\['policyHolder\.address'\]\)/);
+    },
+  );
+});
+
+test('search template uses bracket notation for ngModel bindings', () => {
+  withModel(
+    {
+      uis: SEARCH_UIS,
+      readmodels: SEARCH_READMODELS,
+      definitions: SEARCH_DEFINITIONS,
+      openapi: SEARCH_OPENAPI,
+    },
+    (m) => {
+      const html = template(m.pages[0]);
+      assert.match(html, /\[\(ngModel\)\]="policyListSearchCriteria\['policyHolder\.name'\]"/);
+      assert.match(html, /\[\(ngModel\)\]="policyListSearchCriteria\['policyHolder\.surname'\]"/);
+      assert.match(html, /\[\(ngModel\)\]="policyListSearchCriteria\['policyHolder\.address'\]"/);
+    },
+  );
+});
+
+test('search component initialises criteria with quoted keys', () => {
+  withModel(
+    {
+      uis: SEARCH_UIS,
+      readmodels: SEARCH_READMODELS,
+      definitions: SEARCH_DEFINITIONS,
+      openapi: SEARCH_OPENAPI,
+    },
+    (m) => {
+      const ts = component(m.pages[0]);
+      assert.match(ts, /'policyHolder\.name': undefined,/);
+      assert.match(ts, /'policyHolder\.surname': undefined,/);
+      assert.match(ts, /'policyHolder\.address': undefined,/);
+    },
+  );
+});
+
+test('search store has a search method', () => {
+  withModel(
+    {
+      uis: SEARCH_UIS,
+      readmodels: SEARCH_READMODELS,
+      definitions: SEARCH_DEFINITIONS,
+      openapi: SEARCH_OPENAPI,
+    },
+    (m) => {
+      const ts = store(m.pages[0]);
+      assert.match(ts, /async searchPolicyList\(criteria: PolicyListSearchCriteria\)/);
+      assert.match(ts, /await this\.api\.searchPolicyList\(criteria\)/);
+    },
+  );
+});
+
+test('imports include FormsModule when page has search', () => {
+  withModel(
+    {
+      uis: SEARCH_UIS,
+      readmodels: SEARCH_READMODELS,
+      definitions: SEARCH_DEFINITIONS,
+      openapi: SEARCH_OPENAPI,
+    },
+    (m) => {
+      const imports = pageImports(m.pages[0]);
+      assert.match(imports, /import.*FormsModule/);
+    },
+  );
 });

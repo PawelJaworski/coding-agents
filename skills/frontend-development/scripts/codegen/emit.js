@@ -60,7 +60,12 @@ function contracts(page, apiBase) {
     // query parameters, so an optional one is optional here too.
     if (view.search) {
       const criteria = view.search.criteria
-        .map((c) => `  ${c.name}${c.required ? '' : '?'}: ${c.tsType};`)
+        .map((c) => {
+          // Use quoted property names for keys containing dots (e.g. 'policyHolder.name')
+          // because the backend uses dot-notation as the wire-level query parameter name.
+          const safeName = c.name.includes('.') ? `'${c.name}'` : c.name;
+          return `  ${safeName}${c.required ? '' : '?'}: ${c.tsType};`;
+        })
         .join('\n');
       out.push(
         `/** Query of \`GET ${apiBase}${view.search.endpoint}\` — filters \`${view.id}\`. */\n` +
@@ -101,7 +106,8 @@ function initValue(f, indent) {
 // (NG8113) about anything declared but unused. Since the template is owned, the
 // import list has to be owned too — the generator only seeds it from the model.
 function pageImports(page) {
-  const seed = page.commands.length ? ['FormsModule'] : [];
+  const needsFormsModule = page.commands.length > 0 || page.views.some((v) => v.search);
+  const seed = needsFormsModule ? ['FormsModule'] : [];
   const lines = [
     ONCE,
     '// Angular imports for this page\'s template. Add RouterLink, pipes, child',
@@ -120,9 +126,13 @@ function component(page) {
 
   const lines = [GEN, `import { ${angular.join(', ')} } from '@angular/core';`];
   if (page.aggregateParam) lines.push(`import { ActivatedRoute } from '@angular/router';`);
-  if (page.commands.length) {
+  const typesToImport = [
+    ...page.commands.map((c) => naming.payload(c.id)),
+    ...page.views.filter((v) => v.search).map((v) => naming.criteria(v.id)),
+  ];
+  if (typesToImport.length) {
     lines.push(
-      `import type {\n${page.commands.map((c) => `  ${naming.payload(c.id)},`).join('\n')}\n} from './${page.contractsFile.replace(/\.ts$/, '')}';`,
+      `import type {\n${typesToImport.map((t) => `  ${t},`).join('\n')}\n} from './${page.contractsFile.replace(/\.ts$/, '')}';`,
     );
   }
   lines.push(`import { ${page.importsConst} } from './${page.importsFile.replace(/\.ts$/, '')}';`);
@@ -169,6 +179,20 @@ function component(page) {
     lines.push(`  protected readonly ${naming.camel(c.id)}Form: ${naming.payload(c.id)} = {`);
     if (init) lines.push(init);
     lines.push('  };');
+  }
+  for (const v of page.views) {
+    if (v.search) {
+      const init = v.search.criteria
+        .map((c) => {
+          const safeName = c.name.includes('.') ? `'${c.name}'` : c.name;
+          return `    ${safeName}: ${c.required ? "''" : 'undefined'},`;
+        })
+        .join('\n');
+      lines.push('');
+      lines.push(`  protected readonly ${naming.camel(v.id)}SearchCriteria: ${naming.criteria(v.id)} = {`);
+      if (init) lines.push(init);
+      lines.push('  };');
+    }
   }
   lines.push('}');
   return lines.join('\n') + '\n';
@@ -238,11 +262,13 @@ function api(page) {
       );
       lines.push('    let params = new HttpParams();');
       for (const c of v.search.criteria) {
+        const safeName = c.name.includes('.') ? `'${c.name}'` : c.name;
+        const accessor = c.name.includes('.') ? `criteria[${safeName}]` : `criteria.${c.name}`;
         if (c.required) {
-          lines.push(`    params = params.set('${c.name}', criteria.${c.name});`);
+          lines.push(`    params = params.set('${c.name}', ${accessor});`);
         } else {
-          lines.push(`    if (criteria.${c.name} !== undefined) {`);
-          lines.push(`      params = params.set('${c.name}', criteria.${c.name});`);
+          lines.push(`    if (${accessor} !== undefined) {`);
+          lines.push(`      params = params.set('${c.name}', ${accessor});`);
           lines.push('    }');
         }
       }
@@ -428,6 +454,22 @@ function template(page) {
   for (const v of page.views) {
     const sig = `store.${naming.viewSignal(v.id)}()`;
     lines.push('');
+    if (v.search) {
+      const criteria = `${naming.camel(v.id)}SearchCriteria`;
+      lines.push(`  <!-- search: ${v.id} -->`);
+      lines.push(`  <form (ngSubmit)="store.${naming.searchMethod(v.id)}(${criteria})">`);
+      for (const c of v.search.criteria) {
+        const safeName = c.name.includes('.') ? `'${c.name}'` : c.name;
+        const binding = c.name.includes('.') ? `${criteria}[${safeName}]` : `${criteria}.${c.name}`;
+        lines.push(`    <label>`);
+        lines.push(`      ${c.name}`);
+        lines.push(`      <input name="${c.name}" [(ngModel)]="${binding}" />`);
+        lines.push(`    </label>`);
+      }
+      lines.push(`    <button type="submit" [disabled]="store.pending()">Search</button>`);
+      lines.push(`  </form>`);
+      lines.push('');
+    }
     lines.push(`  <!-- read model: ${v.id} -->`);
     if (v.collection) {
       lines.push(`  <table>`);

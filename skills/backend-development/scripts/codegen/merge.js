@@ -439,13 +439,97 @@ export function semanticDrift(existingContent, generatedContent) {
 }
 
 /**
+ * Extract a single annotation (including nested parens/braces) from `src`
+ * starting at `startIdx`. Returns the full annotation text or null.
+ */
+function extractAnnotation(src, startIdx) {
+  // Find the opening `(` after `@Name`
+  let i = src.indexOf('(', startIdx);
+  if (i === -1) return null;
+  let depth = 1;
+  i++;
+  while (i < src.length && depth > 0) {
+    const c = src[i];
+    if (c === '(' || c === '{') depth++;
+    else if (c === ')' || c === '}') depth--;
+    i++;
+  }
+  return src.slice(startIdx, i);
+}
+
+/**
+ * Replace annotation placeholder comments (e.g. `/** @JsonSubTypes({ ... })*\/`)
+ * with the real annotation from the generated output. A placeholder is a Javadoc
+ * block whose body contains only annotation lines and `*`/blank lines — real
+ * documentation has prose that would be lost.
+ *
+ * @returns {{content: string, replaced: boolean}}
+ */
+function replacePlaceholderAnnotations(existingContent, generatedContent) {
+  const JAVADOC_RE = /\/\*\*([\s\S]*?)\*\//g;
+  let changed = false;
+  const result = existingContent.replace(JAVADOC_RE, (match, inner) => {
+    // Only treat as placeholder if every non-blank line is an annotation line
+    // (starts with optional `* ` then `@`). Real javadoc has prose.
+    const lines = inner.split('\n');
+    const isPlaceholder = lines.every((line) => {
+      const stripped = line.replace(/^\s*\*\s?/, '').trim();
+      // Empty lines, annotation lines, and annotation-structural lines
+      // (closing parens/braces like `})`) are all part of a placeholder.
+      return stripped === '' || stripped.startsWith('@') || /^[(){}]+,?$/.test(stripped);
+    });
+    if (!isPlaceholder) return match;
+
+    // Extract annotation names from the placeholder body
+    const placeholderAnnotations = new Set();
+    for (const line of lines) {
+      const m = line.match(/@(\w+)/);
+      if (m) placeholderAnnotations.add(m[1]);
+    }
+
+    // Check if generated output has real versions of these annotations.
+    const genSplit = splitFile(generatedContent);
+    if (!genSplit) return match;
+    const genPrefix = genSplit.prefix;
+    const generatedHasAnnotation = [...placeholderAnnotations].some(
+      (name) => genPrefix.includes(`@${name}(`) || genPrefix.includes(`@${name} `),
+    );
+    if (!generatedHasAnnotation) return match;
+
+    // Extract each matching annotation from generated prefix using brace-aware parsing
+    const replacementParts = [];
+    for (const name of placeholderAnnotations) {
+      const annIdx = genPrefix.indexOf(`@${name}(`);
+      if (annIdx === -1) continue;
+      const ann = extractAnnotation(genPrefix, annIdx);
+      if (ann) replacementParts.push(ann);
+    }
+    if (replacementParts.length === 0) return match;
+
+    changed = true;
+    return replacementParts.join('\n');
+  });
+  return { content: result, replaced: changed };
+}
+
+/**
  * @returns {{content: string, added: string[]} | null} null means "don't know
  * how to merge this shape safely" — caller must not overwrite.
  */
 export function mergeGenerated(existingContent, generatedContent) {
   if (existingContent === generatedContent) return { content: existingContent, added: [] };
 
-  const existingSplit = splitFile(existingContent);
+  // Replace placeholder annotation comments with real annotations before
+  // structural merge. This fixes the historical corruption where the initial
+  // scaffold carried `/** @JsonSubTypes({...}) */` as a Javadoc comment instead
+  // of a real annotation — the structural merge can't see the difference because
+  // comments are masked.
+  const { content: decommented, replaced } = replacePlaceholderAnnotations(
+    existingContent,
+    generatedContent,
+  );
+
+  const existingSplit = splitFile(decommented);
   const generatedSplit = splitFile(generatedContent);
   if (!existingSplit || !generatedSplit) return null;
 
@@ -469,7 +553,7 @@ export function mergeGenerated(existingContent, generatedContent) {
     added.push(...memberMerge.added);
   }
 
-  if (added.length === 0) return { content: existingContent, added: [] };
+  if (added.length === 0 && !replaced) return { content: existingContent, added: [] };
 
   let content = `${prefix}${body}${existingSplit.suffix}`;
   content = mergeImports(content, generatedContent, added.join(' '));

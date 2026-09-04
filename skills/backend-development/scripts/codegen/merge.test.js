@@ -81,6 +81,16 @@ test('a brace inside a javadoc/annotation never splits the file (the historical 
   assert.doesNotMatch(r.added.join(' '), /field DomainEventSerdeWrapper/);
 });
 
+test('a placeholder annotation comment is replaced with the real annotation', () => {
+  const r = mergeGenerated(PLACEHOLDER, GENERATED_WRAPPER);
+  assert.notEqual(r, null);
+  // The commented-out @JsonSubTypes placeholder must be gone
+  assert.doesNotMatch(r.content, /\/\*\*[\s\S]*@JsonSubTypes/);
+  // The real @JsonSubTypes annotation must be present
+  assert.match(r.content, /@JsonSubTypes\(\{/);
+  assert.match(r.content, /PolicyIssuedEventSerdeWrapper/);
+});
+
 test('an annotation argument brace is not mistaken for the type body', () => {
   const generatedPlusMember = GENERATED_WRAPPER.replace(
     '    DomainEvent event();\n',

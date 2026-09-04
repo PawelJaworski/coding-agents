@@ -83,7 +83,7 @@ function fieldsOf(schemaRef, schemas, objectTypes) {
 // Indexes every path in the document into a command (POST) or a view (GET),
 // keyed by the id a `## <kebab-id>` model section would use — the last path
 // segment for a collection endpoint, the one before `{aggregateId}` otherwise.
-export function indexOpenApi(spec) {
+export function indexOpenApi(spec, modelSearchFields = null) {
   const schemas = (spec.components && spec.components.schemas) || {};
   const objectTypes = [];
   const commands = new Map();
@@ -119,15 +119,46 @@ export function indexOpenApi(spec) {
       const query = (ops.get.parameters || []).filter((p) => p.in === 'query');
 
       if (query.length) {
+        // The owner is the read model this search filters. For a dedicated search
+        // path like /policy-list/search, the owner is /policy-list (all segments
+        // except the last). For a single-endpoint pattern like /policy-list with
+        // query params, the owner is the endpoint itself (the last segment).
+        const ownerId =
+          segments.length > 1 ? segments.slice(0, -1).join('/') : segments[segments.length - 1];
+        // A parameter with type: object and additionalProperties: string is a
+        // @RequestParam Map<String, String> — Spring collects ALL query params into
+        // a single Map. The actual wire format is individual query params like
+        // ?policyHolder.name=John, not ?search=policyHolder.name:John.
+        // The search keys come from the readmodel's ? fields (searchFields),
+        // which are resolved later in parse.js when merging with the model.
+        const expandedCriteria = [];
+        for (const p of query) {
+          const schema = p.schema || {};
+          if (schema.type === 'object' && schema.additionalProperties &&
+              (schema.additionalProperties.type === 'string' || !schema.additionalProperties.type)) {
+            // This is a Map<String, String> — expand into individual criteria.
+            // The actual key names will be resolved later from the model's searchFields.
+            // For now, mark it as a map parameter so parse.js can expand it.
+            expandedCriteria.push({
+              name: p.name,
+              required: p.required !== false,
+              tsType: 'string',
+              isMap: true,
+            });
+          } else {
+            expandedCriteria.push({
+              name: p.name,
+              required: p.required !== false,
+              tsType: schema.type === 'array' ? 'string[]' : 'string',
+              isMap: false,
+            });
+          }
+        }
         searchOps.push({
           endpoint,
-          ownerId: segments.slice(0, -1).join('/'),
+          ownerId,
           fields,
-          criteria: query.map((p) => ({
-            name: p.name,
-            required: p.required !== false,
-            tsType: (p.schema || {}).type === 'array' ? 'string[]' : 'string',
-          })),
+          criteria: expandedCriteria,
         });
         continue;
       }
@@ -143,17 +174,52 @@ export function indexOpenApi(spec) {
   }
 
   for (const op of searchOps) {
+    // Expand map parameters: a @RequestParam Map<String, String> collects ALL
+    // query params. The actual searchable keys come from the readmodel's ?
+    // fields. If the model provides searchFields, expand the map param into
+    // individual criteria named after those fields.
+    let criteria = op.criteria;
+    const mapParam = criteria.find((c) => c.isMap);
+      if (mapParam) {
+        // The ownerId is the path (e.g. "api/policy-list"), but modelSearchFields
+        // is keyed by the read model id (e.g. "policy-list"). Extract the id
+        // from the last segment of the ownerId.
+        const rmId = op.ownerId.split('/').pop();
+        const searchFields = modelSearchFields && modelSearchFields.get(rmId);
+      if (searchFields && searchFields.length) {
+        // Expand each searchable field into its own criterion. For embedded
+        // value objects the backend uses dot notation: "policyHolder.name".
+        criteria = searchFields.map((f) => ({
+          name: f.searchKey || f.name,
+          required: false,
+          tsType: 'string',
+          isMap: false,
+        }));
+      } else {
+        // No search fields in the model — drop the opaque map param, keep any
+        // explicit (non-map) criteria.
+        criteria = criteria.filter((c) => !c.isMap);
+      }
+    }
     const owner = views.get(op.ownerId);
     if (!owner) {
-      throw new Error(
-        `openapi.json serves GET ${op.endpoint} with query parameters, but no unfiltered ` +
-          `GET /${op.ownerId} exists for it to filter. A search path must belong to a read model.`,
-      );
+      // No unfiltered GET exists — the backend serves only the filtered endpoint.
+      // Treat it as BOTH the primary view AND the search path. This is the
+      // pattern used when a read model's query parameters are optional or always
+      // present on the same endpoint (e.g. ad-hoc search criteria added via a
+      // @RequestParam on the existing controller method).
+      views.set(op.ownerId, {
+        endpoint: op.endpoint,
+        fields: op.fields,
+        collection: true, // search paths are always list endpoints
+        search: { endpoint: op.endpoint, criteria },
+      });
+      continue;
     }
     if (owner.search) {
       throw new Error(`Read model "${op.ownerId}" has more than one search path in openapi.json.`);
     }
-    owner.search = { endpoint: op.endpoint, criteria: op.criteria };
+    owner.search = { endpoint: op.endpoint, criteria };
   }
 
   return { commands, views, objectTypes: objectTypes.map(({ _schemaName, ...rest }) => rest) };

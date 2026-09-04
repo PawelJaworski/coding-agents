@@ -270,7 +270,19 @@ for (const file of files) {
       continue;
     }
     if (merged.added.length === 0) {
-      preserved.push(rel);
+      // Content may still have changed via a placeholder-annotation replacement
+      // (a commented-out annotation turned into a real one). added is empty but
+      // the file differs — write it back in that case.
+      if (merged.content !== current) {
+        if (!check) {
+          fs.writeFileSync(target, merged.content);
+          written.push(`replaced ${rel}`);
+        } else {
+          stale.push(`${rel}  (placeholder annotation would be replaced)`);
+        }
+      } else {
+        preserved.push(rel);
+      }
       continue;
     }
     if (check) {

@@ -43,7 +43,7 @@ file does not explain it. `main-flow --test` prints the step machine.
 
 # What is NOT in the prompts
 
-Only three things, because a script cannot derive them.
+Only these, because a script cannot derive them.
 
 ## Brackets
 A `[bracketed]` model field has no upstream source. The generator delegates it to a
@@ -70,8 +70,8 @@ model ALREADY has is an implementation improvement, not a model change: no doc e
 regeneration, still TDD. A new *field* or a new *event* is not ad-hoc — escalate it.
 Full recipe and traps: `reference/ad-hoc-extensions.md`.
 
-# File ownership
-| header | who owns what |
-|---|---|
-| `// GENERATED ... DO NOT EDIT` | contract (signature, public methods, package) is the generator's; method bodies and private members are yours. `// PRESERVED-BY-HAND: <reason>` declares a deliberate deviation. See `reference/edit-classification.md`. |
-| `// SCAFFOLDED ONCE ... this file is YOURS` | yours. Written when absent, never touched again. |
+## Hand edits to a generated file
+Rewriting a method body is allowed and needs no marker — bodies are yours, the contract
+is the generator's. A *structural* deviation (a new type, a renamed field) needs
+`// PRESERVED-BY-HAND: <reason>`, which is also the only way to close an `UPDATE`.
+Which is which: `reference/edit-classification.md`.

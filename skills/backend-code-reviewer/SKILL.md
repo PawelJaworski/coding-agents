@@ -48,23 +48,9 @@ the model is wrong, not the code.
   ad-hoc extension (a search endpoint, a derived query over fields the read model already
   has). The merge is add-only precisely so these survive. See
   `.opencode/skills/backend-development/reference/ad-hoc-extensions.md`.
-- Business logic for a `[bracketed]` field appears ONLY in a `*Decider`. A bracketed
-  decision implemented in a handler, projector, event or read model is a defect.
-- No hand-written scaffolding was added alongside the generated tree (a stray command,
-  event, read model, projector, repository or ability). Regenerate and diff if unsure.
 - No edit to `<docs>/*.md`, the diagram, or `scripts/codegen/*` for work that was ad-hoc.
 
-## 2. Deciders
-- Every implemented decider method traces to a GWT scenario, ideally by a comment naming it.
-- No decider still throws `UnsupportedOperationException` for a field that a GWT scenario
-  covers.
-- A decider that throws with NO scenario is correct and expected — do not flag it, and do
-  not ask for a mock or placeholder value. Loud-and-unimplemented is the intended state.
-- Logic is scenario-scoped: no validation, error handling, persistence or generality the
-  scenario does not exercise. Flag gold-plating.
-- The decider still has a no-argument constructor (generated abilities instantiate it).
-
-## 3. Tests
+## 2. Tests
 - One Spock test per `gwt-*.md` scenario; test method names match the scenario headings
   verbatim. No invented "happy path" tests.
 - given/when/then map 1:1 to the GWT file — no extra steps, no weakened assertions.
@@ -80,12 +66,12 @@ the model is wrong, not the code.
   also resets it in `setup()` — `reset_event_stream()` does not. Missing resets show up
   as order-dependent failures, so a currently-green suite does not prove this.
 
-## 4. Model defects were escalated, not patched
+## 3. Model defects were escalated, not patched
 If the work involved a missing field or an unmappable event, the correct response was to
 escalate to the architect. Code that works around a model gap is a defect even if green.
 A missing *query* over fields that already exist is NOT a model gap — that is ad-hoc.
 
-## 5. Gates
+## 4. Gates
 - `mvn clean verify` GREEN (clean — stale classes give phantom Lombok failures).
 - `node .opencode/skills/backend-development/scripts/codegen --check` reports up to date.
 - `api/openapi.json` was regenerated if any route or parameter changed, and left

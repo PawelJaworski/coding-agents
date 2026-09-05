@@ -704,27 +704,32 @@ test('repositories use PolicyListKey as ID type when keyFields present', () => {
 // kept and drift is reported — never "edits here are overwritten". Data/contract
 // files keep the plain add-only wording.
 
-test('logic files advertise additive ownership, not overwriting', () => {
+test('a GENERATED file carries no header — the patch answers that, and stays current', () => {
+  // A "// GENERATED from X" comment is a cached answer to a question `--patch`
+  // computes from the model. It costs a line per file, nothing reads it, and it
+  // goes stale the moment an element leaves the model.
   const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
   const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
-
-  const handler = commandHandler(c, e, BASE);
-  assert.match(handler.content, /Scaffolded once, then additive: keep hand edits; model drift is reported/);
-  assert.doesNotMatch(handler.content, /edits here are overwritten/);
-
   const rm = keyedRm();
-  const entity = readModelEntity(rm);
-  const repo = readModelRepository(rm);
-  const projector = persistingProjector(rm, new Map([['policy-issued', e]]), BASE);
-  for (const f of [entity, repo, projector]) {
-    assert.match(f.content, /Scaffolded once, then additive: keep hand edits; model drift is reported/);
-    assert.doesNotMatch(f.content, /edits here are overwritten/);
+
+  const files = [
+    command(c),
+    commandHandler(c, e, BASE),
+    readModelEntity(rm),
+    readModelRepository(rm),
+    persistingProjector(rm, new Map([['policy-issued', e]]), BASE),
+  ];
+  for (const f of files) {
+    assert.match(f.content, /^package /, `${f.className} must start at its package declaration`);
+    assert.doesNotMatch(f.content, /GENERATED/);
+    assert.doesNotMatch(f.content, /DO NOT EDIT/);
   }
 });
 
-test('data/contract files keep the overwrite wording', () => {
+test('a `once` file keeps its header — scaffold-version is state the patch cannot compute', () => {
   const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
-  const cmdFile = command(c);
-  assert.match(cmdFile.content, /edits here are overwritten/);
-  assert.doesNotMatch(cmdFile.content, /Scaffolded once, then additive/);
+  const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
+  const decider = commandDecider(c, e);
+  assert.match(decider.content, /^\/\/ SCAFFOLDED ONCE/);
+  assert.match(decider.content, /scaffold-version: \d+/);
 });

@@ -25,6 +25,7 @@ import {
 import { mergeGenerated, semanticDrift } from './merge.js';
 import { computeAdvisory, isLogicFile } from './advisory.js';
 import { pendingWork, buildQueue, parseSpecNames } from './next.js';
+import { classifyFile, buildPatches, buildGwtPatch, patchFileName } from './patch.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
@@ -43,9 +44,13 @@ const flag = (name) => {
 };
 const checkOnly = args.includes('--check');
 const nextMode = args.includes('--next');
-// Both modes are dry runs: neither ever writes to disk.
-const check = checkOnly || nextMode;
+const patchMode = args.includes('--patch');
+// All three are dry runs: none ever writes a Java source file.
+const check = checkOnly || nextMode || patchMode;
 const acceptScaffold = args.includes('--accept-scaffold');
+
+// Where `--patch` drops its documents. Derived, disposable, never committed.
+const PATCH_DIR = '.codegen/patch';
 
 /**
  * Print a `--next` result. As JSON with `--json` (machine-readable, for a
@@ -137,9 +142,9 @@ let files;
 let model;
 try {
   model = parseModel({ modelDir, basePackage: config.basePackage });
-  // `--json` alone dumps the parsed model. Combined with `--next` it instead
-  // means "the --next result as JSON" — handled further down.
-  if (args.includes('--json') && !nextMode) {
+  // `--json` alone dumps the parsed model. Combined with `--next` or `--patch`
+  // it instead means "that mode's result as JSON" — handled further down.
+  if (args.includes('--json') && !nextMode && !patchMode) {
     console.log(JSON.stringify(model, null, 2));
     process.exit(0);
   }
@@ -163,9 +168,81 @@ try {
   die(`MODEL ERROR  ${err.message}`);
 }
 
+// Slice-aware pending work: each scenario/rule is matched against the slice it
+// MUST live in (a same-named method anywhere in the tree no longer counts), and
+// every item carries the exact spec path so the agent never guesses.
+function computeQueue() {
+  const gwtFiles = walk(modelDir)
+    .filter((f) => /^gwt-.*\.md$/.test(path.basename(f)))
+    .map((f) => ({ name: path.basename(f), content: fs.readFileSync(f, 'utf8') }));
+  const businessRulesPath = path.join(modelDir, 'business-rules-raw.md');
+  const businessRulesRaw = fs.existsSync(businessRulesPath)
+    ? fs.readFileSync(businessRulesPath, 'utf8')
+    : '';
+  const parsedSpecs = walk(groovyTestRoot)
+    .filter((f) => f.endsWith('.groovy'))
+    .flatMap((f) => parseSpecNames(fs.readFileSync(f, 'utf8'), path.relative(projectRoot, f)));
+
+  return buildQueue(
+    pendingWork({
+      businessRulesRaw,
+      gwtFiles,
+      parsedSpecs,
+      commands: model.commands,
+      readModels: model.readModels,
+    }),
+    { groovyRoot: config.groovyTestSourceRoot, base: config.basePackage },
+  );
+}
+
+// --- --patch: the model->code diff as five JSON documents --------------------
+// Emitted by the SCRIPT, never by an agent: "what is missing" is a pure
+// function, and a non-deterministic answer to it would defeat the point of
+// having a generator at all. The agent's job starts one step later — it applies
+// ONE entry at a time, via get-prompt.
+if (patchMode) {
+  const entries = [];
+  for (const file of files) {
+    const root = file.test ? testRoot : mainRoot;
+    const target = path.join(root, ...file.package.split('.'), `${file.className}.java`);
+    const rel = path.relative(projectRoot, target);
+    const currentContent = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+    const entry = classifyFile({ file, currentContent, relPath: rel });
+    if (entry) entries.push(entry);
+  }
+
+  const patches = { ...buildPatches(entries), gwt: buildGwtPatch(computeQueue()) };
+  const outDir = path.join(projectRoot, PATCH_DIR);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const summary = [];
+  for (const [category, doc] of Object.entries(patches)) {
+    const name = patchFileName(category);
+    fs.writeFileSync(path.join(outDir, name), `${JSON.stringify(doc, null, 2)}\n`);
+    summary.push({ category, file: `${PATCH_DIR}/${name}`, ...doc.summary });
+  }
+
+  if (args.includes('--json')) {
+    console.log(JSON.stringify({ patchDir: PATCH_DIR, patches: summary }, null, 2));
+    process.exit(0);
+  }
+  console.log(`\n  PATCH written to ${PATCH_DIR}/\n`);
+  for (const s of summary) {
+    console.log(
+      `    ${s.category.padEnd(12)} CREATE ${s.create}  ADD ${s.add}  UPDATE ${s.update}` +
+        `   (needs an agent: ${s.needsAgent})`,
+    );
+  }
+  console.log(
+    `\n  CREATE and ADD marked auto:true are performed by \`codegen\` itself — run it.\n` +
+      `  Only auto:false entries need an agent. Get one prompt at a time:\n\n` +
+      `    node <skill>/scripts/get-prompt.js GENERATE_COMMANDS --item 0\n`,
+  );
+  process.exit(0);
+}
+
 const written = [];
-const preserved = [];
-const stale = [];
+const preserved = [];const stale = [];
 const staleScaffold = [];
 const staleGenerated = [];
 const advisoryDrifts = [];
@@ -464,30 +541,7 @@ if (nextMode) {
     process.exit(1);
   }
 
-  const gwtFiles = walk(modelDir)
-    .filter((f) => /^gwt-.*\.md$/.test(path.basename(f)))
-    .map((f) => ({ name: path.basename(f), content: fs.readFileSync(f, 'utf8') }));
-  const businessRulesPath = path.join(modelDir, 'business-rules-raw.md');
-  const businessRulesRaw = fs.existsSync(businessRulesPath)
-    ? fs.readFileSync(businessRulesPath, 'utf8')
-    : '';
-  const parsedSpecs = walk(groovyTestRoot)
-    .filter((f) => f.endsWith('.groovy'))
-    .flatMap((f) => parseSpecNames(fs.readFileSync(f, 'utf8'), path.relative(projectRoot, f)));
-
-  // Slice-aware queue: each scenario/rule is matched against the slice it MUST
-  // live in (a same-named method anywhere in the tree no longer counts), and
-  // every prompt carries the exact spec path so the agent never guesses.
-  const queue = buildQueue(
-    pendingWork({
-      businessRulesRaw,
-      gwtFiles,
-      parsedSpecs,
-      commands: model.commands,
-      readModels: model.readModels,
-    }),
-    { groovyRoot: config.groovyTestSourceRoot, base: config.basePackage },
-  );
+  const queue = computeQueue();
 
   if (queue.length === 0) {
     printNext({ state: 'DONE', next: null, queue: [] });

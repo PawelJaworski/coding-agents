@@ -1,274 +1,96 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectState, buildPrompt, buildResult } from './main-flow.js';
+import { selectStep, buildResult } from './main-flow.js';
 
-// ---------------------------------------------------------------------------
-// detectState — the core state machine
-// ---------------------------------------------------------------------------
-
-// --- Codegen states ---
-
-test('detectState: OUT_OF_DATE → GENERATE', () => {
-  assert.equal(detectState({ state: 'OUT_OF_DATE' }, {}), 'GENERATE');
+const patch = (category, entries) => ({ category, entries });
+const create = (over = {}) => ({ op: 'CREATE', auto: true, category: 'domain', ...over });
+const update = (over = {}) => ({
+  op: 'UPDATE',
+  auto: false,
+  category: 'domain',
+  package: 'a.b',
+  class: 'C',
+  path: 'src/main/java/a/b/C.java',
+  owner: 'yours',
+  members: [],
+  hints: ['h'],
+  ...over,
 });
 
-test('detectState: STALE_SCAFFOLD → RECONCILE', () => {
-  assert.equal(detectState({ state: 'STALE_SCAFFOLD' }, {}), 'RECONCILE');
-});
+const clean = { modelError: null, patches: {}, hasReport: false, hasUncommitted: false };
 
-test('detectState: STALE_GENERATED → RECONCILE', () => {
-  assert.equal(detectState({ state: 'STALE_GENERATED' }, {}), 'RECONCILE');
-});
-
-test('detectState: NEEDS_MANUAL_MERGE → RECONCILE', () => {
-  assert.equal(detectState({ state: 'NEEDS_MANUAL_MERGE' }, {}), 'RECONCILE');
-});
-
-test('detectState: ADVISORY_DRIFT → GENERATE (falls through — not a blocking state)', () => {
-  // ADVISORY_DRIFT is informational only and never blocks the state machine.
-  // When codegen returns it with no other blocking states, the flow continues
-  // to PENDING/DONE. This test covers the edge case where ADVISORY_DRIFT
-  // arrives alone (codegen --next no longer produces this, but main-flow
-  // should handle it gracefully).
-  assert.equal(detectState({ state: 'ADVISORY_DRIFT' }, {}), 'GENERATE');
-});
-
-test('detectState: PENDING with queue → IMPLEMENT', () => {
-  const cg = {
-    state: 'PENDING',
-    queue: [{ kind: 'gwt-scenario', detail: { scenario: 'S1' }, prompt: 'do S1' }],
-  };
-  assert.equal(detectState(cg, {}), 'IMPLEMENT');
-});
-
-test('detectState: PENDING with queue and advisory drifts → IMPLEMENT (advisory is ignored)', () => {
-  // Codegen no longer returns ADVISORY_DRIFT as a blocking state. When there
-  // are advisory drifts alongside pending work, the state is PENDING and the
-  // flow should proceed to IMPLEMENT.
-  const cg = {
-    state: 'PENDING',
-    queue: [{ kind: 'gwt-scenario', detail: { scenario: 'S1' }, prompt: 'do S1' }],
-  };
-  assert.equal(detectState(cg, {}), 'IMPLEMENT');
-});
-
-test('detectState: PENDING with empty queue → GENERATE (fallback)', () => {
-  // PENDING with no queue items is unexpected — falls through to GENERATE
-  assert.equal(detectState({ state: 'PENDING', queue: [] }, {}), 'GENERATE');
-});
-
-test('detectState: null codegen result → GENERATE (fallback)', () => {
-  assert.equal(detectState(null, {}), 'GENERATE');
-});
-
-// --- Post-codegen states ---
-
-test('detectState: DONE, no report → VERIFY', () => {
+test('a model error outranks everything — code is never the place to fix it', () => {
   assert.equal(
-    detectState({ state: 'DONE', queue: [] }, { hasReport: false, hasUncommitted: false }),
-    'VERIFY',
+    selectStep({ ...clean, modelError: 'unknown event', patches: { domain: patch('domain', [update()]) } }).step,
+    'MODEL_ERROR',
   );
 });
 
-test('detectState: DONE, no queue field, no report → VERIFY', () => {
-  assert.equal(
-    detectState({ state: 'DONE' }, { hasReport: false }),
-    'VERIFY',
-  );
-});
-
-test('detectState: DONE, report exists, uncommitted → REVIEW', () => {
-  assert.equal(
-    detectState({ state: 'DONE', queue: [] }, { hasReport: true, hasUncommitted: true }),
-    'REVIEW',
-  );
-});
-
-test('detectState: DONE, report exists, clean tree → DONE', () => {
-  assert.equal(
-    detectState({ state: 'DONE', queue: [] }, { hasReport: true, hasUncommitted: false }),
-    'DONE',
-  );
-});
-
-test('detectState: DONE with non-empty queue falls through to GENERATE (impossible input)', () => {
-  // codegen only emits DONE with an empty queue, so a non-empty queue on DONE
-  // is unreachable. The guard `queue.length === 0` makes the DONE branch miss,
-  // and the fallback is GENERATE.
-  const cg = {
-    state: 'DONE',
-    queue: [{ kind: 'gwt-scenario', detail: { scenario: 'S1' }, prompt: 'do S1' }],
+test('the generator does its own work first: any auto entry means RUN_CODEGEN', () => {
+  const patches = {
+    domain: patch('domain', [update()]),
+    events: patch('events', [create({ category: 'events' })]),
   };
-  assert.equal(detectState(cg, { hasReport: false }), 'GENERATE');
+  assert.equal(selectStep({ ...clean, patches }).step, 'RUN_CODEGEN');
 });
 
-// --- Edge cases ---
-
-test('detectState: MODEL_ERROR → GENERATE (fallback)', () => {
-  assert.equal(detectState({ state: 'MODEL_ERROR' }, {}), 'GENERATE');
+test('an auto entry is picked before an agent item even in a later category', () => {
+  // Running codegen changes the diff, so an agent item chosen first could already
+  // be obsolete by the time it is applied.
+  const patches = { readmodels: patch('readmodels', [create({ category: 'readmodels' })]) };
+  assert.equal(selectStep({ ...clean, patches }).step, 'RUN_CODEGEN');
 });
 
-test('detectState: undefined state → GENERATE (fallback)', () => {
-  assert.equal(detectState({ state: undefined }, {}), 'GENERATE');
-});
-
-test('detectState: fsState defaults to false when omitted', () => {
-  assert.equal(detectState({ state: 'DONE', queue: [] }, {}), 'VERIFY');
-});
-
-// ---------------------------------------------------------------------------
-// buildPrompt
-// ---------------------------------------------------------------------------
-
-test('buildPrompt: GENERATE returns a prompt mentioning codegen', () => {
-  const prompt = buildPrompt('GENERATE');
-  assert.ok(prompt.includes('codegen'));
-  assert.ok(prompt.includes('regenerate'));
-});
-
-test('buildPrompt: RECONCILE returns a prompt mentioning templates', () => {
-  const prompt = buildPrompt('RECONCILE');
-  assert.ok(prompt.includes('STALE_SCAFFOLD'));
-  assert.ok(prompt.includes('accept-scaffold'));
-});
-
-test('buildPrompt: VERIFY returns a prompt with three steps', () => {
-  const prompt = buildPrompt('VERIFY');
-  assert.ok(prompt.includes('mvn clean verify'));
-  assert.ok(prompt.includes('codegen --check'));
-  assert.ok(prompt.includes('development-report.md'));
-});
-
-test('buildPrompt: REVIEW returns a prompt mentioning code-reviewer', () => {
-  const prompt = buildPrompt('REVIEW');
-  assert.ok(prompt.includes('backend-code-reviewer'));
-});
-
-test('buildPrompt: DONE returns null', () => {
-  assert.equal(buildPrompt('DONE'), null);
-});
-
-test('buildPrompt: IMPLEMENT with queue item returns its prompt', () => {
-  const item = { prompt: 'Implement scenario S1' };
-  assert.equal(buildPrompt('IMPLEMENT', item, 0), 'Implement scenario S1');
-});
-
-test('buildPrompt: IMPLEMENT with remaining items appends count', () => {
-  const item = { prompt: 'Implement scenario S1' };
-  const prompt = buildPrompt('IMPLEMENT', item, 2);
-  assert.ok(prompt.includes('Implement scenario S1'));
-  assert.ok(prompt.includes('2 more item(s)'));
-});
-
-test('buildPrompt: IMPLEMENT without queue item returns null', () => {
-  assert.equal(buildPrompt('IMPLEMENT', null, 0), null);
-});
-
-test('buildPrompt: unknown state returns null', () => {
-  assert.equal(buildPrompt('UNKNOWN'), null);
-});
-
-// ---------------------------------------------------------------------------
-// buildResult
-// ---------------------------------------------------------------------------
-
-test('buildResult: IMPLEMENT builds result with queue', () => {
-  const cg = {
-    state: 'PENDING',
-    queue: [
-      { kind: 'gwt-scenario', detail: { scenario: 'S1' }, prompt: 'Implement S1' },
-      { kind: 'business-rule', detail: 'R1', prompt: 'Enforce R1' },
-    ],
+test('GENERATE_* steps are visited in a fixed order', () => {
+  const patches = {
+    readmodels: patch('readmodels', [update({ category: 'readmodels' })]),
+    events: patch('events', [update({ category: 'events' })]),
   };
-  const result = buildResult('IMPLEMENT', cg);
-  assert.equal(result.state, 'IMPLEMENT');
-  assert.equal(result.next.kind, 'implement');
-  assert.equal(result.next.detail.scenario, 'S1');
-  assert.ok(result.next.prompt.includes('Implement S1'));
-  assert.ok(result.next.prompt.includes('1 more item'));
-  assert.equal(result.queue.length, 2);
+  assert.equal(selectStep({ ...clean, patches }).step, 'GENERATE_EVENTS');
 });
 
-test('buildResult: IMPLEMENT with single item has no remaining count', () => {
-  const cg = {
-    state: 'PENDING',
-    queue: [{ kind: 'gwt-scenario', detail: { scenario: 'S1' }, prompt: 'Implement S1' }],
+test('GWT scenarios come after every structural category', () => {
+  const patches = {
+    gwt: patch('gwt', [{ op: 'CREATE', auto: false, kind: 'business-rule', name: 'r', hints: [] }]),
+    commands: patch('commands', [update({ category: 'commands' })]),
   };
-  const result = buildResult('IMPLEMENT', cg);
-  assert.ok(!result.next.prompt.includes('more item'));
-  assert.equal(result.queue.length, 1);
+  assert.equal(selectStep({ ...clean, patches }).step, 'GENERATE_COMMANDS');
 });
 
-test('buildResult: non-IMPLEMENT state has empty queue', () => {
-  const result = buildResult('GENERATE', null);
-  assert.equal(result.state, 'GENERATE');
-  assert.deepEqual(result.queue, []);
-  assert.ok(result.next.prompt.includes('codegen'));
+test('nothing pending and no report -> VERIFY', () => {
+  assert.equal(selectStep({ ...clean, patches: { domain: patch('domain', []) } }).step, 'VERIFY');
 });
 
-test('buildResult: DONE has null next', () => {
-  const result = buildResult('DONE', { state: 'DONE', queue: [] });
-  assert.equal(result.state, 'DONE');
+test('report written, tree dirty -> REVIEW; tree clean -> DONE', () => {
+  assert.equal(selectStep({ ...clean, hasReport: true, hasUncommitted: true }).step, 'REVIEW');
+  assert.equal(selectStep({ ...clean, hasReport: true, hasUncommitted: false }).step, 'DONE');
+});
+
+test('an auto:true-only patch never produces an agent item', () => {
+  // Regression guard: `auto` entries must not leak into a GENERATE_* prompt.
+  const patches = { domain: patch('domain', [create()]) };
+  const result = buildResult({ step: 'GENERATE_DOMAIN', item: 0 }, patches);
+  assert.equal(result.next.detail, 'GENERATE_DOMAIN');
+  assert.match(result.next.prompt, /generator's own work/);
+});
+
+test('DONE carries no prompt', () => {
+  const result = buildResult({ step: 'DONE', item: 0 }, {});
   assert.equal(result.next, null);
-  assert.deepEqual(result.queue, []);
+  assert.equal(result.state, 'DONE');
 });
 
-test('buildResult: VERIFY has next with all three steps', () => {
-  const result = buildResult('VERIFY', { state: 'DONE', queue: [] });
-  assert.equal(result.state, 'VERIFY');
-  assert.ok(result.next.prompt.includes('mvn clean verify'));
-  assert.ok(result.next.prompt.includes('codegen --check'));
-  assert.ok(result.next.prompt.includes('development-report.md'));
+test('MODEL_ERROR forbids both fixing it in code and editing the model', () => {
+  const result = buildResult({ step: 'MODEL_ERROR', item: 0 }, {}, 'no such event: foo');
+  assert.match(result.next.prompt, /no such event: foo/);
+  assert.match(result.next.prompt, /do NOT fix this in code/i);
+  assert.match(result.next.prompt, /development-report\.md/);
 });
 
-// ---------------------------------------------------------------------------
-// Full state machine transitions
-// ---------------------------------------------------------------------------
-
-test('full flow: OUT_OF_DATE → GENERATE → PENDING → IMPLEMENT → DONE → VERIFY → REVIEW → DONE', () => {
-  // Step 1: model out of date
-  assert.equal(detectState({ state: 'OUT_OF_DATE' }, {}), 'GENERATE');
-
-  // Step 2: codegen ran, has pending items
-  const pending = {
-    state: 'PENDING',
-    queue: [
-      { kind: 'gwt-scenario', detail: { scenario: 'S1' }, prompt: 'Implement S1' },
-    ],
-  };
-  assert.equal(detectState(pending, {}), 'IMPLEMENT');
-
-  // Step 3: all items implemented
-  assert.equal(
-    detectState({ state: 'DONE', queue: [] }, { hasReport: false }),
-    'VERIFY',
-  );
-
-  // Step 4: report written, changes uncommitted
-  assert.equal(
-    detectState({ state: 'DONE', queue: [] }, { hasReport: true, hasUncommitted: true }),
-    'REVIEW',
-  );
-
-  // Step 5: committed
-  assert.equal(
-    detectState({ state: 'DONE', queue: [] }, { hasReport: true, hasUncommitted: false }),
-    'DONE',
-  );
-});
-
-test('full flow: stale scaffold → reconcile → pending → implement → done', () => {
-  assert.equal(detectState({ state: 'STALE_SCAFFOLD' }, {}), 'RECONCILE');
-  assert.equal(detectState({ state: 'OUT_OF_DATE' }, {}), 'GENERATE');
-  assert.equal(
-    detectState(
-      { state: 'PENDING', queue: [{ kind: 'rule', detail: 'R1', prompt: 'Enforce R1' }] },
-      {},
-    ),
-    'IMPLEMENT',
-  );
-  assert.equal(
-    detectState({ state: 'DONE', queue: [] }, { hasReport: false }),
-    'VERIFY',
-  );
+test('a GENERATE_* result reports how many items remain in the step', () => {
+  const patches = { domain: patch('domain', [update(), update({ class: 'D' })]) };
+  const result = buildResult({ step: 'GENERATE_DOMAIN', item: 0 }, patches);
+  assert.equal(result.state, 'GENERATE');
+  assert.equal(result.remaining, 1);
+  assert.equal(result.next.detail.class, 'C');
 });

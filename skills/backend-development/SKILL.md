@@ -17,101 +17,61 @@ description: >
     knowing those params.
 ---
 
-# The one rule
-**Never hand-write scaffolding.** Commands, events, read models, value objects, handlers,
-projectors, serde wrappers, the event-type enum, the state projector and the test abilities
-are all derived from the model by a script. If you are tempted to write one by hand, you
-are working on the wrong thing: change the MODEL and regenerate.
-
-An agent's only job here is business logic, and it enters through TDD, never through
-scaffolding.
-
-# The other one rule: an ADVISORY is not a "sync the file" task
-Hand-owned files (`*Decider`, and any generated file the developer has edited) may drift
-from the model. `codegen --check` reports this and still exits `up to date`. It is not a
-request to align the file. Three cases, and only three:
-
-| situation | may the agent edit? |
-|---|---|
-| **ADDITIVE** — member in the model, absent on disk (new event, new field) | **Yes**, when it is needed to compile or to satisfy a test. Adding cannot destroy logic. Add what is needed, not everything offered. |
-| **Does not compile** after a model change (constructor arity, renamed type) | **Yes** — the MINIMAL edit that restores compilation, preserving the existing intent. |
-| **EXISTING LOGIC** — member exists, body differs from the model | **No.** Never paste the model's version over working hand-written logic. Report it. |
-
-A `*Decider` stub throwing `UnsupportedOperationException` is NOT drift — implementing it
-test-first is the normal job (see IMPLEMENT / backend-implement). A sketch implementation
-that makes a red test green is expected there.
-
-The test is intent, not file type: **"am I adding/repairing, or am I overwriting someone's
-decision?"** Overwriting is never the agent's call. When unsure, do nothing and record it
-in `development-report.md`.
-
-# Flow — drive the loop, don't carry the workflow
-
-The entire backend development flow is a **state machine** driven by `main-flow`.
-Each call returns ONE small prompt. Execute it, then call again.
+# Drive the loop
 
 ```
 node .opencode/skills/backend-development/scripts/main-flow --next --json
 ```
 
-Returns `{ state, next: { kind, detail, prompt }, queue }`. Act on `next.prompt`,
-then call `--next` again. Repeat until `state: "DONE"`.
+One small prompt per call. Execute it, call again, until `state: "DONE"`.
+The prompt is complete on its own — hand it to a subagent with a fresh context.
+**Do not read ahead in this file to "understand the flow". The prompt is the flow.**
 
-| State | What the prompt says |
-|-------|---------------------|
-| GENERATE | Run codegen to regenerate scaffolding |
-| RECONCILE | Diff stale files against templates, port delta, accept-scaffold |
-| IMPLEMENT | Delegate to backend-implement (one prompt per queue item) |
-| VERIFY | mvn clean verify + codegen --check + write development-report.md |
-| REVIEW | Delegate to backend-code-reviewer |
-| DONE | All complete |
+Three scripts, three jobs:
 
-**Spec naming is critical.** Name every spec after its rule/scenario **verbatim** —
-a near-verbatim name is invisible to `--next` and will be reported as still pending.
+| script | job | who runs it |
+|---|---|---|
+| `codegen --patch` | compute the model -> code diff (`.codegen/patch/*.json`) | a script. **Never an agent** |
+| `get-prompt.js <STEP> --item N` | render ONE entry as a prompt | the driver, or you, out of band |
+| `main-flow --next` | pick the next step and entry | the loop |
 
-# The model is frozen — never escalate, report instead
-Every model document — `commands.md`, `events.md`, `readmodels.md`, `uis.md`,
-`business-rules-raw.md`, `business-definitions-raw.md`, every `gwt-*.md`, the diagram
-— is READ-ONLY during development. Do not edit one, do not create one, do not ask the
-architect to either. If you catch yourself writing a scenario down, stop: **a test IS
-the scenario written down**, and it belongs in `src/test/groovy`.
+Everything mechanical is already decided by the time you see a prompt: the diff, the
+verb (`CREATE` / `ADD` / `UPDATE`), the file path, the spec path. In a sliced
+architecture the name of a command, event or read model determines the name of its
+handler, projector, repository and ability — so a path never needs explaining, and this
+file does not explain it. `main-flow --test` prints the step machine.
 
-When the model cannot express something — a rule with no command, a GWT needing a
-field that does not exist, a `MODEL ERROR` — skip that fragment, note it, move on,
-and report it in `development-report.md`. A blocked fragment is a normal, successful
-outcome of a run — an unreported one is not.
+# What is NOT in the prompts
 
-# Reference
-
-## File ownership
-| header in the file | who owns what |
-|---|---|
-| `// GENERATED ... DO NOT EDIT` | **Contract** (public shape) is generator-owned: class signature, public method names/signatures, interfaces, package. **Implementation** (method bodies, private members) is the agent's: rewrite freely, add private methods/fields, create helper classes. The agent is responsible for compilation. Exception: `// PRESERVED-BY-HAND: <reason>` declares a deliberate deviation; `--check` tolerates it. See `reference/edit-classification.md`. |
-| `// SCAFFOLDED ONCE ... this file is YOURS` | the project. Written when absent, never touched again. |
+Only three things, because a script cannot derive them.
 
 ## Brackets
-A `[bracketed]` field has no upstream source — the generator delegates it to a decider
-that throws until a GWT scenario forces it into existence. Brackets mark what must be
-DECIDED; they say nothing about what must be ENFORCED. The decider is the command's ONE
-seam: `check(cmd)` for preconditions/business rules, plus one throwing method per
-bracketed field. A rule never needs a bracket, a model edit, or a new generated class.
+A `[bracketed]` model field has no upstream source. The generator delegates it to a
+decider that throws until a GWT scenario forces it into existence. Brackets mark what
+must be DECIDED; they say nothing about what must be ENFORCED. The decider is a
+command's ONE seam: `check(cmd)` for preconditions and business rules, plus one throwing
+method per bracketed field. A rule never needs a bracket, a model edit, or a new class.
 
-## Business rules
-Rules constrain **commands**, not fields — they land in `<Command>Decider.check(cmd)`,
-which is scaffolded empty and called by the generated handler. The IMPLEMENT prompt
-handles the TDD flow. For details, see `reference/ad-hoc-extensions.md`.
+## The model is frozen
+Every model document — `commands.md`, `events.md`, `readmodels.md`, `uis.md`,
+`business-rules-raw.md`, `business-definitions-raw.md`, every `gwt-*.md`, the diagram —
+is READ-ONLY. Do not edit one, do not create one, do not ask the architect to either.
+If you catch yourself writing a scenario down: **a test IS the scenario written down**,
+and it belongs in `src/test/groovy`.
+
+When the model cannot express something — a rule with no command, a GWT needing a field
+that does not exist, a `MODEL ERROR` — skip that fragment and record it in
+`development-report.md`. A blocked fragment is a normal outcome of a run. An unreported
+one is not.
 
 ## Ad-hoc extensions
-Not every request is a model change. "Add a search criterion", "add a repository
-query", "filter/sort this endpoint" are improvements over fields a read model ALREADY
-has. They land as added members on the slice's projector/repository. See
-`reference/ad-hoc-extensions.md` for the full recipe and traps.
+A search criterion, a repository query, an endpoint filter or sort over fields a read
+model ALREADY has is an implementation improvement, not a model change: no doc edit, no
+regeneration, still TDD. A new *field* or a new *event* is not ad-hoc — escalate it.
+Full recipe and traps: `reference/ad-hoc-extensions.md`.
 
-# Boundaries
-Never edit model documents, the generated diagram, or the diagram generator — they are
-owned by the architect. Never change the **contract** of a generated file (public API
-shape, class hierarchy, architecture). Never edit a generated `*Ability`. Never write
-scaffolding by hand. Never commit `api/openapi.json` or `development-report.md`.
-
-The agent owns **implementation**: method bodies in generated files, private members,
-helper classes, and everything inside deciders. The agent is responsible for compilation.
+# File ownership
+| header | who owns what |
+|---|---|
+| `// GENERATED ... DO NOT EDIT` | contract (signature, public methods, package) is the generator's; method bodies and private members are yours. `// PRESERVED-BY-HAND: <reason>` declares a deliberate deviation. See `reference/edit-classification.md`. |
+| `// SCAFFOLDED ONCE ... this file is YOURS` | yours. Written when absent, never touched again. |

@@ -1170,18 +1170,28 @@ public interface ${rm.abilityClassName} extends EventStreamAbility {
 export function emit(model) {
   const base = model.meta.basePackage;
   const eventsById = new Map(model.events.map((e) => [e.id, e]));
-  const files = [];
+  const all = [];
+
+  // Every emitted file carries the model category it was derived from, so a
+  // consumer (`codegen --patch`) can split the work into per-category units
+  // without re-deriving provenance by pattern-matching class names.
+  const files = {
+    into: (category) => ({
+      push: (...fs) => fs.forEach((f) => all.push({ ...f, category })),
+    }),
+  };
 
   // domain-independent runtime (scaffolded once, then the project's)
-  runtimeFiles(base).forEach((f) => files.push(f));
+  runtimeFiles(base).forEach((f) => files.into('domain').push(f));
 
-  model.valueObjects.forEach((vo) => files.push(valueObject(vo)));
-  model.events.forEach((e) => files.push(event(e, base), serdeWrapper(e, base)));
-  files.push(eventType(model.events, base));
-  files.push(stateProjector(model.events, base));
-  files.push(serdeRegistry(model.events, base));
-  files.push(serde(model.events, base));
-  files.push(eventStreamAbility(base));
+  model.valueObjects.forEach((vo) => files.into('domain').push(valueObject(vo)));
+  const ev = files.into('events');
+  model.events.forEach((e) => ev.push(event(e, base), serdeWrapper(e, base)));
+  ev.push(eventType(model.events, base));
+  ev.push(stateProjector(model.events, base));
+  ev.push(serdeRegistry(model.events, base));
+  ev.push(serde(model.events, base));
+  ev.push(eventStreamAbility(base));
 
   // A slice emits its owner, whatever files its collaborators bring with them,
   // and its ability — with no branch anywhere on what KIND of collaborator it
@@ -1190,15 +1200,17 @@ export function emit(model) {
   for (const c of model.commands) {
     const e = eventsById.get(c.producesId);
     const handler = commandHandler(c, e, base);
-    files.push(command(c), handler);
-    files.push(...collaboratorScaffolds(handler.collaborators));
-    files.push(commandAbility(c, base, handler.collaborators));
+    const cmd = files.into('commands');
+    cmd.push(command(c), handler);
+    cmd.push(...collaboratorScaffolds(handler.collaborators));
+    cmd.push(commandAbility(c, base, handler.collaborators));
   }
 
   for (const rm of model.readModels) {
+    const out = files.into('readmodels');
     if (rm.keyed) {
       const p = persistingProjector(rm, eventsById, base);
-      files.push(
+      out.push(
         readModel(rm),
         readModelEntity(rm),
         readModelRepository(rm),
@@ -1207,19 +1219,19 @@ export function emit(model) {
         p,
       );
       if (rm.keyFields.length > 0) {
-        files.push(readModelKey(rm));
+        out.push(readModelKey(rm));
       }
-      files.push(...collaboratorScaffolds(p.collaborators));
-      files.push(persistingProjectorAbility(rm, base, p.collaborators));
+      out.push(...collaboratorScaffolds(p.collaborators));
+      out.push(persistingProjectorAbility(rm, base, p.collaborators));
       continue;
     }
     const p = projector(rm, eventsById, base);
-    files.push(readModel(rm), p);
-    files.push(...collaboratorScaffolds(p.collaborators));
-    files.push(projectorAbility(rm, base, p.collaborators));
+    out.push(readModel(rm), p);
+    out.push(...collaboratorScaffolds(p.collaborators));
+    out.push(projectorAbility(rm, base, p.collaborators));
   }
 
-  return files;
+  return all;
 }
 
 // Exported for unit tests. The collaborator helpers are the generic seam that

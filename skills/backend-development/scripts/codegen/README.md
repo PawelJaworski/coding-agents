@@ -7,6 +7,7 @@ Spring Boot project. Domain-agnostic and reusable: the only project-specific inp
 ```
 node <skill>/scripts/codegen                 # regenerate
 node <skill>/scripts/codegen --check         # CI gate: fail if generated code is stale
+node <skill>/scripts/codegen --patch         # model -> code diff as .codegen/patch/*.json
 node <skill>/scripts/codegen --json          # print the parsed model
 node <skill>/scripts/codegen --accept-scaffold  # record once-files as reconciled with
                                              # their current template (marker only —
@@ -26,6 +27,30 @@ model -> code is a pure function. Asking an LLM to execute a pure function costs
 and reliability on every run and can never be unit-tested. Everything mechanical lives
 here; the only thing left for an agent is business logic, entered through TDD.
 
+The same argument applies to the *diff*. "What is missing in the code compared to the
+model?" is also a pure function, so `--patch` computes it rather than asking an agent to.
+An agent asked to diff will hallucinate members, miss others silently, and answer
+differently every run — which would make `--check` useless as a CI gate.
+
+## `--patch`: the diff as data
+
+`--patch` is a dry run that writes one document per model category to
+`.codegen/patch/` — `domain`, `events`, `commands`, `readmodels` and `gwt`. Each entry
+names a file and carries exactly one verb:
+
+| verb | meaning | `auto` |
+|---|---|---|
+| `CREATE` | the file does not exist. Pure addition, zero risk. | `true` — `codegen` writes it |
+| `ADD` | the file exists and the model grew. Members are inserted; nothing already there is read, rewritten or removed. | `true`, except on hand-owned logic files |
+| `UPDATE` | the file exists and its own logic conflicts with the model | `false` — always needs an agent |
+
+`auto: true` entries are the generator's own work and need no agent at all. That is what
+makes the patch worth reading: it isolates the small, dangerous `auto: false` subset —
+in particular UPDATE, the only verb that can touch hand-written code, and therefore the
+one restricted to the minimal edit that turns a red build green.
+
+`.codegen/` is derived scratch. Never commit it.
+
 ## Files
 
 | file | role |
@@ -35,9 +60,13 @@ here; the only thing left for an agent is business logic, entered through TDD.
 | `emit.js` | `model.json` -> Java sources |
 | `runtime.js` | domain-independent event-sourcing runtime, scaffolded once per project |
 | `merge.js` | add-only reconciliation of an existing `GENERATED` file. The only module that rewrites existing files, so it masks comments/literals before any structural scan and refuses to emit anything it cannot re-parse. |
+| `advisory.js` | drift report for hand-owned logic files: what the model has that the file lacks, and what conflicts |
+| `patch.js` | the model -> code diff as data: one entry per file, each carrying exactly one of CREATE / ADD / UPDATE |
+| `next.js` | pending GWT scenarios and business rules, matched to the slice their spec must live in |
 | `index.js` | CLI, config resolution, ownership-aware writing |
 | `codegen.test.js` | unit tests for the grammar and naming rules |
 | `merge.test.js` | unit tests for add-only reconciliation |
+| `patch.test.js` | unit tests for the three verbs and their `auto` flag |
 
 ## Configuration
 

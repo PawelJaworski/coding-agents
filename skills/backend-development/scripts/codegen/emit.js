@@ -624,6 +624,10 @@ public interface EventStreamAbility {
 }
 
 function commandAbility(c, base, collaborators) {
+  // The DSL pre-sets the builder from TestDataAbility's default-builder method,
+  // so a spec overrides only what its scenario cares about. The body never
+  // names individual fields — a model that grows stays byte-identical here.
+  const td = naming.testDataAbility(base);
   return {
     test: true,
     package: c.package,
@@ -635,9 +639,10 @@ ${importBlock([
   'java.util.UUID',
   'java.util.function.Consumer',
   `${base}.eventstream.EventStreamAbility`,
+  `${td.package}.${td.className}`,
 ])}
 
-public interface ${c.abilityClassName} extends EventStreamAbility {
+public interface ${c.abilityClassName} extends ${td.className}, EventStreamAbility {
 
     ${c.handlerClassName} INSTANCE =
             new ${c.handlerClassName}(${constructorArgs(collaborators)});
@@ -647,7 +652,7 @@ public interface ${c.abilityClassName} extends EventStreamAbility {
     }
 
     default UUID ${c.dslMethod}(Consumer<${c.className}.${c.className}Builder> testCase) {
-        var cmd = ${c.className}.builder();
+        var cmd = ${naming.defaultBuilderMethod(c.className)}();
         testCase.accept(cmd);
         return get${c.handlerClassName}().handle(cmd.build());
     }

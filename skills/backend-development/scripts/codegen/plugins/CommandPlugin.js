@@ -139,6 +139,11 @@ function commandDecider(c, e, ctx) {
 // --- Command ability emitter ------------------------------------------------
 
 function commandAbility(c, ctx, collaborators) {
+  // The DSL pre-sets the builder from TestDataAbility's default-builder method,
+  // so a spec overrides only what its scenario cares about. The body never
+  // names individual fields — a model that grows stays byte-identical here,
+  // and the missing default surfaces as a javac error naming the exact method.
+  const td = ctx.naming.testDataAbility(ctx.basePackage);
   return {
     category: 'commands',
     test: true,
@@ -149,16 +154,17 @@ function commandAbility(c, ctx, collaborators) {
       ctx.importBlock([
         'java.util.UUID',
         'java.util.function.Consumer',
-        `${ctx.basePackage}.eventstream.EventStreamAbility`
+        `${ctx.basePackage}.eventstream.EventStreamAbility`,
+        `${td.package}.${td.className}`
       ]) + `\n\n` +
-      `public interface ${c.abilityClassName} extends EventStreamAbility {\n\n` +
+      `public interface ${c.abilityClassName} extends ${td.className}, EventStreamAbility {\n\n` +
       `    ${c.handlerClassName} INSTANCE =\n` +
       `            new ${c.handlerClassName}(${ctx.constructorArgs(collaborators)});\n\n` +
       `    default ${c.handlerClassName} get${c.handlerClassName}() {\n` +
       `        return ${c.abilityClassName}.INSTANCE;\n` +
       `    }\n\n` +
       `    default UUID ${c.dslMethod}(Consumer<${c.className}.${c.className}Builder> testCase) {\n` +
-      `        var cmd = ${c.className}.builder();\n` +
+      `        var cmd = ${ctx.naming.defaultBuilderMethod(c.className)}();\n` +
       `        testCase.accept(cmd);\n` +
       `        return get${c.handlerClassName}().handle(cmd.build());\n` +
       `    }\n}\n`

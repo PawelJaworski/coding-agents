@@ -199,19 +199,30 @@ if (patchMode) {
     if (entry) entries.push(entry);
   }
 
-  const gwtEntries = scanWithPlugins(model, {
+  const scanned = scanWithPlugins(model, {
     projectRoot,
     modelDir,
     groovyTestRoot,
+    testSourceRoot: testRoot,
     basePackage: config.basePackage,
   });
-  const gwtPatch = {
-    category: 'gwt',
-    summary: { create: gwtEntries.length, add: 0, update: 0, needsAgent: gwtEntries.length },
-    entries: gwtEntries,
-  };
+  // Scanner entries carry their own category (gwt, testdata, ...); group them
+  // into one patch document per category, same shape as buildPatches output.
+  const scannedPatches = {};
+  for (const entry of scanned) {
+    const category = entry.category ?? 'gwt';
+    (scannedPatches[category] ??= { category, summary: {}, entries: [] }).entries.push(entry);
+  }
+  for (const doc of Object.values(scannedPatches)) {
+    doc.summary = {
+      create: doc.entries.filter((e) => e.op === 'CREATE').length,
+      add: doc.entries.filter((e) => e.op === 'ADD').length,
+      update: doc.entries.filter((e) => e.op === 'UPDATE').length,
+      needsAgent: doc.entries.filter((e) => e.auto === false).length,
+    };
+  }
 
-  const patches = { ...buildPatches(entries), gwt: gwtPatch };
+  const patches = { ...buildPatches(entries), ...scannedPatches };
   const outDir = path.join(projectRoot, PATCH_DIR);
   fs.mkdirSync(outDir, { recursive: true });
 
@@ -256,6 +267,7 @@ if (testMode) {
     ['GENERATE_EVENTS', 'events-patch.json has an auto:false entry', 'apply one entry'],
     ['GENERATE_COMMANDS', 'commands-patch.json has an auto:false entry', 'apply one entry'],
     ['GENERATE_READ_MODELS', 'readmodels-patch.json has an auto:false entry', 'apply one entry'],
+    ['GENERATE_TEST_DATA', 'testdata-patch.json has missing/null TestDataAbility data', 'fill TestDataAbility: derive from business-definition examples or invent'],
     ['GENERATE_GWTS', 'gwt-patch.json has a pending scenario/rule', 'implement ONE scenario, test-first'],
     ['VERIFY', 'nothing pending, no development-report.md', 'mvn clean verify + codegen --check + write the report'],
     ['REVIEW', 'report exists, working tree dirty', 'delegate to backend-code-reviewer (reading only)'],

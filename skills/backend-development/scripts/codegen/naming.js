@@ -79,6 +79,20 @@ const naming = {
     package: `${base}.domain`,
   }),
 
+  // Shared test-data interface (TestDataPlugin): one per project, in the test
+  // source set, extended by every command ability. One namespace on purpose —
+  // a spec implementing abilities from several slices must never hit an
+  // ambiguous constant.
+  testDataAbility: (base) => ({
+    package: `${base}.testdata`,
+    className: 'TestDataAbility',
+  }),
+  // constant for a command field's default: policy holder -> TEST_POLICY_HOLDER
+  testDataConstant: (label) => `TEST_${screamingSnake(label)}`,
+  // the per-command default-builder method a generated *Ability DSL calls:
+  // IssuePolicyCmd -> defaultIssuePolicyCmd()
+  defaultBuilderMethod: (commandClassName) => `default${commandClassName}`,
+
   field: (name) => camel(name),
 
   // src path for a fully qualified class

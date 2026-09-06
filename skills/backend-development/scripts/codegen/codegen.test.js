@@ -203,6 +203,11 @@ A human readable identifier.
     ['Policy Holder', ['Name', 'Surname']],
     ['Policy Number', []],
   ]);
+  // the sample values are kept, per definition, as test-data sources
+  assert.deepEqual(defs.map((d) => [d.name, d.examples]), [
+    ['Policy Holder', ['John Snow']],
+    ['Policy Number', ['POL-1', 'POL-2']],
+  ]);
 });
 
 // --- scaffold drift (A) ------------------------------------------------------

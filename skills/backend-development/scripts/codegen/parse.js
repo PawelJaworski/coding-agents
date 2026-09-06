@@ -128,39 +128,39 @@ export function injectIdentity(section, fields) {
 
 // ---- business definitions -------------------------------------------------
 
-// Bullets under "# examples" are sample VALUES, never attributes. Only bullets
-// outside that section describe the concept's structure.
-function stripExamples(block) {
-  const lines = block.split('\n');
-  const kept = [];
-  let inExamples = false;
-  for (const line of lines) {
-    const heading = line.match(/^#\s*(\w+)/);
-    if (heading) inExamples = heading[1].toLowerCase() === 'examples';
-    if (!inExamples) kept.push(line);
-  }
-  return kept.join('\n');
-}
-
+// Bullets under "# examples" are sample VALUES (test-data defaults for
+// TestDataAbility), never attributes. Only bullets outside that section
+// describe the concept's structure.
 function parseDefinitions(text) {
   const defs = [];
   for (const block of text.split(/^-{3,}\s*$/m)) {
     const nameLine = block.match(/^#\s*name\s+(.+)$/m);
     if (!nameLine) continue;
-    const attrs = [...stripExamples(block).matchAll(/^\*\s+(.+)$/gm)].map((m) => m[1].trim());
-    defs.push({ name: nameLine[1].trim(), attributes: attrs });
+    const attrs = [];
+    const examples = [];
+    let inExamples = false;
+    for (const line of block.split('\n')) {
+      const heading = line.match(/^#\s*(\w+)/);
+      if (heading) inExamples = heading[1].toLowerCase() === 'examples';
+      const bullet = line.match(/^\*\s+(.+)$/);
+      if (!bullet) continue;
+      (inExamples ? examples : attrs).push(bullet[1].trim());
+    }
+    defs.push({ name: nameLine[1].trim(), attributes: attrs, examples });
   }
   return defs;
 }
 
 // A concept WITH listed attributes becomes a value object; without, a String.
+// Both carry the definition's examples: TestDataPlugin derives test-data
+// defaults from them.
 function resolveTypes(defs, base) {
   const byKey = new Map();
   const valueObjects = [];
   for (const def of defs) {
     const key = naming.words(def.name).join(' ');
     if (def.attributes.length === 0) {
-      byKey.set(key, { javaType: 'String', imports: [] });
+      byKey.set(key, { javaType: 'String', imports: [], examples: def.examples });
       continue;
     }
     const vo = naming.valueObject(base, def.name);
@@ -179,6 +179,7 @@ function resolveTypes(defs, base) {
       valueObject: vo,
       embeds,
       attrs,
+      examples: def.examples,
     });
     valueObjects.push({
       kind: 'value-object',
@@ -187,6 +188,7 @@ function resolveTypes(defs, base) {
       fields: attrs,
       attrs,
       embeds,
+      examples: def.examples,
     });
   }
   return { byKey, valueObjects };
@@ -220,6 +222,7 @@ export function parseModel({ modelDir, basePackage }) {
         javaType: t.javaType,
         imports: t.imports,
         conventionExpr: t.expr || null,
+        ...(t.examples?.length ? { examples: t.examples } : {}),
         ...(t.valueObject ? { valueObject: t.valueObject, embeds: t.embeds, attrs: t.attrs } : {}),
       };
     });

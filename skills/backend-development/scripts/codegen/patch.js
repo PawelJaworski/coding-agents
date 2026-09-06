@@ -26,7 +26,7 @@ import { mergeGenerated } from './merge.js';
 import { preservedReason, parseScaffoldVersion } from './scaffold.js';
 import { isLogicFile } from './advisory.js';
 
-export const CATEGORIES = ['domain', 'commands', 'events', 'readmodels'];
+export const CATEGORIES = ['domain', 'commands', 'events', 'readmodels', 'testdata'];
 
 /** Patch filename for a category (`commands` -> `commands-patch.json`). */
 export function patchFileName(category) {
@@ -71,7 +71,7 @@ export function classifyFile({ file, currentContent, relPath }) {
       auto: true,
       owner: file.once ? 'yours-after-creation' : 'generator',
       members: [],
-      hints: file.once ? ['scaffolded once, then yours: business logic goes here'] : [],
+      hints: file.once ? [file.onceHint ?? 'scaffolded once, then yours: business logic goes here'] : [],
     };
   }
 

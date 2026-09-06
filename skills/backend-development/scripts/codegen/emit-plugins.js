@@ -45,10 +45,10 @@ export function emitWithPlugins(model) {
 
 /**
  * Run all scanner plugins and return their patch entries.
- * Scanners compute pending work (like GWT scenarios) by cross-referencing
- * the model against the filesystem.
+ * Scanners compute pending work (like GWT scenarios, or missing TestDataAbility
+ * data) by cross-referencing the model against the filesystem.
  */
-export function scanWithPlugins(model, { projectRoot, modelDir, groovyTestRoot, basePackage }) {
+export function scanWithPlugins(model, { projectRoot, modelDir, groovyTestRoot, basePackage, testSourceRoot }) {
   const registry = createBuiltinRegistry();
   const allEntries = [];
 
@@ -57,6 +57,7 @@ export function scanWithPlugins(model, { projectRoot, modelDir, groovyTestRoot, 
       projectRoot,
       modelDir,
       groovyTestRoot,
+      testSourceRoot,
       basePackage,
       commands: model.commands,
       readModels: model.readModels,

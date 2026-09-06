@@ -65,7 +65,9 @@ function ruleCommand(rule, commands) {
 const gwtStep = {
   id: 'GENERATE_GWTS',
   category: 'gwt',
-  after: ['GENERATE_COMMANDS', 'GENERATE_READ_MODELS'],
+  // Test data is filled before scenarios: a scenario spec overrides only what
+  // it cares about, so the defaults it relies on must already exist.
+  after: ['GENERATE_COMMANDS', 'GENERATE_READ_MODELS', 'GENERATE_TEST_DATA'],
   detect: (patch) => (patch?.entries ?? []).filter(e => e.auto === false),
   render: (item, index, total) => {
     const left = total - index - 1;
@@ -133,6 +135,7 @@ export const GWTPlugin = {
         return {
           op: 'CREATE',
           auto: false,
+          category: 'gwt',
           kind: item.kind,
           name,
           source: isRule ? 'business-rules-raw.md' : item.detail.file,

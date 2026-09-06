@@ -6,6 +6,7 @@ import { DomainPlugin } from './DomainPlugin.js';
 import { EventPlugin } from './EventPlugin.js';
 import { CommandPlugin } from './CommandPlugin.js';
 import { ReadModelPlugin } from './ReadModelPlugin.js';
+import { TestDataPlugin } from './TestDataPlugin.js';
 import { GWTPlugin } from './GWTPlugin.js';
 // import { SerdePlugin } from './SerdePlugin.js';
 
@@ -17,6 +18,7 @@ export function createBuiltinRegistry() {
     EventPlugin,
     CommandPlugin,
     ReadModelPlugin,
+    TestDataPlugin,
     GWTPlugin
     // SerdePlugin
   ]);

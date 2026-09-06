@@ -45,10 +45,10 @@ const ONCE_HEADER = (what) =>
   `// [bracketed] field. Drive both in with a test.\n`;
 
 const uniq = (xs) => [...new Set(xs)].filter(Boolean);
-const importBlock = (imports) =>
+export const importBlock = (imports) =>
   uniq(imports).sort().map((i) => `import ${i};`).join('\n');
 
-const components = (fields) => fields.map((f) => `${f.javaType} ${f.name}`).join(', ');
+export const components = (fields) => fields.map((f) => `${f.javaType} ${f.name}`).join(', ');
 
 // --- collaborators -----------------------------------------------------------
 // A collaborator is a constructor dependency of a generated class. The generator
@@ -1252,11 +1252,14 @@ export {
   command,
   commandDecider,
   valueObject,
+  readModel,
+  projector,
   readModelEntity,
   readModelKey,
   readModelRepository,
   readModelJpaRepository,
   readModelInMemoryRepository,
   persistingProjector,
+  projectorAbility,
   persistingProjectorAbility,
 };

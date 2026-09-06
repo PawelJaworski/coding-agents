@@ -3,18 +3,23 @@
 // project-specific comes from <project>/codegen.config.json, so this script is
 // reusable across every project that uses the sliced event-sourced architecture.
 //
-//   node <skill>/scripts/codegen                 regenerate (cwd = project root)
-//   node <skill>/scripts/codegen --check         CI gate: fail if stale
-//   node <skill>/scripts/codegen --next          "what should the agent do next?"
-//   node <skill>/scripts/codegen --next --json   ...as machine-readable JSON
-//   node <skill>/scripts/codegen --json          print the parsed model
-//   node <skill>/scripts/codegen --accept-scaffold  record once-files as reconciled
+// Usage:
+//   node <skill>/scripts/codegen                          regenerate (cwd = project root)
+//   node <skill>/scripts/codegen --check                  CI gate: fail if stale
+//   node <skill>/scripts/codegen --patch                  model -> code diff as .codegen/patch/*.json
+//   node <skill>/scripts/codegen --json                   print the parsed model
+//   node <skill>/scripts/codegen --next                   pick next step and render prompt
+//   node <skill>/scripts/codegen --next --json            ...as machine-readable JSON
+//   node <skill>/scripts/codegen --prompt <STEP> [--item N]  render ONE prompt
+//   node <skill>/scripts/codegen --test                   print the step machine
+//   node <skill>/scripts/codegen --accept-scaffold        record once-files as reconciled
 //   node <skill>/scripts/codegen --project <dir> --model <dir>   explicit paths
 
+import { execSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseModel } from './parse.js';
-import { emit } from './emit.js';
+import { emitWithPlugins, scanWithPlugins } from './emit-plugins.js';
 import {
   parseScaffoldVersion,
   stampScaffoldVersion,
@@ -24,18 +29,36 @@ import {
 } from './scaffold.js';
 import { mergeGenerated, semanticDrift } from './merge.js';
 import { computeAdvisory, isLogicFile } from './advisory.js';
-import { pendingWork, buildQueue, parseSpecNames } from './next.js';
-import { classifyFile, buildPatches, buildGwtPatch, patchFileName } from './patch.js';
+import { classifyFile, buildPatches, patchFileName } from './patch.js';
+import {
+  getAllSteps,
+  getGenerateSteps,
+  getCategoryOf,
+} from '../steps-bridge.js';
+import {
+  buildStep,
+  pendingEntries,
+  loadPatch,
+} from './prompts.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
   modelDir: '../docs',
   mainSourceRoot: 'src/main/java',
   testSourceRoot: 'src/test/java',
-  // Only this root is a Groovy source root; a spec anywhere else is silently
-  // never compiled, so the generator refuses to proceed if it finds one.
   groovyTestSourceRoot: 'src/test/groovy',
 };
+
+const PATCH_DIR = '.codegen/patch';
+const SKILL = '.opencode/skills/backend-development';
+
+const STEPS = getAllSteps();
+const GENERATE_STEPS = getGenerateSteps();
+const CATEGORY_OF = getCategoryOf();
+
+// ---------------------------------------------------------------------------
+// Argument parsing
+// ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
 const flag = (name) => {
@@ -45,40 +68,16 @@ const flag = (name) => {
 const checkOnly = args.includes('--check');
 const nextMode = args.includes('--next');
 const patchMode = args.includes('--patch');
-// All three are dry runs: none ever writes a Java source file.
-const check = checkOnly || nextMode || patchMode;
+const promptMode = args.includes('--prompt');
+const testMode = args.includes('--test');
 const acceptScaffold = args.includes('--accept-scaffold');
+const json = args.includes('--json');
+const check = checkOnly || nextMode || patchMode;
 
-// Where `--patch` drops its documents. Derived, disposable, never committed.
-const PATCH_DIR = '.codegen/patch';
+// ---------------------------------------------------------------------------
+// Project root + config
+// ---------------------------------------------------------------------------
 
-/**
- * Print a `--next` result. As JSON with `--json` (machine-readable, for a
- * calling agent or a loop), otherwise as short human-readable text.
- */
-function printNext(result) {
-  if (args.includes('--json')) {
-    console.log(JSON.stringify(result, null, 2));
-    return;
-  }
-  console.log(`\n  STATE: ${result.state}`);
-  if (result.next) {
-    console.log(`  NEXT (${result.next.kind}): ${JSON.stringify(result.next.detail)}`);
-    console.log(`\n  ${result.next.prompt}\n`);
-  } else {
-    console.log('  Nothing pending — model, code and specs all agree.\n');
-  }
-  if (result.queue && result.queue.length > 1) {
-    console.log(`  (${result.queue.length - 1} more item(s) queued after this one)\n`);
-  }
-}
-
-const projectRoot = findProjectRoot(path.resolve(flag('project') || process.cwd()));
-const configPath = projectRoot && path.join(projectRoot, CONFIG_FILE);
-
-// The project root is wherever codegen.config.json lives, searched upwards from
-// cwd. That makes the generator runnable from any directory in the project with
-// no wrapper script and no path juggling.
 function findProjectRoot(start) {
   let dir = start;
   for (;;) {
@@ -94,6 +93,7 @@ const die = (msg) => {
   process.exit(1);
 };
 
+const projectRoot = findProjectRoot(path.resolve(flag('project') || process.cwd()));
 if (!projectRoot) {
   die(
     `CONFIG ERROR  No ${CONFIG_FILE} found in ${path.resolve(
@@ -104,7 +104,7 @@ if (!projectRoot) {
   );
 }
 
-const config = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(configPath, 'utf8')) };
+const config = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(path.join(projectRoot, CONFIG_FILE), 'utf8')) };
 if (!config.basePackage) die(`CONFIG ERROR  ${CONFIG_FILE} must declare "basePackage".`);
 
 const modelDir = path.resolve(projectRoot, flag('model') || config.modelDir);
@@ -112,11 +112,10 @@ const mainRoot = path.resolve(projectRoot, config.mainSourceRoot);
 const testRoot = path.resolve(projectRoot, config.testSourceRoot);
 const groovyTestRoot = path.resolve(projectRoot, config.groovyTestSourceRoot);
 
-// --- preflight: Groovy specs must live in the Groovy source root -------------
-// Not a style rule. javac ignores .groovy and the Groovy compiler only reads its
-// own root, so a spec under src/test/java produces NO class and NO error —
-// surefire then reports the test does not exist, which reads like a surefire
-// misconfiguration. Fail here instead, where the cause is obvious.
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
 function walk(dir) {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -124,6 +123,21 @@ function walk(dir) {
     return e.isDirectory() ? walk(full) : [full];
   });
 }
+
+function hasUncommittedChanges() {
+  try {
+    return (
+      execSync('git status --porcelain', { cwd: projectRoot, encoding: 'utf8', timeout: 5_000 })
+        .trim().length > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Preflight: Groovy specs must live in the Groovy source root
+// ---------------------------------------------------------------------------
 
 if (path.resolve(testRoot) !== path.resolve(groovyTestRoot)) {
   const strays = misplacedSpecs(walk(testRoot));
@@ -138,68 +152,42 @@ if (path.resolve(testRoot) !== path.resolve(groovyTestRoot)) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Parse model
+// ---------------------------------------------------------------------------
+
 let files;
 let model;
 try {
   model = parseModel({ modelDir, basePackage: config.basePackage });
-  // `--json` alone dumps the parsed model. Combined with `--next` or `--patch`
-  // it instead means "that mode's result as JSON" — handled further down.
-  if (args.includes('--json') && !nextMode && !patchMode) {
+  if (json && !nextMode && !patchMode && !promptMode) {
     console.log(JSON.stringify(model, null, 2));
     process.exit(0);
   }
-  files = emit(model);
+  files = emitWithPlugins(model);
 } catch (err) {
-  if (nextMode) {
-    printNext({
+  if (nextMode || promptMode) {
+    printResult({
       state: 'MODEL_ERROR',
+      step: 'MODEL_ERROR',
       next: {
-        kind: 'model-error',
         detail: err.message,
         prompt:
           `Model error: ${err.message}. Do not fix it in code and do not edit the model — ` +
           `skip this fragment, keep going with everything else, and record it in ` +
           `development-report.md.`,
       },
-      queue: [],
+      remaining: 0,
     });
     process.exit(1);
   }
   die(`MODEL ERROR  ${err.message}`);
 }
 
-// Slice-aware pending work: each scenario/rule is matched against the slice it
-// MUST live in (a same-named method anywhere in the tree no longer counts), and
-// every item carries the exact spec path so the agent never guesses.
-function computeQueue() {
-  const gwtFiles = walk(modelDir)
-    .filter((f) => /^gwt-.*\.md$/.test(path.basename(f)))
-    .map((f) => ({ name: path.basename(f), content: fs.readFileSync(f, 'utf8') }));
-  const businessRulesPath = path.join(modelDir, 'business-rules-raw.md');
-  const businessRulesRaw = fs.existsSync(businessRulesPath)
-    ? fs.readFileSync(businessRulesPath, 'utf8')
-    : '';
-  const parsedSpecs = walk(groovyTestRoot)
-    .filter((f) => f.endsWith('.groovy'))
-    .flatMap((f) => parseSpecNames(fs.readFileSync(f, 'utf8'), path.relative(projectRoot, f)));
+// ---------------------------------------------------------------------------
+// --patch: the model->code diff as JSON documents
+// ---------------------------------------------------------------------------
 
-  return buildQueue(
-    pendingWork({
-      businessRulesRaw,
-      gwtFiles,
-      parsedSpecs,
-      commands: model.commands,
-      readModels: model.readModels,
-    }),
-    { groovyRoot: config.groovyTestSourceRoot, base: config.basePackage },
-  );
-}
-
-// --- --patch: the model->code diff as five JSON documents --------------------
-// Emitted by the SCRIPT, never by an agent: "what is missing" is a pure
-// function, and a non-deterministic answer to it would defeat the point of
-// having a generator at all. The agent's job starts one step later — it applies
-// ONE entry at a time, via get-prompt.
 if (patchMode) {
   const entries = [];
   for (const file of files) {
@@ -211,7 +199,19 @@ if (patchMode) {
     if (entry) entries.push(entry);
   }
 
-  const patches = { ...buildPatches(entries), gwt: buildGwtPatch(computeQueue()) };
+  const gwtEntries = scanWithPlugins(model, {
+    projectRoot,
+    modelDir,
+    groovyTestRoot,
+    basePackage: config.basePackage,
+  });
+  const gwtPatch = {
+    category: 'gwt',
+    summary: { create: gwtEntries.length, add: 0, update: 0, needsAgent: gwtEntries.length },
+    entries: gwtEntries,
+  };
+
+  const patches = { ...buildPatches(entries), gwt: gwtPatch };
   const outDir = path.join(projectRoot, PATCH_DIR);
   fs.mkdirSync(outDir, { recursive: true });
 
@@ -222,7 +222,7 @@ if (patchMode) {
     summary.push({ category, file: `${PATCH_DIR}/${name}`, ...doc.summary });
   }
 
-  if (args.includes('--json')) {
+  if (json) {
     console.log(JSON.stringify({ patchDir: PATCH_DIR, patches: summary }, null, 2));
     process.exit(0);
   }
@@ -236,13 +236,179 @@ if (patchMode) {
   console.log(
     `\n  CREATE and ADD marked auto:true are performed by \`codegen\` itself — run it.\n` +
       `  Only auto:false entries need an agent. Get one prompt at a time:\n\n` +
-      `    node <skill>/scripts/get-prompt.js GENERATE_COMMANDS --item 0\n`,
+      `    node ${SKILL}/scripts/codegen --prompt GENERATE_COMMANDS --item 0\n`,
   );
   process.exit(0);
 }
 
+// ---------------------------------------------------------------------------
+// --test: print the step machine
+// ---------------------------------------------------------------------------
+
+if (testMode) {
+  console.log('\n  Backend Development — Step Machine\n');
+  console.log('  codegen --next  ->  do the ONE prompt  ->  codegen --next  ->  ...\n');
+  console.log('  The diff is scripted (codegen --patch). The agent only applies one entry.\n');
+  const rows = [
+    ['MODEL_ERROR', 'codegen --patch fails to parse the model', 'report it; never fix in code, never edit the model'],
+    ['RUN_CODEGEN', 'any patch entry has auto:true', 'run codegen; CREATE and ADD are the generator\'s job'],
+    ['GENERATE_DOMAIN', 'domain-patch.json has an auto:false entry', 'apply one entry'],
+    ['GENERATE_EVENTS', 'events-patch.json has an auto:false entry', 'apply one entry'],
+    ['GENERATE_COMMANDS', 'commands-patch.json has an auto:false entry', 'apply one entry'],
+    ['GENERATE_READ_MODELS', 'readmodels-patch.json has an auto:false entry', 'apply one entry'],
+    ['GENERATE_GWTS', 'gwt-patch.json has a pending scenario/rule', 'implement ONE scenario, test-first'],
+    ['VERIFY', 'nothing pending, no development-report.md', 'mvn clean verify + codegen --check + write the report'],
+    ['REVIEW', 'report exists, working tree dirty', 'delegate to backend-code-reviewer (reading only)'],
+    ['DONE', 'report exists, tree clean', 'all complete'],
+  ];
+  for (const [name, detect, action] of rows) {
+    console.log(`  ${name}\n    detect: ${detect}\n    action: ${action}\n`);
+  }
+  console.log(`  Steps available: ${STEPS.join(', ')}\n`);
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// --prompt <STEP> [--item N]: render ONE prompt
+// ---------------------------------------------------------------------------
+
+if (promptMode) {
+  const step = args.find((a) => !a.startsWith('--') && a !== 'codegen');
+  const itemFlag = args.indexOf('--item');
+  const item = itemFlag >= 0 ? Number(args[itemFlag + 1]) || 0 : 0;
+
+  if (!step) {
+    console.log(`  Usage: node ${SKILL}/scripts/codegen --prompt <STEP> [--item N] [--json]\n`);
+    console.log(`  Steps: ${STEPS.join(', ')}\n`);
+    process.exit(0);
+  }
+
+  const category = CATEGORY_OF[step];
+  const patch = category ? loadPatch(projectRoot, category) : null;
+  const result = buildStep(step, patch, item);
+
+  if (json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`\n${result.prompt}\n`);
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// --next: pick next step and render prompt
+// ---------------------------------------------------------------------------
+
+function refreshPatches() {
+  const script = path.join(projectRoot, SKILL, 'scripts/codegen');
+  const res = spawnSync('node', [script, '--patch', '--json'], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (res.status !== 0) {
+    return { modelError: (res.stderr || res.stdout || 'unknown model error').trim() };
+  }
+  return { modelError: null };
+}
+
+function selectStep({ modelError, patches, hasReport, hasUncommitted }) {
+  if (modelError) return { step: 'MODEL_ERROR', item: 0 };
+
+  const all = Object.values(patches ?? {}).flatMap((p) => p?.entries ?? []);
+  if (all.some((e) => e.auto === true)) return { step: 'RUN_CODEGEN', item: 0 };
+
+  for (const step of GENERATE_STEPS) {
+    const patch = patches?.[CATEGORY_OF[step]];
+    if (pendingEntries(patch).length > 0) return { step, item: 0 };
+  }
+
+  if (!hasReport) return { step: 'VERIFY', item: 0 };
+  if (hasUncommitted) return { step: 'REVIEW', item: 0 };
+  return { step: 'DONE', item: 0 };
+}
+
+function buildResult(selection, patches, modelError = null) {
+  const { step, item } = selection;
+
+  if (step === 'DONE') {
+    return { state: 'DONE', step, next: null, remaining: 0 };
+  }
+
+  if (step === 'MODEL_ERROR') {
+    return {
+      state: 'MODEL_ERROR',
+      step,
+      next: {
+        detail: modelError,
+        prompt:
+          `The event model does not parse: ${modelError}\n\n` +
+          'Do NOT fix this in code and do NOT edit the model — both are out of bounds.\n' +
+          'Skip this fragment, continue with everything else, and record it in development-report.md.\n' +
+          'A blocked fragment is a normal outcome of a run. An unreported one is not.',
+      },
+      remaining: 0,
+    };
+  }
+
+  const patch = patches?.[CATEGORY_OF[step]] ?? null;
+  const rendered = buildStep(step, patch, item);
+  return {
+    state: step.startsWith('GENERATE_') ? 'GENERATE' : step,
+    step,
+    next: { detail: rendered.entry ?? step, prompt: rendered.prompt },
+    remaining: rendered.remaining,
+  };
+}
+
+function printResult(result) {
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`\n  STEP: ${result.step}`);
+  if (result.next) {
+    console.log(`\n${result.next.prompt}\n`);
+  } else {
+    console.log('  All done — nothing pending.\n');
+  }
+}
+
+if (nextMode) {
+  // Refresh patches automatically
+  const { modelError } = refreshPatches();
+
+  // Load patches from disk
+  const patches = {};
+  for (const step of GENERATE_STEPS) {
+    const category = CATEGORY_OF[step];
+    const file = path.join(projectRoot, PATCH_DIR, `${category}-patch.json`);
+    if (!fs.existsSync(file)) continue;
+    try {
+      patches[category] = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      /* a corrupt patch is treated as absent; the next --patch rewrites it */
+    }
+  }
+
+  const selection = selectStep({
+    modelError,
+    patches,
+    hasReport: fs.existsSync(path.join(projectRoot, 'development-report.md')),
+    hasUncommitted: hasUncommittedChanges(),
+  });
+  const result = buildResult(selection, patches, modelError);
+
+  printResult(result);
+
+  if (args.includes('--check')) process.exit(result.state === 'DONE' ? 0 : 1);
+  process.exit(result.state === 'DONE' ? 0 : 1);
+}
+
+// ---------------------------------------------------------------------------
+// Default: regenerate code from model
+// ---------------------------------------------------------------------------
+
 const written = [];
-const preserved = [];const stale = [];
+const preserved = [];
+const stale = [];
 const staleScaffold = [];
 const staleGenerated = [];
 const advisoryDrifts = [];
@@ -257,8 +423,6 @@ for (const file of files) {
   const rel = path.relative(projectRoot, target);
 
   // `once` files are scaffolded then owned by the project (deciders, runtime).
-  // Never rewritten — they hold hand-written logic — but their scaffold version
-  // is compared so template drift is reported rather than silently tolerated.
   if (file.once && exists) {
     const current = fs.readFileSync(target, 'utf8');
     const onDisk = parseScaffoldVersion(current);
@@ -279,14 +443,10 @@ for (const file of files) {
   }
 
   // Logic-bearing classes (handlers, projectors, repositories, entities) are scaffolded
-  // on creation and never overwritten when they exist. When the model changes, the
-  // generator computes exact advisory instructions rather than blindly modifying the code.
+  // on creation and never overwritten when they exist.
   if (isLogicFile(file) && exists) {
     let current = fs.readFileSync(target, 'utf8');
 
-    // Check preserved-by-hand FIRST — if the file declares an intentional
-    // deviation, skip header reconciliation entirely. The header is part of
-    // the deliberate deviation and must not be stripped.
     const adv = computeAdvisory({ currentContent: current, generatedContent: file.content, relPath: rel });
     if (adv && adv.isPreserved) {
       preservedByHand.push(`${rel}  // PRESERVED-BY-HAND: ${adv.reason}`);
@@ -294,10 +454,6 @@ for (const file of files) {
       continue;
     }
 
-    // The leading comment block is ownership metadata, never business logic. It
-    // must stay honest about how the file is treated, so reconcile it whenever
-    // it drifts from the template — without touching the hand-written body.
-    // Skip this for preserved-by-hand files (handled above).
     const genHeader = leadingCommentBlock(file.content);
     const curHeader = leadingCommentBlock(current);
     if (curHeader !== genHeader) {
@@ -319,9 +475,7 @@ for (const file of files) {
     continue;
   }
 
-  // Pure DATA / CONTRACT files are ADD-ONLY once they exist: a fresh member (a new record
-  // component, enum constant, or class member — the model grew) is inserted; an
-  // existing member is NEVER rewritten or removed.
+  // Pure DATA / CONTRACT files are ADD-ONLY once they exist.
   if (!file.once && exists) {
     const current = fs.readFileSync(target, 'utf8');
     if (current === file.content) {
@@ -347,9 +501,6 @@ for (const file of files) {
       continue;
     }
     if (merged.added.length === 0) {
-      // Content may still have changed via a placeholder-annotation replacement
-      // (a commented-out annotation turned into a real one). added is empty but
-      // the file differs — write it back in that case.
       if (merged.content !== current) {
         if (!check) {
           fs.writeFileSync(target, merged.content);
@@ -380,9 +531,10 @@ for (const file of files) {
   written.push(`created  ${rel}`);
 }
 
-// Reported separately from `stale`: these are YOURS, so the fix is a hand-ported
-// delta, not a regeneration. Conflating them would suggest re-running the
-// generator, which does nothing at all for a `once` file.
+// ---------------------------------------------------------------------------
+// Report generation
+// ---------------------------------------------------------------------------
+
 function reportStaleScaffold() {
   console.error(
     `\n  STALE SCAFFOLD  ${staleScaffold.length} once-owned file(s) predate the current template:`,
@@ -392,13 +544,10 @@ function reportStaleScaffold() {
     `\n  These are YOURS — the generator will not touch them, and re-running it\n` +
       `  changes nothing. Diff each against its template in scripts/codegen/runtime.js\n` +
       `  and port the delta by hand, then record it:\n\n` +
-      `    node <skill>/scripts/codegen --accept-scaffold\n`,
+      `    node ${SKILL}/scripts/codegen --accept-scaffold\n`,
   );
 }
 
-// A GENERATED file the merge step doesn't recognise the shape of (not a single
-// top-level record/class/interface/enum). Overwriting could destroy a hand
-// extension, so the generator refuses and asks a human to reconcile it.
 function reportNeedsManualMerge() {
   console.error(
     `\n  NEEDS MANUAL MERGE  ${needsManualMerge.length} generated file(s) differ from the model\n` +
@@ -412,11 +561,6 @@ function reportNeedsManualMerge() {
   );
 }
 
-// A member of a GENERATED file whose body no longer matches what fresh generation
-// would emit, WITHOUT a `// PRESERVED-BY-HAND` marker. This is stale state (the
-// model grew or changed and the on-disk member wasn't re-emitted) or a hand edit
-// that forgot to declare itself. Either way the agent/human must classify it:
-// mark it preserved, or delete-and-regenerate the file.
 function reportStaleGenerated() {
   console.error(
     `\n  STALE GENERATED  ${staleGenerated.length} generated file(s) have member bodies that no longer\n` +
@@ -472,82 +616,6 @@ if (checkOnly) {
     process.exit(1);
   }
   console.log('codegen: up to date');
-  process.exit(0);
-}
-
-// `--next` turns everything above into ONE decision instead of a human reading
-// free-text output and deciding what it implies. Codegen-level problems (a
-// stale file, an unresolved scaffold) ARE the next step when they exist. Once
-// codegen is clean, the queue is built by cross-referencing the model's rules
-// and GWT scenarios against existing Spock spec names (backend-implement names
-// a spec after the rule/scenario verbatim, so a name with no matching spec is
-// unimplemented work) — see reference/edit-classification.md and next.js.
-if (nextMode) {
-  if (stale.length) {
-    printNext({
-      state: 'OUT_OF_DATE',
-      next: {
-        kind: 'regenerate',
-        detail: `${stale.length} generated file(s) differ from the model`,
-        prompt: 'Run `node <skill>/scripts/codegen` (no flags) to regenerate, then re-run --next.',
-      },
-      queue: [],
-    });
-    process.exit(1);
-  }
-  if (staleScaffold.length) {
-    printNext({
-      state: 'STALE_SCAFFOLD',
-      next: {
-        kind: 'reconcile-scaffold',
-        detail: staleScaffold,
-        prompt:
-          'These once-owned files predate their template. Diff each against ' +
-          'scripts/codegen/runtime.js, port the delta by hand, then run --accept-scaffold.',
-      },
-      queue: [],
-    });
-    process.exit(1);
-  }
-  if (staleGenerated.length) {
-    printNext({
-      state: 'STALE_GENERATED',
-      next: {
-        kind: 'reconcile-drift',
-        detail: staleGenerated,
-        prompt:
-          'These generated member bodies no longer match the model, with no ' +
-          '// PRESERVED-BY-HAND marker. Classify each: mark it preserved if the ' +
-          'deviation is intentional, otherwise delete the file and regenerate it.',
-      },
-      queue: [],
-    });
-    process.exit(1);
-  }
-  // ADVISORY_DRIFT is informational only — it reports where the model and
-  // hand-written logic diverge. It does NOT block the state machine.
-  // The developer decides whether to align the code with the model or mark
-  // the file with // PRESERVED-BY-HAND: <reason>.
-  if (needsManualMerge.length) {
-    printNext({
-      state: 'NEEDS_MANUAL_MERGE',
-      next: {
-        kind: 'manual-merge',
-        detail: needsManualMerge,
-        prompt: 'The merge could not recognise this file\'s shape. Reconcile it by hand.',
-      },
-      queue: [],
-    });
-    process.exit(1);
-  }
-
-  const queue = computeQueue();
-
-  if (queue.length === 0) {
-    printNext({ state: 'DONE', next: null, queue: [] });
-    process.exit(0);
-  }
-  printNext({ state: 'PENDING', next: queue[0], queue });
   process.exit(0);
 }
 

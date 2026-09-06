@@ -20,26 +20,18 @@ description: >
 # Drive the loop
 
 ```
-node .opencode/skills/backend-development/scripts/main-flow --next --json
+node .opencode/skills/backend-development/scripts/codegen --next --json
 ```
 
 One small prompt per call. Execute it, call again, until `state: "DONE"`.
 The prompt is complete on its own — hand it to a subagent with a fresh context.
 **Do not read ahead in this file to "understand the flow". The prompt is the flow.**
 
-Three scripts, three jobs:
+The plugin system (`scripts/codegen/plugins/`) defines all constructs:
+DomainPlugin, EventPlugin, CommandPlugin, GWTPlugin. Steps are data, not code.
+Adding a new construct = adding a new plugin file.
 
-| script | job | who runs it |
-|---|---|---|
-| `codegen --patch` | compute the model -> code diff (`.codegen/patch/*.json`) | a script. **Never an agent** |
-| `get-prompt.js <STEP> --item N` | render ONE entry as a prompt | the driver, or you, out of band |
-| `main-flow --next` | pick the next step and entry | the loop |
-
-Everything mechanical is already decided by the time you see a prompt: the diff, the
-verb (`CREATE` / `ADD` / `UPDATE`), the file path, the spec path. In a sliced
-architecture the name of a command, event or read model determines the name of its
-handler, projector, repository and ability — so a path never needs explaining, and this
-file does not explain it. `main-flow --test` prints the step machine.
+`codegen --test` prints the step machine.
 
 # What is NOT in the prompts
 

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStep, renderEntry, pendingEntries, STEPS, GENERATE_STEPS } from './get-prompt.js';
+import { buildStep, renderEntry, pendingEntries, GENERATE_STEPS } from './codegen/prompts.js';
+import { getAllSteps } from './steps-bridge.js';
+
+const STEPS = getAllSteps();
 
 const entry = (over = {}) => ({
   op: 'UPDATE',

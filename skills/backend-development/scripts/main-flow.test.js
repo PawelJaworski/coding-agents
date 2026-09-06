@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectStep, buildResult } from './main-flow.js';
+import { selectStep, buildResult } from './codegen/step-selection.js';
 
 const patch = (category, entries) => ({ category, entries });
 const create = (over = {}) => ({ op: 'CREATE', auto: true, category: 'domain', ...over });

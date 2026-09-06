@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import naming from './naming.js';
-import { parseSections, parseField, parseDefinitions } from './parse.js';
+import { parseSections, parseField, parseDefinitions, injectIdentity } from './parse.js';
 import {
   parseScaffoldVersion,
   stampScaffoldVersion,
@@ -21,6 +21,7 @@ import {
   command,
   commandDecider,
   valueObject,
+  projector,
   readModelEntity,
   readModelKey,
   readModelRepository,
@@ -129,6 +130,40 @@ test(':Key marks a persisting projection and is not swallowed as a property', ()
 test(':Id is the on-demand default', () => {
   const [s] = parseSections('## policy-details\npolicy:Id\n* policy holder\n');
   assert.equal(s.keyed, false);
+});
+
+// --- implicit identity attribute -----------------------------------------------
+
+test('a :Id read model carries an implicit <aggregate>Id identity as its first field', () => {
+  const [s] = parseSections('## policy-details\npolicy:Id\n* policy holder\n');
+  const fields = injectIdentity(s, s.fields);
+  assert.deepEqual(fields.map((f) => f.name), ['policyId', 'policyHolder']);
+  assert.equal(fields[0].identity, true);
+  assert.equal(fields[0].javaType, 'UUID');
+});
+
+test('a :Key read model derives its identity name from the Key suffix', () => {
+  const [s] = parseSections('## policy-list\npolicy:Key\n* policy holder\n');
+  const fields = injectIdentity(s, s.fields);
+  assert.deepEqual(fields.map((f) => f.name), ['policyKey', 'policyHolder']);
+});
+
+test('an explicit identity line is absorbed, its markers merged', () => {
+  const [s] = parseSections('## policy-list\npolicy:Key\n* policy key?\n* policy holder\n');
+  const fields = injectIdentity(s, s.fields);
+  assert.deepEqual(fields.map((f) => f.name), ['policyKey', 'policyHolder']);
+  assert.equal(fields[0].searchable, true);
+});
+
+test('an explicit :Key marker on the identity line makes it the composite key', () => {
+  const [s] = parseSections('## policy-list\npolicy:Key\n* policy key:Key\n');
+  const fields = injectIdentity(s, s.fields);
+  assert.equal(fields[0].key, true);
+});
+
+test('a [bracketed] identity duplicate is a model error', () => {
+  const [s] = parseSections('## policy-details\npolicy:Id\n* [policy id]\n');
+  assert.throws(() => injectIdentity(s, s.fields), /identity attribute/);
 });
 
 test('definitions with attributes become value objects, without stay scalar', () => {
@@ -701,6 +736,85 @@ test('repositories use PolicyListKey as ID type when keyFields present', () => {
   const mem = readModelInMemoryRepository(keyedRm());
   assert.match(mem.content, /Map<PolicyListKey, PolicyListEntity> entities/);
   assert.match(mem.content, /entities\.put\(entity\.getId\(\), entity\);/);
+});
+
+// --- implicit identity attribute: sourced from event.aggregateId() --------------
+
+const IDENTITY_FIELD = {
+  name: 'policyKey',
+  label: 'policy key',
+  identity: true,
+  javaType: 'UUID',
+  imports: ['java.util.UUID'],
+};
+
+const issuedEvent = (fields) => ({
+  id: 'policy-issued',
+  name: 'Policy Issued',
+  package: 'pl.pjaworski.insurance_company.domain.events',
+  className: 'PolicyIssuedEvent',
+  fields,
+});
+
+test('resolveArg sources the identity attribute from the aggregate id, never a name match', () => {
+  const r = resolveArg(IDENTITY_FIELD, { sourceFields: [], sourceExpr: 'event' });
+  assert.equal(r.expr, 'event.aggregateId()');
+  assert.deepEqual(r.imports, ['java.util.UUID']);
+});
+
+test('an on-demand projector folds the identity attribute from event.aggregateId()', () => {
+  const rm = {
+    id: 'policy-details',
+    className: 'PolicyDetails',
+    package: 'pl.pjaworski.insurance_company.policydetails',
+    deciderClassName: 'PolicyDetailsProjectionDecider',
+    projectorClassName: 'PolicyDetailsProjector',
+    getterMethod: 'getPolicyDetails',
+    getMapping: 'policy-details/{aggregateId}',
+    subscribes: ['policy-issued'],
+    keyFields: [],
+    fields: [IDENTITY_FIELD, { name: 'policyHolder', label: 'policy holder', javaType: 'String', imports: [] }],
+  };
+  const p = projector(rm, new Map([['policy-issued', issuedEvent([{ name: 'policyHolder', javaType: 'String' }])]]), BASE);
+  assert.match(p.content, /return new PolicyDetails\(\s+event\.aggregateId\(\),\s+event\.policyHolder\(\)/s);
+});
+
+test('a persisting projector saves the identity attribute from event.aggregateId()', () => {
+  const rm = { ...vaRm(), fields: [IDENTITY_FIELD, ...vaRm().fields] };
+  const p = persistingProjector(rm, new Map([['policy-issued', issuedEvent([{ name: 'policyHolder', javaType: 'PolicyHolder' }, { name: 'policyNumber', javaType: 'String' }])]]), BASE);
+  assert.match(p.content, /var projected = new PolicyList\(\s+event\.aggregateId\(\),/s);
+  assert.match(p.content, /repository\.save\(new PolicyListEntity\(event\.aggregateId\(\), projected\.policyKey\(\),/);
+});
+
+test('an identity field marked :Key is a composite member looked up by the aggregate id', () => {
+  const rm = (() => {
+    const base = keyedRm();
+    const identity = { ...IDENTITY_FIELD, key: true };
+    return {
+      ...base,
+      fields: [identity, ...base.fields.filter((f) => f.name !== 'policyNumber')],
+      keyFields: [identity],
+    };
+  })();
+  const p = persistingProjector(rm, new Map([['policy-issued', issuedEvent([{ name: 'policyHolder', javaType: 'PolicyHolder' }])]]), BASE);
+  assert.match(p.content, /repository\.findById\(new PolicyListKey\(event\.aggregateId\(\)\)\)/);
+  assert.match(p.content, /new PolicyListEntity\(new PolicyListKey\(projected\.policyKey\(\)\), projected\.policyHolder\(\)\)/);
+
+  const keyClass = readModelKey(rm);
+  assert.match(keyClass.content, /import java\.util\.UUID;/);
+  assert.match(keyClass.content, /UUID policyKey/);
+});
+
+test('a :Key field is never a search path — it lives in the @EmbeddedId', () => {
+  const rm = (() => {
+    const base = keyedRm();
+    const identity = { ...IDENTITY_FIELD, key: true, searchable: true };
+    return { ...base, fields: [identity, ...base.fields], keyFields: [identity] };
+  })();
+  const j = readModelJpaRepository(rm);
+  assert.doesNotMatch(j.content, /policyKey/);
+  const mem = readModelInMemoryRepository(rm);
+  assert.doesNotMatch(mem.content, /case "policyKey"/);
 });
 
 // --- header ownership wording --------------------------------------------------

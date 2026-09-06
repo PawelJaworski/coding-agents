@@ -96,6 +96,9 @@ const collaboratorScaffolds = (collaborators) =>
 // names the collaborator field and the arguments to pass it — the resolver
 // itself has no notion of what that collaborator is for.
 function resolveArg(field, { sourceFields, sourceExpr, delegate, fallback }) {
+  // The implicit identity attribute IS the aggregate id: every event carries it,
+  // so it can never come from a name match, a decider or a state fallback.
+  if (field.identity) return { expr: `${sourceExpr}.aggregateId()`, imports: field.imports };
   if (field.convention) return { expr: field.conventionExpr, imports: field.imports };
   if (field.bracketed) {
     return {
@@ -819,10 +822,9 @@ function keyRecordImports(rm) {
   const set = new Set(['jakarta.persistence.Embeddable']);
   let hasEmbeddedStyle = false;
   for (const f of rm.keyFields) {
-    if (f.embeds) {
-      hasEmbeddedStyle = true;
-      for (const i of f.imports) set.add(i);
-    }
+    // Scalar members need their type imports too (a UUID identity is not String).
+    for (const i of f.imports) set.add(i);
+    if (f.embeds) hasEmbeddedStyle = true;
   }
   if (hasEmbeddedStyle) {
     set.add('jakarta.persistence.AttributeOverride');
@@ -841,7 +843,9 @@ function keyRecordImports(rm) {
 // JSON, not embeddable, and is not searchable by an individual element.
 function searchableFields(rm) {
   const out = [];
-  for (const f of rm.fields.filter((field) => field.searchable)) {
+  // A :Key field is a component of the @EmbeddedId, not a root column, so it is
+  // not a valid search path (`root.get(...)` would fail at query time).
+  for (const f of rm.fields.filter((field) => field.searchable && !field.key)) {
     if (f.embeds) {
       const owner = `e.get${naming.cap(f.name)}()`;
       for (const a of f.attrs) {
@@ -1067,9 +1071,11 @@ ${args.map((a) => `                ${a}`).join(',\n')});
   });
 
   // For keyed read models, build the composite key from event fields for the
-  // state lookup in project(). Key fields must be passthrough from the event.
+  // state lookup in project(). Key fields must be passthrough from the event —
+  // except the identity, whose event-side value is the aggregate id itself.
+  const keyArgs = rm.keyFields.map((f) => (f.identity ? 'event.aggregateId()' : `event.${f.name}()`));
   const projectKey = keyed
-    ? `new ${rm.idClassName}(${rm.keyFields.map((f) => `event.${f.name}()`).join(', ')})`
+    ? `new ${rm.idClassName}(${keyArgs.join(', ')})`
     : 'event.aggregateId()';
   const projectIdType = keyed ? rm.idClassName : 'UUID';
 

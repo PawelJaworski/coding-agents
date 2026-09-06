@@ -102,6 +102,15 @@ Subscribes: <e1>, <e2>   (read models)
 Field types resolve from `<modelDir>/business-definitions-raw.md`: a concept with
 listed attributes becomes a value-object record; a concept without becomes `String`.
 
+### The identity attribute is implicit
+
+The `<aggregate>:Id|:Key` line is itself a read model attribute. Every read model
+record starts with a first component `<aggregate>Id` (`:Id` models) or
+`<aggregate>Key` (`:Key` models), type `UUID`, always equal to the event's
+`aggregateId` — so it can never drift from the header. Never write `* policy id`
+or `* policy key`: an explicit same-name line is absorbed (its `?`/`:Key` markers
+merged), and a `[bracketed]` duplicate is a model error.
+
 ## File ownership
 
 | header | ownership |
@@ -146,6 +155,7 @@ A read model must declare one or the other; the generator refuses to guess.
 | | `<aggregate>:Id` | `<aggregate>:Key` |
 |---|---|---|
 | strategy | on-demand | persisting |
+| identity attribute | `<aggregate>Id: UUID` | `<aggregate>Key: UUID` |
 | storage | none | `<Name>Entity` + `<Name>Repository` / `...JpaRepository` |
 | kept current by | replaying `findAllById` on each GET | `EventStream.append` pushing to `PersistingProjector.project` |
 | endpoint | `GET <id>/{aggregateId}` -> one row | `GET <id>` -> `List<...>` |

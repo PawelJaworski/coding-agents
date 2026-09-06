@@ -141,18 +141,21 @@ Re-run `mvn verify` whenever a route or parameter changed — it re-exports
 `api/openapi.json` from the running controllers. Report that it changed and leave it in
 the working tree; never commit it.
 
-## Known quirk: `?` lines in `readmodels.md` are inert
+## Search criteria fields in `readmodels.md`
 
-`readmodels.md` may carry lines like:
+Fields marked with `?` suffix are search criteria:
 
 ```
-? policy holder
+* policy holder?
 ```
 
-The parser matches `## <id>`, `Prop: value`, `<aggregate>:Id|Key` and `* field` only. A
-`?` line matches none of them and is skipped **silently** — no field, no warning, no
-`MODEL ERROR`. Confirm with `codegen --json`: it is absent from the parsed model.
+The parser recognizes `* field?` as a search criterion field. The `?` suffix indicates
+that this field should generate query parameters for filtering. The field name (without
+the `?`) becomes the search parameter name.
 
-Do not read such a line as an implemented or half-implemented feature, and do not treat
-it as authority to change the model. It is inert text. If a criterion must actually
-exist, it is an ad-hoc extension — implement it as described above.
+For example, `* policy holder?` generates a `policyHolder` query parameter on the
+read model's GET endpoint. The backend uses this to filter results, and the frontend
+generates a search input for it.
+
+**Important:** The `?` suffix is part of the field definition, not a separate line.
+The old convention of `? field` (separate line with `?` prefix) is no longer used.

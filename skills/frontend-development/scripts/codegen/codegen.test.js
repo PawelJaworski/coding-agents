@@ -512,7 +512,7 @@ Subscribes: policy-issued
 policy:Key
 * policy holder
 * policy number
-? policy holder
+* policy holder?
 `;
 
 const SEARCH_DEFINITIONS = `# name Policy Holder
@@ -563,8 +563,8 @@ const SEARCH_OPENAPI = {
   },
 };
 
-test('parseSections collects ? lines as searchFields', () => {
-  const [s] = parseSections('## x\n* field one\n? search one\n');
+test('parseSections collects * field? as searchFields', () => {
+  const [s] = parseSections('## x\n* field one\n* search one?\n');
   assert.deepEqual(s.fields.map((f) => f.name), ['fieldOne']);
   assert.deepEqual(s.searchFields.map((f) => f.name), ['searchOne']);
 });

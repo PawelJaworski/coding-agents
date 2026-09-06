@@ -165,6 +165,9 @@ ConsistsOf: order-summary, stock-levels
   ```
 
   Works the same way on commands and events, not just read models.
+- A trailing `?` on a field name marks it as a search criterion (e.g.
+  `* policy holder?`). The `?` is stripped for display in the diagram —
+  the card shows `policy holder`, not `policy holder?`.
 - Ignore anything else (descriptions, prose, `#` title lines).
 - **No orphan events**: the script throws if an event has no `Produces:` link.
 - **No inline command Actor**: the script throws if any command in
@@ -526,6 +529,32 @@ Geometry: `AGG_ID_H` (14px) is now added **once per identifying line**
 (the `:Id` line, if present, plus each `:Key` line) rather than a flat
 one-time bump — a read model with `:Id` + 2 `:Key` lines grows 3 × 14px
 taller than its base height.
+
+### Special vs. Normal Attributes
+
+The `attribute:Id` and `attribute:Key` syntax has **special meaning** (identifiers/keys)
+and is rendered as bold lines under the card title. You can also add these
+attributes as **normal field attributes** with different naming (e.g., `attributeId` or
+`attribute key`) — these will be rendered as regular bullet points.
+
+**Example:**
+```markdown
+## policy-details
+Name: Policy Details
+Subscribes: policy-issued
+policy:Id                    # Special identifier line (bold, under title)
+* policy id                  # Normal field attribute (bullet point) — transformation of policy:Id
+* policy holder
+* policy coverage
+```
+
+This distinction is important:
+- `policy:Id` → renders as a bold `{aggregateName}:Id` line under the card title
+- `* policy id` → renders as a regular bullet point in the field list (transformation of the special attribute)
+
+The same applies to `:Key`:
+- `customerId:Key` → renders as a bold `{keyName}:Key` line under the card title
+- `* customer id` → renders as a regular bullet point in the field list (transformation of the special attribute)
 
 ## Read-model GWT (Given-When-Then) files
 

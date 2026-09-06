@@ -20,6 +20,7 @@ const {
   isBracketedField,
   normalizeField,
   hasMatchingField,
+  isTransformationOfSpecialAttribute,
   parseGwtContent,
   discoverGwtFiles,
 } = require('./generate.js');
@@ -181,6 +182,26 @@ test('normalizeField strips brackets and lowercases', () => {
 test('hasMatchingField finds a case-insensitive match across upstream field lists', () => {
   assert.equal(hasMatchingField('Name', [['name', 'address']]), true);
   assert.equal(hasMatchingField('missing', [['name', 'address']]), false);
+});
+
+test('isTransformationOfSpecialAttribute detects camelCase to space-separated transformations', () => {
+  // Test :Id transformations
+  assert.equal(isTransformationOfSpecialAttribute('policy id', 'policy', null), true);
+  assert.equal(isTransformationOfSpecialAttribute('policy holder id', 'policyHolder', null), true);
+  assert.equal(isTransformationOfSpecialAttribute('POLICY HOLDER ID', 'policyHolder', null), true);
+  
+  // Test :Key transformations
+  assert.equal(isTransformationOfSpecialAttribute('customer key', null, ['customer']), true);
+  assert.equal(isTransformationOfSpecialAttribute('customer id key', null, ['customerId']), true);
+  assert.equal(isTransformationOfSpecialAttribute('CUSTOMER ID KEY', null, ['customerId']), true);
+  
+  // Test multiple keys
+  assert.equal(isTransformationOfSpecialAttribute('region key', null, ['customerId', 'region']), true);
+  
+  // Test non-transformations
+  assert.equal(isTransformationOfSpecialAttribute('policy name', 'policy', null), false);
+  assert.equal(isTransformationOfSpecialAttribute('customer id', null, ['customer']), false);
+  assert.equal(isTransformationOfSpecialAttribute('policy', 'policy', null), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -483,6 +504,58 @@ region:Key
 `,
   });
   assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('buildModel allows a read model with special :Id/:Key and normal field attributes with similar names', () => {
+  // This tests the distinction between special :Id/:Key syntax and normal field attributes.
+  // - policyHolder:Id renders as a bold identifier line under the title
+  // - * policy holder id renders as a normal bullet point in the field list
+  // Both can coexist in the same read model.
+  // The normal field is a transformation of the special attribute name.
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolder:Id
+region:Key
+* policy holder id
+* name
+* address
+`,
+  });
+  const model = buildModel(dir);
+  const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
+  // Special attributes are parsed separately
+  assert.equal(rm.aggregateId, 'policyHolder');
+  assert.deepEqual(rm.keys, ['region']);
+  // Normal field attributes are parsed as fields
+  assert.deepEqual(rm.fields, ['policy holder id', 'name', 'address']);
+});
+
+test('renderTable renders special :Id/:Key as bold lines and normal field attributes as bullet points', () => {
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolder:Id
+region:Key
+* policy holder id
+* name
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  
+  // Special :Id/:Key lines are rendered as bold .agg-id divs
+  assert.match(html, /<div class="agg-id">policyHolder:Id<\/div>/);
+  assert.match(html, /<div class="agg-id">region:Key<\/div>/);
+  
+  // Normal field attributes are rendered as bullet points
+  assert.match(html, /<li>policy holder id<\/li>/);
+  assert.match(html, /<li>name<\/li>/);
 });
 
 test('renderTable stacks {aggregateName}:Id then {keyName}:Key lines (in written order) as separate .agg-id divs, and grows card height 14px per line', () => {

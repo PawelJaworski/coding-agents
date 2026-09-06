@@ -12,6 +12,7 @@
 //   Subscribes: <e1>, <e2>     (readmodels.md)
 //   <aggregate>:Id | :Key      (readmodels.md) projection strategy
 //   * field name               payload attribute / read-model column
+//   * field name?              search criterion field (generates query parameters)
 //   * [field name]:uuid|now    system-decided attribute (never a form input)
 //
 // Field TYPES come from `business-definitions-raw.md`, exactly as the backend
@@ -39,12 +40,12 @@ export function parseSections(text) {
 
     const field = line.match(/^[*-]\s+([^:]*\[?[^\]]*\]?(?::\w+)?)$/);
     if (field && !/^[A-Za-z][\w -]*:\s/.test(field[1])) {
-      current.fields.push(parseField(field[1].trim()));
-      continue;
-    }
-    const searchField = line.match(/^\?\s+(.+)$/);
-    if (searchField) {
-      current.searchFields.push(parseField(searchField[1].trim()));
+      const fieldStr = field[1].trim();
+      if (fieldStr.endsWith('?')) {
+        current.searchFields.push(parseField(fieldStr.slice(0, -1).trim()));
+      } else {
+        current.fields.push(parseField(fieldStr));
+      }
       continue;
     }
     const aggregate = line.match(/^-?\s*([A-Za-z][\w -]*):(Id|Key)$/);

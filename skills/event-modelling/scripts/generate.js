@@ -225,9 +225,12 @@ function parseMdText(text) {
     }
     // A bare bullet ("* field" / "- field", no colon) is a field/parameter
     // shown on the card, e.g. the payload of a read model or event.
+    // A trailing "?" marks a search criterion — strip it for display.
     const field = line.match(/^\s*[*-]\s+(.+)/);
     if (field) {
-      (cur.fields || (cur.fields = [])).push(field[1].trim());
+      let fieldName = field[1].trim();
+      if (fieldName.endsWith('?')) fieldName = fieldName.slice(0, -1).trim();
+      (cur.fields || (cur.fields = [])).push(fieldName);
     }
   }
   return items;
@@ -257,6 +260,35 @@ function normalizeField(f) {
 function hasMatchingField(field, upstreamFieldsList) {
   const target = normalizeField(field);
   return upstreamFieldsList.some((fields) => (fields || []).some((f) => normalizeField(f) === target));
+}
+
+// Check if a field is a transformation of a special :Id/:Key attribute.
+// e.g., "policy id" is a transformation of "policy:Id"
+// e.g., "customer key" is a transformation of "customer:Key"
+// The transformation is: camelCase → space-separated + " id" or " key" suffix
+function isTransformationOfSpecialAttribute(field, aggregateId, keys) {
+  const normalizedField = normalizeField(field);
+  
+  // Helper to convert camelCase to space-separated
+  const camelToSpace = (s) => s.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  
+  // Check if it's a transformation of :Id
+  if (aggregateId) {
+    const spacedAggregateId = camelToSpace(aggregateId);
+    // "attribute id" matches "attribute:Id"
+    if (normalizedField === `${spacedAggregateId} id`) return true;
+  }
+  
+  // Check if it's a transformation of :Key
+  if (keys && keys.length) {
+    for (const key of keys) {
+      const spacedKey = camelToSpace(key);
+      // "attribute key" matches "attribute:Key"
+      if (normalizedField === `${spacedKey} key`) return true;
+    }
+  }
+  
+  return false;
 }
 
 function escapeHtml(s) {
@@ -522,18 +554,19 @@ function buildModel(inputDir) {
   });
 
   // Sanity: every non-bracketed read-model field must trace back to the same
-  // field on at least one of its subscribed events.
+  // field on at least one of its subscribed events, OR be a transformation of
+  // a special :Id/:Key attribute (e.g., "policy id" matches "policy:Id").
   readmodels.forEach((rm) => {
     const subEvents = (rm.subscribes || []).map((id) => events.find((e) => e.id === id)).filter(Boolean);
     (rm.fields || []).forEach((f) => {
       if (isBracketedField(f)) return;
-      if (!hasMatchingField(f, subEvents.map((e) => e.fields))) {
-        throw new Error(
-          `Consistency error: read model '${rm.id}' field "${f.trim()}" has no matching field in any subscribed event. ` +
-          `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.trim()}]". ` +
-          `Otherwise add the field to the source event's payload.`
-        );
-      }
+      if (hasMatchingField(f, subEvents.map((e) => e.fields))) return;
+      if (isTransformationOfSpecialAttribute(f, rm.aggregateId, rm.keys)) return;
+      throw new Error(
+        `Consistency error: read model '${rm.id}' field "${f.trim()}" has no matching field in any subscribed event. ` +
+        `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.trim()}]". ` +
+        `Otherwise add the field to the source event's payload.`
+      );
     });
   });
 
@@ -1118,5 +1151,6 @@ if (require.main === module) {
 module.exports = {
   buildModel, computeGeometry, renderTable, renderArrows, renderPage,
   parseMd, parseMdText, isBracketedField, normalizeField, hasMatchingField,
+  isTransformationOfSpecialAttribute,
   parseGwtContent, discoverGwtFiles,
 };

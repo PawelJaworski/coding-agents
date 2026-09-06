@@ -77,13 +77,16 @@ test('keyed read model drops the {aggregateId} path variable (it spans aggregate
 
 test('fields: plain, bracketed, bracketed with convention', () => {
   assert.deepEqual(parseField('policy holder'), {
-    label: 'policy holder', name: 'policyHolder', bracketed: false, convention: null,
+    label: 'policy holder', name: 'policyHolder', bracketed: false, convention: null, searchable: false,
+  });
+  assert.deepEqual(parseField('policy holder?'), {
+    label: 'policy holder', name: 'policyHolder', bracketed: false, convention: null, searchable: true,
   });
   assert.deepEqual(parseField('[policy number]'), {
-    label: 'policy number', name: 'policyNumber', bracketed: true, convention: null,
+    label: 'policy number', name: 'policyNumber', bracketed: true, convention: null, searchable: false,
   });
   assert.deepEqual(parseField('[created at]:now'), {
-    label: 'created at', name: 'createdAt', bracketed: true, convention: 'now',
+    label: 'created at', name: 'createdAt', bracketed: true, convention: 'now', searchable: false,
   });
 });
 
@@ -513,8 +516,9 @@ const vaRm = () => ({
         { name: 'name', javaType: 'String' },
         { name: 'surname', javaType: 'String' },
       ],
+      searchable: true,
     },
-    { name: 'policyNumber', label: 'policy number', javaType: 'String', imports: [] },
+    { name: 'policyNumber', label: 'policy number', javaType: 'String', imports: [], searchable: true },
     {
       name: 'coverage',
       label: 'coverage',

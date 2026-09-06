@@ -29,7 +29,7 @@ function parseSections(text) {
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('## ')) {
-      current = { id: line.slice(3).trim(), props: {}, fields: [], searchFields: [], aggregate: null, keyed: false };
+      current = { id: line.slice(3).trim(), props: {}, fields: [], aggregate: null, keyed: false };
       sections.push(current);
       continue;
     }
@@ -37,12 +37,7 @@ function parseSections(text) {
 
     const field = line.match(/^\*\s+(.+)$/);
     if (field) {
-      const fieldStr = field[1].trim();
-      if (fieldStr.endsWith('?')) {
-        current.searchFields.push(parseField(fieldStr.slice(0, -1).trim()));
-      } else {
-        current.fields.push(parseField(fieldStr));
-      }
+      current.fields.push(parseField(field[1].trim()));
       continue;
     }
     // `foo:Id` -> on-demand, `foo:Key` -> persisting. Both name the same aggregate;
@@ -61,6 +56,11 @@ function parseSections(text) {
 }
 
 function parseField(raw) {
+  let searchable = false;
+  if (raw.endsWith('?')) {
+    searchable = true;
+    raw = raw.slice(0, -1).trim();
+  }
   // [policy number]:uuid  |  [policy number]  |  policy holder  |  policy number:Key
   // A trailing `:Key` marks the field as part of a persisting read model's composite
   // (natural) id; it is mutually exclusive with a [bracket] and a :convention.
@@ -70,7 +70,7 @@ function parseField(raw) {
     if (base.bracketed || base.convention) {
       throw new Error(`":Key" goes on a plain field, not a [bracketed]/:convention one ("${raw}")`);
     }
-    return { ...base, key: true };
+    return { ...base, key: true, searchable: searchable || base.searchable };
   }
   const m = raw.match(/^(\[)?([^\]]+?)(\])?(?::(\w+))?$/);
   if (!m) throw new Error(`Cannot parse field: "${raw}"`);
@@ -83,7 +83,7 @@ function parseField(raw) {
   if (convention && !bracketed) {
     throw new Error(`Convention ":${convention}" is only valid on a [bracketed] field ("${label}")`);
   }
-  return { label, name: naming.field(label), bracketed, convention };
+  return { label, name: naming.field(label), bracketed, convention, searchable };
 }
 
 // ---- business definitions -------------------------------------------------

@@ -841,7 +841,7 @@ function keyRecordImports(rm) {
 // JSON, not embeddable, and is not searchable by an individual element.
 function searchableFields(rm) {
   const out = [];
-  for (const f of rm.fields) {
+  for (const f of rm.fields.filter((field) => field.searchable)) {
     if (f.embeds) {
       const owner = `e.get${naming.cap(f.name)}()`;
       for (const a of f.attrs) {

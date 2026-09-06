@@ -16,6 +16,16 @@ description: >
   * parameters: <docs> is passed from outside. You have to know it before starting.
 ---
 
+# One test method per rule or scenario — verbatim, never merged
+Write exactly one Spock test method per rule/scenario, named after its text
+character-for-character. Never fold two rules/scenarios into a single
+`@Unroll`/`where:`-parameterized method, even when they look like natural table-test
+siblings (e.g. "must have a holder name" / "must have a holder surname") — `codegen
+--next` matches a scenario/rule to "done" by an exact spec method name, not
+semantically, so a parameterized method whose literal name is something like `"...
+holder #field"` is never recognized as satisfying either rule and the item stays
+pending forever.
+
 # Context you need — and nothing more
 1. The single `<docs>/gwt-<read-model>.md` scenario — or the single business rule, quoted
    verbatim by the caller — you were asked to implement. Never go looking for, or writing,

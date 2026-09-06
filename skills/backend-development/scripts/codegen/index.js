@@ -29,7 +29,7 @@ import {
 } from './scaffold.js';
 import { mergeGenerated, semanticDrift } from './merge.js';
 import { computeAdvisory, isLogicFile } from './advisory.js';
-import { classifyFile, buildPatches, patchFileName } from './patch.js';
+import { classifyFile, buildPatches, patchFileName, stalePatchFiles } from './patch.js';
 import {
   getAllSteps,
   getGenerateSteps,
@@ -225,6 +225,15 @@ if (patchMode) {
   const patches = { ...buildPatches(entries), ...scannedPatches };
   const outDir = path.join(projectRoot, PATCH_DIR);
   fs.mkdirSync(outDir, { recursive: true });
+
+  // Prune patch files from a previous run whose category is not produced this
+  // run (e.g. `gwt` once its last pending item is resolved) — otherwise --next
+  // keeps reading a stale file straight off disk and reports already-fixed
+  // work as pending forever. See stalePatchFiles() for the full rationale.
+  const existingFiles = fs.readdirSync(outDir);
+  for (const stale of stalePatchFiles(existingFiles, Object.keys(patches))) {
+    fs.unlinkSync(path.join(outDir, stale));
+  }
 
   const summary = [];
   for (const [category, doc] of Object.entries(patches)) {

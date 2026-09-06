@@ -33,6 +33,29 @@ export function patchFileName(category) {
   return `${category}-patch.json`;
 }
 
+/**
+ * Names of `.codegen/patch/*-patch.json` files left over from a previous run
+ * that no longer correspond to a category produced this run.
+ *
+ * Why this exists: categories produced by a scanner plugin (e.g. `gwt`) only
+ * appear in `patches` when the scanner finds pending work. Once the last
+ * pending item in that category is resolved, the category is simply absent
+ * from this run's output — but its patch file from the previous run, still
+ * listing the now-resolved items, is never overwritten. `--next` reads patch
+ * files straight from disk, so a stale file makes already-fixed work look
+ * pending forever. The fixed CATEGORIES are written unconditionally every run
+ * (even with zero entries) so they self-clean; only scanner-only categories
+ * need this explicit prune.
+ *
+ * @param {string[]} existingFileNames - basenames currently in the patch dir
+ * @param {string[]} currentCategories - categories present in this run's patches
+ * @returns {string[]} basenames to delete
+ */
+export function stalePatchFiles(existingFileNames, currentCategories) {
+  const keep = new Set(currentCategories.map(patchFileName));
+  return existingFileNames.filter((f) => f.endsWith('-patch.json') && !keep.has(f));
+}
+
 /** Member keys present in `generated` but absent from `current`. */
 function missingMemberKeys(current, generated) {
   const cur = splitFile(current);

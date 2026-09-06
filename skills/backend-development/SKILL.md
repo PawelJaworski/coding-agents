@@ -27,6 +27,19 @@ One small prompt per call. Execute it, call again, until `state: "DONE"`.
 The prompt is complete on its own — hand it to a subagent with a fresh context.
 **Do not read ahead in this file to "understand the flow". The prompt is the flow.**
 
+A `gwt-scenario` or `business-rule` prompt is one unit of work for `backend-implement`.
+Dispatch it to that skill as its own subagent invocation (e.g. via the Task tool) —
+do not implement it inline in the orchestrating session. `backend-implement` owns the
+conventions (verbatim spec naming, ability-DSL-only tests, decider-state resets) that
+are easy to get subtly wrong from a fresh reading of just this facade.
+
+If `--next` ever disagrees with what you already verified — e.g. it re-reports a
+scenario/rule whose test you just wrote and watched go green — read
+`scripts/codegen/README.md` and the relevant script in full before reaching for ad-hoc
+debugging. Most surprises here are documented design decisions (patch files are a diff,
+not live state) rather than bugs, and re-deriving that from scratch by trial and error
+wastes far more context than reading the ~200-line module once.
+
 The plugin system (`scripts/codegen/plugins/`) defines all constructs:
 DomainPlugin, EventPlugin, CommandPlugin, GWTPlugin. Steps are data, not code.
 Adding a new construct = adding a new plugin file.
@@ -55,6 +68,12 @@ When the model cannot express something — a rule with no command, a GWT needin
 that does not exist, a `MODEL ERROR` — skip that fragment and record it in
 `development-report.md`. A blocked fragment is a normal outcome of a run. An unreported
 one is not.
+
+Treat `development-report.md` as the last thing touched in a run, not a one-time write
+made early and left behind. New work discovered or completed after it was first written
+(another business rule, another scenario) makes its "Additional — Not Implemented"
+section stale. Update it immediately before the final `--next` check so it reflects the
+true end state, not a snapshot from partway through the run.
 
 ## Ad-hoc extensions
 A search criterion, a repository query, an endpoint filter or sort over fields a read

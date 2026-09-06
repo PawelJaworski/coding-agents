@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyFile, buildPatches, buildGwtPatch, CATEGORIES } from './patch.js';
+import { classifyFile, buildPatches, buildGwtPatch, CATEGORIES, stalePatchFiles } from './patch.js';
 
 // A minimal, well-formed generated file. The classifier parses Java structurally,
 // so these have to be real enough to split into members.
@@ -147,4 +147,26 @@ test('an underivable spec path is reported, never guessed', () => {
   ]);
   assert.equal(doc.entries[0].spec, null);
   assert.match(doc.entries[0].hints.join(' '), /report it, do not guess/);
+});
+
+test('a scanner-only category with zero pending items this run is pruned, not left stale', () => {
+  // "gwt" only appears in the run's categories when the scanner still finds
+  // pending work. Once the last item is resolved, the previous run's
+  // gwt-patch.json — still naming already-fixed rules/scenarios — must go,
+  // or --next keeps reading it and reports resolved work as pending forever.
+  const existing = ['domain-patch.json', 'gwt-patch.json', 'testdata-patch.json'];
+  const currentCategories = ['domain', 'commands', 'events', 'readmodels', 'testdata'];
+  assert.deepEqual(stalePatchFiles(existing, currentCategories), ['gwt-patch.json']);
+});
+
+test('a category still present this run keeps its file', () => {
+  const existing = ['gwt-patch.json'];
+  const currentCategories = ['domain', 'gwt'];
+  assert.deepEqual(stalePatchFiles(existing, currentCategories), []);
+});
+
+test('non-patch files in the patch dir are never touched', () => {
+  const existing = ['gwt-patch.json', '.gitkeep', 'README.md'];
+  const currentCategories = [];
+  assert.deepEqual(stalePatchFiles(existing, currentCategories), ['gwt-patch.json']);
 });

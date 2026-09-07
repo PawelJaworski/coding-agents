@@ -788,7 +788,9 @@ function readModelKey(rm) {
     .map((f) =>
       f.embeds
         ? keyRecordComponent(f)
-        : `    ${f.javaType} ${f.name}`,
+        : f.derivedFrom
+          ? derivedKeyRecordComponent(f)
+          : `    ${f.javaType} ${f.name}`,
     )
     .join(',\n');
   return {
@@ -816,20 +818,35 @@ function keyRecordComponent(f) {
         `column = @Column(name = "${prefix}_${naming.snake(a.name)}"))`,
     )
     .join(',\n');
+  // A record component cannot carry an access modifier (`private` is illegal here) —
+  // only the field-declaration form used for plain scalar components allows one.
   return `    @Embedded
     @AttributeOverrides({
 ${overrides}
     })
-    private ${f.javaType} ${f.name}`;
+    ${f.javaType} ${f.name}`;
+}
+
+// A key attribute DERIVED from one specific attribute of a value-object field
+// (e.g. "policyHolderName" reading only `.name()` off a "policy holder" field)
+// needs an explicit, disambiguated column name: the source field may ALSO be
+// kept, undecomposed, as its own plain (non-key) column elsewhere on the same
+// entity (to still display the whole value object) — and that column already
+// claims the "natural" name (e.g. "policy_holder_name" via that field's own
+// @AttributeOverride). A bare column name here would collide with it.
+function derivedKeyRecordComponent(f) {
+  return `    @Column(name = "${naming.snake(f.name)}_key")\n    ${f.javaType} ${f.name}`;
 }
 
 function keyRecordImports(rm) {
   const set = new Set(['jakarta.persistence.Embeddable']);
   let hasEmbeddedStyle = false;
+  let hasDerived = false;
   for (const f of rm.keyFields) {
     // Scalar members need their type imports too (a UUID identity is not String).
     for (const i of f.imports) set.add(i);
     if (f.embeds) hasEmbeddedStyle = true;
+    if (f.derivedFrom) hasDerived = true;
   }
   if (hasEmbeddedStyle) {
     set.add('jakarta.persistence.AttributeOverride');
@@ -837,6 +854,7 @@ function keyRecordImports(rm) {
     set.add('jakarta.persistence.Column');
     set.add('jakarta.persistence.Embedded');
   }
+  if (hasDerived) set.add('jakarta.persistence.Column');
   return [...set];
 }
 
@@ -935,15 +953,14 @@ public interface ${rm.jpaRepositoryClassName}
 
     @Override
     default List<${rm.entityClassName}> findAllBySearch(Map<String, String> search) {
-        Specification<${rm.entityClassName}> spec = (root, query, cb) -> {
+${searchables.length ? `        Specification<${rm.entityClassName}> spec = (root, query, cb) -> {
             var predicates = new ArrayList<Predicate>();
 ${specSearch}
             return cb.and(predicates.toArray(new Predicate[0]));
         };
-        return findAll(spec);
+        return findAll(spec);` : '        return findAll();'}
     }
-}
-`,
+}`,
   };
 }
 
@@ -977,7 +994,11 @@ ${cases}
             return true;
         }).toList();
     }`
-    : '';
+    : `
+    @Override
+    public List<${rm.entityClassName}> findAllBySearch(Map<String, String> search) {
+        return findAll();
+    }`;
   return {
     test: true,
     package: rm.package,
@@ -1062,8 +1083,13 @@ function persistingProjector(rm, eventsById, base) {
     extraImports.push(`${e.package}.${e.className}`);
 
     // For keyed read models, build the composite key from projected key fields.
+    // A derived field (one attribute carved out of a value-object field, e.g.
+    // "policyHolderName") has no accessor of its own on the projected record —
+    // it was never added as one of its components — so it reads through the
+    // owning field instead: `projected.policyHolder().name()`.
+    const projectedKeyArg = (f) => (f.derivedFrom ? `projected.${f.derivedFrom.field}().${f.derivedFrom.attr}()` : `projected.${f.name}()`);
     const entitySave = keyed
-      ? `repository.save(new ${rm.entityClassName}(new ${rm.idClassName}(${rm.keyFields.map((f) => `projected.${f.name}()`).join(', ')}), ${rm.fields.filter((f) => !keyNames.has(f.name)).map((f) => `projected.${f.name}()`).join(', ')}));`
+      ? `repository.save(new ${rm.entityClassName}(new ${rm.idClassName}(${rm.keyFields.map(projectedKeyArg).join(', ')}), ${rm.fields.filter((f) => !keyNames.has(f.name)).map((f) => `projected.${f.name}()`).join(', ')}));`
       : `repository.save(new ${rm.entityClassName}(event.aggregateId(), ${rm.fields.map((f) => `projected.${f.name}()`).join(', ')}));`;
 
     return `    @Override
@@ -1078,10 +1104,35 @@ ${args.map((a) => `                ${a}`).join(',\n')});
   // For keyed read models, build the composite key from event fields for the
   // state lookup in project(). Key fields must be passthrough from the event —
   // except the identity, whose event-side value is the aggregate id itself.
-  const keyArgs = rm.keyFields.map((f) => (f.identity ? 'event.aggregateId()' : `event.${f.name}()`));
-  const projectKey = keyed
-    ? `new ${rm.idClassName}(${keyArgs.join(', ')})`
-    : 'event.aggregateId()';
+  //
+  // project(DomainEvent event) receives the GENERIC interface: only members of
+  // DomainEvent itself (aggregateId()) are callable on `event` there — dispatch
+  // to the concrete event class happens one level deeper, inside hydrate(). So
+  // a non-identity key field (e.g. a whole value-object field marked `:Key`)
+  // needs its own cast, keyed off the same eventType() switch StateProjector
+  // already uses to dispatch apply(). An identity-only key needs no cast at
+  // all and keeps the simple, aggregateId-only form.
+  const hasNonIdentityKeyField = rm.keyFields.some((f) => !f.identity);
+  const keyArgsFor = (eventClassName) =>
+    rm.keyFields.map((f) => {
+      if (f.identity) return 'event.aggregateId()';
+      const cast = `((${eventClassName}) event)`;
+      // A derived field reads through the value-object field it was carved out
+      // of — the event has no accessor of its own named after the derived path.
+      return f.derivedFrom ? `${cast}.${f.derivedFrom.field}().${f.derivedFrom.attr}()` : `${cast}.${f.name}()`;
+    });
+  const projectKey = !keyed
+    ? 'event.aggregateId()'
+    : !hasNonIdentityKeyField
+      ? `new ${rm.idClassName}(${keyArgsFor().join(', ')})`
+      : `switch (event.eventType()) {\n` +
+        rm.subscribes
+          .map((eid) => {
+            const e = eventsById.get(eid);
+            return `            case ${e.typeEnum} -> new ${rm.idClassName}(${keyArgsFor(e.className).join(', ')});`;
+          })
+          .join('\n') +
+        `\n            default -> null;\n        }`;
   const projectIdType = keyed ? rm.idClassName : 'UUID';
 
   const collaborators = delegated ? [repository, decider] : [repository];

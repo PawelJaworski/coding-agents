@@ -34,7 +34,7 @@ function parseSections(text) {
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('## ')) {
-      current = { id: line.slice(3).trim(), props: {}, fields: [], aggregate: null, keyed: false };
+      current = { id: line.slice(3).trim(), props: {}, fields: [], headerLines: [], aggregate: null, keyed: false };
       sections.push(current);
       continue;
     }
@@ -48,8 +48,21 @@ function parseSections(text) {
     // `foo:Id` -> on-demand, `foo:Key` -> persisting. Both name the same aggregate;
     // only the projection strategy differs, so both must be caught before the generic
     // `Prop: value` rule below (otherwise `policy:Key` silently becomes a property).
+    //
+    // More than one such line is allowed on a READ MODEL only: when a single line's
+    // name does not match the subscribed event's aggregate, every line is instead a
+    // NAMED KEY ATTRIBUTE — a dotted/camelCase path into one of the read model's own
+    // value-object fields (e.g. `policyHolderName:Key` -> the `name` attribute of a
+    // `* policy holder` field), letting a composite key pick individual attributes
+    // instead of an entire nested value object. Resolved in resolveReadModelKeys()
+    // once fields are decorated, because that resolution needs to know the read
+    // model's own fields and its subscribed events' aggregate — neither known here.
+    // `current.aggregate`/`.keyed` keep the LAST line for any code path that only
+    // ever expects the classic single-line form (events); read models re-resolve
+    // both from `headerLines` instead of trusting these two.
     const aggregate = line.match(/^([A-Za-z][\w -]*):(Id|Key)$/);
     if (aggregate) {
+      current.headerLines.push({ name: aggregate[1].trim(), mode: aggregate[2] });
       current.aggregate = aggregate[1].trim();
       current.keyed = aggregate[2] === 'Key';
       continue;
@@ -89,6 +102,68 @@ function parseField(raw) {
     throw new Error(`Convention ":${convention}" is only valid on a [bracketed] field ("${label}")`);
   }
   return { label, name: naming.field(label), bracketed, convention, searchable };
+}
+
+// -- named key attributes: a composite key over CHOSEN nested attributes -----
+//
+// The classic `<aggregate>:Key` header line always keys a persisting read model by
+// the whole aggregate id. A read model whose natural key is one or more SPECIFIC
+// attributes of an already-declared value-object field (e.g. only a policy
+// holder's name, not their surname) instead uses one `<path>:Key` header line per
+// chosen attribute, e.g.:
+//
+//   ## insured-policies
+//   Subscribes: policy-issued
+//   policyHolderName:Key
+//   * policy holder
+//   * [no of policies]
+//
+// Recognized by exclusion: a single header line whose name matches the
+// subscribed event's aggregate is the classic form (parseModel decides that,
+// since it alone knows the aggregate); anything else is a named key attribute
+// and must resolve to a field already declared on the SAME read model.
+
+/** "policyHolderName" -> ["policy","holder","name"]. A real camelCase splitter —
+ * distinct from naming.words(), which only splits on whitespace/hyphen/underscore
+ * and would return the whole camelCase token as a single unsplit word. */
+function camelWords(name) {
+  return String(name)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Resolve one named key attribute (e.g. "policyHolderName") to the value-object
+ * field and attribute it must be reading from a field's own value object.
+ *
+ * Deliberately narrow and non-guessing (see README "The generator refuses to
+ * guess"): the name's leading words must exactly match an existing field's own
+ * label, and the exact remainder must exactly match exactly one of that
+ * field's value-object attributes. Zero or multiple matches both return null
+ * — the caller turns that into a MODEL ERROR naming the read model and the
+ * unresolved path, rather than silently picking one or inventing a field.
+ *
+ * @param {string} name - the header line's name, e.g. "policyHolderName"
+ * @param {object[]} fields - the read model's OWN decorated fields
+ * @returns {{field: object, attr: object}|null}
+ */
+export function resolveKeyAttributePath(name, fields) {
+  const nameWords = camelWords(name);
+  const hits = [];
+  for (const field of fields) {
+    if (!field.valueObject) continue;
+    const fieldWords = camelWords(field.name);
+    if (fieldWords.length >= nameWords.length) continue;
+    const isPrefix = fieldWords.every((w, i) => w === nameWords[i]);
+    if (!isPrefix) continue;
+    const remainder = nameWords.slice(fieldWords.length).join('');
+    const attr = (field.attrs || []).find((a) => a.name.toLowerCase() === remainder);
+    if (attr) hits.push({ field, attr });
+  }
+  return hits.length === 1 ? hits[0] : null;
 }
 
 // The `<aggregate>:Id|:Key` header line is itself a read model attribute: the
@@ -229,6 +304,13 @@ export function parseModel({ modelDir, basePackage }) {
 
   const events = parseSections(read('events.md')).map((s) => {
     if (!s.aggregate) throw new Error(`Event "${s.id}" has no <aggregate>:Id line`);
+    if (s.headerLines.length > 1) {
+      throw new Error(
+        `Event "${s.id}" has more than one <aggregate>:Id line — an event always names ` +
+          `exactly one aggregate; named key attributes (multiple "<path>:Key" lines) are a ` +
+          `read-model-only concept.`,
+      );
+    }
     if (s.keyed) {
       throw new Error(
         `Event "${s.id}" uses <aggregate>:Key. ":Key" selects a persisting projection ` +
@@ -265,16 +347,69 @@ export function parseModel({ modelDir, basePackage }) {
     for (const id of subscribes) {
       if (!eventById.has(id)) throw new Error(`Read model "${s.id}" subscribes unknown event "${id}"`);
     }
-    if (!s.aggregate) {
+    if (s.headerLines.length === 0) {
       throw new Error(
         `Read model "${s.id}" has no <aggregate>:Id or <aggregate>:Key line. ` +
           `Use ":Id" for an on-demand projection (replayed per request) or ":Key" for a ` +
           `persisting one (JPA entity kept up to date on append, listable across aggregates).`,
       );
     }
-    const decorated = injectIdentity(s, decorate(s.fields));
-    const keyFields = decorated.filter((f) => f.key);
-    if (keyFields.length && !s.keyed) {
+
+    const decoratedFields = decorate(s.fields);
+    const subscribedAggregates = new Set(subscribes.map((id) => eventById.get(id).aggregate));
+    // Exactly one header line naming the subscribed aggregate is the classic form;
+    // anything else — a second line, or a name that is not the aggregate — is a
+    // named-key-attribute read model instead (see resolveKeyAttributePath above).
+    const isClassic = s.headerLines.length === 1 && subscribedAggregates.has(s.headerLines[0].name);
+
+    let aggregate, keyed, fields, headerKeyFields;
+    if (isClassic) {
+      aggregate = s.headerLines[0].name;
+      keyed = s.headerLines[0].mode === 'Key';
+      fields = injectIdentity(s, decoratedFields);
+      headerKeyFields = [];
+    } else {
+      aggregate = null;
+      keyed = true; // a composite natural key always needs a table to be looked up by
+      fields = decoratedFields; // no implicit identity component in this mode
+      headerKeyFields = s.headerLines.map(({ name, mode }) => {
+        if (mode !== 'Key') {
+          throw new Error(
+            `Read model "${s.id}" names key attribute "${name}:${mode}" — a named key ` +
+              `attribute (anything other than the single "<aggregate>:Id|Key" line naming ` +
+              `the subscribed aggregate "${[...subscribedAggregates].join('/')}") must use ` +
+              `":Key". ":Id" only selects the classic single-aggregate on-demand form.`,
+          );
+        }
+        const resolved = resolveKeyAttributePath(name, decoratedFields);
+        if (!resolved) {
+          throw new Error(
+            `Read model "${s.id}" names key attribute "${name}:Key" but no declared field's ` +
+              `value-object attribute matches that path. It must decompose into an already-` +
+              `declared field ("* <value-object field>") followed by exactly one of that ` +
+              `value object's own attributes — e.g. "policyHolderName" needs a field ` +
+              `"* policy holder" whose value object has an attribute "name". Add the missing ` +
+              `field or fix the name; the generator does not guess.`,
+          );
+        }
+        return {
+          // The header line's name IS the camelCase field name already (unlike a
+          // "* label" field, whose label still needs naming.field()'s space/hyphen
+          // splitting) — running it through naming.field() here would flatten the
+          // camelCase boundaries it already has (naming.field only splits on
+          // whitespace/hyphen/underscore) into a single lowercased word.
+          name: name[0].toLowerCase() + name.slice(1),
+          label: name,
+          key: true,
+          javaType: resolved.attr.javaType,
+          imports: [],
+          derivedFrom: { field: resolved.field.name, attr: resolved.attr.name },
+        };
+      });
+    }
+
+    const keyFields = [...headerKeyFields, ...fields.filter((f) => f.key)];
+    if (keyFields.length && !keyed) {
       throw new Error(
         `Read model "${s.id}" marks field(s) with ":Key" but is not a persisting ` +
           `("<aggregate>:Key") projection. ":Key" fields are only meaningful on a ` +
@@ -284,13 +419,13 @@ export function parseModel({ modelDir, basePackage }) {
     return {
       id: s.id,
       name: s.props.name || s.id,
-      aggregate: s.aggregate,
-      onDemand: !s.keyed,
-      keyed: s.keyed,
+      aggregate,
+      onDemand: !keyed,
+      keyed,
       subscribes,
-      fields: decorated,
+      fields,
       keyFields,
-      ...naming.readModel(basePackage, s.id, { keyed: s.keyed }),
+      ...naming.readModel(basePackage, s.id, { keyed }),
     };
   });
 

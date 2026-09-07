@@ -6,7 +6,7 @@ description: >
   1. for backend code generation uses skill backend-development
 
   # Boundaries
-  Must not edit event-modelling docs (`<eventModel>/commands.md`/`<eventModel>/events.md`/`<eventModel>/readmodels.md`/`<eventModel>/uis.md`),
+  NEVER edit event-modelling docs (`<eventModel>/commands.md`/`<eventModel>/events.md`/`<eventModel>/readmodels.md`/`<eventModel>/uis.md`),
   the generated `<eventModel>/eventmodel.html`, or the diagram generator script — those are owned
   exclusively by the architect agent. Escalate instead of editing them.
 

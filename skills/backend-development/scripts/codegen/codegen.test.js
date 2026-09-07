@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import naming from './naming.js';
-import { parseSections, parseField, parseDefinitions, injectIdentity } from './parse.js';
+import { parseSections, parseField, parseDefinitions, injectIdentity, resolveKeyAttributePath } from './parse.js';
 import {
   parseScaffoldVersion,
   stampScaffoldVersion,
@@ -164,6 +164,53 @@ test('an explicit :Key marker on the identity line makes it the composite key', 
 test('a [bracketed] identity duplicate is a model error', () => {
   const [s] = parseSections('## policy-details\npolicy:Id\n* [policy id]\n');
   assert.throws(() => injectIdentity(s, s.fields), /identity attribute/);
+});
+
+// --- named key attributes: a composite key over CHOSEN nested attributes -------
+// `policyHolderName:Key` picks only the "name" attribute of a "policy holder"
+// value-object field for the key — not the whole object (contrast with
+// `* policy holder:Key`, tested elsewhere, which keys on all of its attributes).
+
+const policyHolderField = () => ({
+  name: 'policyHolder',
+  label: 'policy holder',
+  javaType: 'PolicyHolder',
+  valueObject: { className: 'PolicyHolder', package: 'a.b.domain' },
+  embeds: true,
+  attrs: [
+    { name: 'name', javaType: 'String' },
+    { name: 'surname', javaType: 'String' },
+  ],
+});
+
+test('resolveKeyAttributePath resolves a camelCase path to one field\'s one attribute', () => {
+  const r = resolveKeyAttributePath('policyHolderName', [policyHolderField()]);
+  assert.equal(r.field.name, 'policyHolder');
+  assert.equal(r.attr.name, 'name');
+});
+
+test('resolveKeyAttributePath picks just the named attribute, not its sibling', () => {
+  const r = resolveKeyAttributePath('policyHolderSurname', [policyHolderField()]);
+  assert.equal(r.attr.name, 'surname');
+});
+
+test('resolveKeyAttributePath returns null — never guesses — when nothing matches', () => {
+  assert.equal(resolveKeyAttributePath('policyHolderAddress', [policyHolderField()]), null);
+});
+
+test('resolveKeyAttributePath returns null for a field with no value object', () => {
+  const scalar = { name: 'policyNumber', label: 'policy number', javaType: 'String' };
+  assert.equal(resolveKeyAttributePath('policyNumberSomething', [scalar]), null);
+});
+
+test('parseSections collects every header line instead of the last one silently winning', () => {
+  const [s] = parseSections(
+    '## insured-policies\nSubscribes: policy-issued\npolicyHolderName:Key\npolicyHolderSurname:Key\n* policy holder\n* [no of policies]\n',
+  );
+  assert.deepEqual(s.headerLines, [
+    { name: 'policyHolderName', mode: 'Key' },
+    { name: 'policyHolderSurname', mode: 'Key' },
+  ]);
 });
 
 test('definitions with attributes become value objects, without stay scalar', () => {
@@ -719,6 +766,7 @@ test('persistingProjector saves entity with composite key when keyFields present
       name: 'Policy Issued',
       package: 'pl.pjaworski.insurance_company.domain.events',
       className: 'PolicyIssuedEvent',
+      typeEnum: 'POLICY_ISSUED',
       fields: [
         { name: 'policyHolder', javaType: 'PolicyHolder' },
         { name: 'policyNumber', javaType: 'String' },
@@ -727,9 +775,15 @@ test('persistingProjector saves entity with composite key when keyFields present
   ]);
   const p = persistingProjector(keyedRm(), eventsById, BASE);
   assert.match(p.content, /repository\.save\(new PolicyListEntity\(new PolicyListKey\(projected\.policyNumber\(\)\), projected\.policyHolder\(\)\)\);/);
-  assert.match(p.content, /repository\.findById\(new PolicyListKey\(event\.policyNumber\(\)\)\)/);
+  // A non-identity key field has no accessor on the generic DomainEvent project()
+  // receives — dispatch to the concrete event class happens one level deeper, in
+  // hydrate(). So the lookup key must be built from a cast, per subscribed event
+  // type, not a direct `event.policyNumber()` call (which would not compile).
+  assert.match(p.content, /case POLICY_ISSUED -> new PolicyListKey\(\(\(PolicyIssuedEvent\) event\)\.policyNumber\(\)\);/);
+  assert.doesNotMatch(p.content, /findById\(new PolicyListKey\(event\.policyNumber\(\)\)\)/);
   assert.doesNotMatch(p.content, /event\.aggregateId\(\)/);
 });
+
 
 test('repositories use PolicyListKey as ID type when keyFields present', () => {
   const repo = readModelRepository(keyedRm());
@@ -741,6 +795,110 @@ test('repositories use PolicyListKey as ID type when keyFields present', () => {
   const mem = readModelInMemoryRepository(keyedRm());
   assert.match(mem.content, /Map<PolicyListKey, PolicyListEntity> entities/);
   assert.match(mem.content, /entities\.put\(entity\.getId\(\), entity\);/);
+});
+
+// `:Key` on a whole value-object field (e.g. `* policy holder:Key`) makes every one
+// of its attributes part of the composite key — not just the aggregate id. Distinct
+// from the scalar-field case above: the embedded key component holds `f.attrs`, not
+// a single scalar, and the record component must carry NO access modifier (a Java
+// record component with `private` is a compile error caught by nothing but `javac`,
+// which is exactly how this bug first shipped).
+const embeddedKeyedRm = () => ({
+  id: 'insured-policies',
+  className: 'InsuredPolicies',
+  package: VA_ENT,
+  getterMethod: 'getInsuredPolicies',
+  getMapping: 'insured-policies',
+  dslMethod: 'expect_insured_policies',
+  entityClassName: 'InsuredPoliciesEntity',
+  idClassName: 'InsuredPoliciesKey',
+  projectorClassName: 'InsuredPoliciesProjector',
+  abilityClassName: 'InsuredPoliciesProjectorAbility',
+  repositoryClassName: 'InsuredPoliciesRepository',
+  jpaRepositoryClassName: 'InsuredPoliciesJpaRepository',
+  inMemoryRepositoryClassName: 'InsuredPoliciesInMemoryRepository',
+  repositoryConstant: 'INSURED_POLICIES_REPOSITORY',
+  tableName: 'insured_policies',
+  subscribes: ['policy-issued'],
+  fields: [
+    {
+      name: 'policyKey',
+      label: 'policy key',
+      identity: true,
+      javaType: 'UUID',
+      imports: ['java.util.UUID'],
+    },
+    {
+      name: 'policyHolder',
+      label: 'policy holder',
+      javaType: 'PolicyHolder',
+      imports: ['pl.pjaworski.insurance_company.domain.PolicyHolder'],
+      valueObject: { className: 'PolicyHolder', package: 'pl.pjaworski.insurance_company.domain' },
+      embeds: true,
+      key: true,
+      attrs: [
+        { name: 'name', javaType: 'String' },
+        { name: 'surname', javaType: 'String' },
+      ],
+    },
+    { name: 'noOfPolicies', label: 'no of policies', javaType: 'String', imports: [], bracketed: true },
+  ],
+  keyFields: [
+    {
+      name: 'policyHolder',
+      label: 'policy holder',
+      javaType: 'PolicyHolder',
+      imports: ['pl.pjaworski.insurance_company.domain.PolicyHolder'],
+      valueObject: { className: 'PolicyHolder', package: 'pl.pjaworski.insurance_company.domain' },
+      embeds: true,
+      key: true,
+      attrs: [
+        { name: 'name', javaType: 'String' },
+        { name: 'surname', javaType: 'String' },
+      ],
+    },
+  ],
+});
+
+test('readModelKey embeds a whole value-object key field with no modifier on the record component', () => {
+  const keyClass = readModelKey(embeddedKeyedRm());
+  assert.equal(keyClass.className, 'InsuredPoliciesKey');
+  // A record component must be bare — `private` here is a compile error (javac:
+  // "record components cannot have modifiers").
+  assert.doesNotMatch(keyClass.content, /private PolicyHolder policyHolder/);
+  assert.match(keyClass.content, /@Embeddable\s+public record InsuredPoliciesKey\(\s+@Embedded/);
+  assert.match(keyClass.content, /PolicyHolder policyHolder\)/);
+  assert.match(keyClass.content, /@AttributeOverride\(name = "name", column = @Column\(name = "policy_holder_name"\)\)/);
+  assert.match(keyClass.content, /@AttributeOverride\(name = "surname", column = @Column\(name = "policy_holder_surname"\)\)/);
+});
+
+test('readModelEntity keeps a non-key identity field as a plain column alongside an embedded-object @EmbeddedId', () => {
+  const ent = readModelEntity(embeddedKeyedRm());
+  assert.match(ent.content, /@EmbeddedId\s+private InsuredPoliciesKey id;/);
+  assert.match(ent.content, /private UUID policyKey;/);
+  assert.doesNotMatch(ent.content, /private PolicyHolder policyHolder;/); // lives in the id, not as its own column
+  assert.match(ent.content, /return new InsuredPolicies\(policyKey, id\.policyHolder\(\), noOfPolicies\);/);
+});
+
+test('persistingProjector looks state up by the embedded value-object key, not the aggregate id — so two events for the same holder merge into one row', () => {
+  const eventsById = new Map([
+    ['policy-issued', {
+      id: 'policy-issued',
+      name: 'Policy Issued',
+      package: 'pl.pjaworski.insurance_company.domain.events',
+      className: 'PolicyIssuedEvent',
+      typeEnum: 'POLICY_ISSUED',
+      fields: [{ name: 'policyHolder', javaType: 'PolicyHolder' }],
+    }],
+  ]);
+  const p = persistingProjector(embeddedKeyedRm(), eventsById, BASE);
+  // project(DomainEvent event) only has DomainEvent's own members (aggregateId())
+  // available on `event` — the concrete PolicyIssuedEvent cast is required before
+  // `.policyHolder()` can be called, and it is looked up per subscribed event type.
+  assert.match(p.content, /case POLICY_ISSUED -> new InsuredPoliciesKey\(\(\(PolicyIssuedEvent\) event\)\.policyHolder\(\)\);/);
+  assert.doesNotMatch(p.content, /findById\(new InsuredPoliciesKey\(event\.policyHolder\(\)\)\)/);
+  assert.match(p.content, /repository\.save\(new InsuredPoliciesEntity\(new InsuredPoliciesKey\(projected\.policyHolder\(\)\), projected\.policyKey\(\), projected\.noOfPolicies\(\)\)\);/);
+  assert.doesNotMatch(p.content, /repository\.findById\(event\.aggregateId\(\)\)/);
 });
 
 // --- implicit identity attribute: sourced from event.aggregateId() --------------
@@ -855,4 +1013,153 @@ test('a `once` file keeps its header — scaffold-version is state the patch can
   const decider = commandDecider(c, e);
   assert.match(decider.content, /^\/\/ SCAFFOLDED ONCE/);
   assert.match(decider.content, /scaffold-version: \d+/);
+});
+
+// --- parseModel end-to-end: named key attributes over a real model directory ---
+// Exercises the full pipeline (parseSections -> decorate -> resolveKeyAttributePath)
+// against real files, including the defensive guard: an unresolvable named key
+// attribute must be reported as a MODEL ERROR (a thrown, descriptive Error), never
+// silently accepted, silently dropped, or guessed at.
+
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { parseModel } from './parse.js';
+
+function withModelDir(files, run) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'codegen-model-'));
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      writeFileSync(path.join(dir, name), content);
+    }
+    return run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const NAMED_KEY_MODEL_FILES = {
+  'business-definitions-raw.md': `# name Policy Holder
+* Name
+* Surname
+`,
+  'events.md': `## policy-issued
+Name: Policy Issued
+policy:Id
+* policy holder
+`,
+  'commands.md': `## issue-policy
+Name: Issue Policy
+Produces: policy-issued
+* policy holder
+`,
+};
+
+test('parseModel resolves a named key attribute to one field\'s one attribute — composite key over a CHOSEN attribute, not the whole value object', () => {
+  const model = withModelDir(
+    {
+      ...NAMED_KEY_MODEL_FILES,
+      'readmodels.md': `## insured-policies
+Name: Insured policies
+Subscribes: policy-issued
+policyHolderName:Key
+* policy holder
+* [no of policies]
+`,
+    },
+    (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+  );
+  const rm = model.readModels.find((r) => r.id === 'insured-policies');
+  assert.equal(rm.keyed, true);
+  assert.equal(rm.aggregate, null);
+  assert.equal(rm.keyFields.length, 1);
+  assert.equal(rm.keyFields[0].name, 'policyHolderName');
+  assert.deepEqual(rm.keyFields[0].derivedFrom, { field: 'policyHolder', attr: 'name' });
+  // Only the attribute named in the header is part of the key — "surname" is not,
+  // even though it lives on the very same value-object field.
+  assert.ok(!rm.keyFields.some((f) => f.derivedFrom?.attr === 'surname'));
+  // The record itself is exactly the declared fields — no synthetic identity
+  // component is injected in this mode, and the derived attribute is not one of
+  // its own components either (it lives only in the persistence key).
+  assert.deepEqual(rm.fields.map((f) => f.name), ['policyHolder', 'noOfPolicies']);
+});
+
+test('parseModel supports two named key attributes forming one composite key', () => {
+  const model = withModelDir(
+    {
+      ...NAMED_KEY_MODEL_FILES,
+      'readmodels.md': `## insured-policies
+Name: Insured policies
+Subscribes: policy-issued
+policyHolderName:Key
+policyHolderSurname:Key
+* policy holder
+* [no of policies]
+`,
+    },
+    (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+  );
+  const rm = model.readModels.find((r) => r.id === 'insured-policies');
+  assert.deepEqual(
+    rm.keyFields.map((f) => f.derivedFrom),
+    [
+      { field: 'policyHolder', attr: 'name' },
+      { field: 'policyHolder', attr: 'surname' },
+    ],
+  );
+});
+
+test('parseModel raises a MODEL ERROR — not a silent guess or a crash elsewhere — when a named key attribute matches no field', () => {
+  const run = () =>
+    withModelDir(
+      {
+        ...NAMED_KEY_MODEL_FILES,
+        'readmodels.md': `## insured-policies
+Name: Insured policies
+Subscribes: policy-issued
+policyHolderAddress:Key
+* policy holder
+* [no of policies]
+`,
+      },
+      (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+    );
+  assert.throws(run, /insured-policies.*policyHolderAddress:Key.*no declared field/s);
+});
+
+test('parseModel raises a MODEL ERROR when a named key attribute uses :Id instead of :Key', () => {
+  const run = () =>
+    withModelDir(
+      {
+        ...NAMED_KEY_MODEL_FILES,
+        'readmodels.md': `## insured-policies
+Name: Insured policies
+Subscribes: policy-issued
+policyHolderName:Id
+* policy holder
+* [no of policies]
+`,
+      },
+      (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+    );
+  assert.throws(run, /insured-policies.*policyHolderName:Id.*must use ":Key"/s);
+});
+
+test('parseModel still treats a single header line naming the aggregate as the classic form, unaffected by named-key support', () => {
+  const model = withModelDir(
+    {
+      ...NAMED_KEY_MODEL_FILES,
+      'readmodels.md': `## policy-list
+Name: Policy List
+Subscribes: policy-issued
+policy:Key
+* policy holder
+`,
+    },
+    (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+  );
+  const rm = model.readModels.find((r) => r.id === 'policy-list');
+  assert.equal(rm.aggregate, 'policy');
+  assert.equal(rm.fields[0].identity, true);
+  assert.equal(rm.fields[0].name, 'policyKey');
 });

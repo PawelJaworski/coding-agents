@@ -231,7 +231,13 @@ export function buildGwtPatch(queue) {
       spec: where,
       package: target?.package ?? null,
       class: where ? where.split('/').pop().replace(/\.groovy$/, '') : null,
-      hints: where ? [] : ['spec path underivable — report it, do not guess'],
+      hints: [
+        // parseSpecNames only matches `def "..."` — single quotes leave the
+        // item pending forever, so the convention belongs in every hint set.
+        `Write the Spock method name DOUBLE-quoted and verbatim: def "${name}"(). ` +
+          'parseSpecNames matches only `def "..."`; a single-quoted name keeps this item pending forever.',
+        ...(where ? [] : ['spec path underivable — report it, do not guess']),
+      ],
     };
   });
   return {

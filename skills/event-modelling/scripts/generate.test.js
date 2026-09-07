@@ -18,6 +18,7 @@ const {
   renderPage,
   computeGeometry,
   isBracketedField,
+  isDoubleQuestionField,
   normalizeField,
   hasMatchingField,
   isTransformationOfSpecialAttribute,
@@ -177,6 +178,23 @@ test('isBracketedField detects [...]-wrapped fields', () => {
 test('normalizeField strips brackets and lowercases', () => {
   assert.equal(normalizeField('[Policy Number]'), 'policy number');
   assert.equal(normalizeField('Policy Number'), 'policy number');
+});
+
+test('parseMdText strips a trailing "?" but keeps "??" intact (exemption marker, stripped only at render time)', () => {
+  const items = parseMdText(`
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: event-a
+* name?
+* address??
+`);
+  assert.deepEqual(items[0].fields, ['name', 'address??']);
+});
+
+test('isDoubleQuestionField detects a trailing "??"', () => {
+  assert.equal(isDoubleQuestionField('address??'), true);
+  assert.equal(isDoubleQuestionField('address?'), false);
+  assert.equal(isDoubleQuestionField('address'), false);
 });
 
 test('hasMatchingField finds a case-insensitive match across upstream field lists', () => {
@@ -358,10 +376,53 @@ policyHolderId:Key
   assert.doesNotThrow(() => buildModel(dir));
 });
 
-// ---------------------------------------------------------------------------
-// Edge-kind tagging (renderArrows) — triggers / produces / observes /
-// observes-cmd / displays
-// ---------------------------------------------------------------------------
+test('buildModel allows a "??"-suffixed read-model field that matches an upstream event field', () => {
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name
+* address??
+`,
+  });
+  assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('buildModel allows a "??"-suffixed read-model field with NO matching upstream event field ("??" is exempt, read-model-only search criterion)', () => {
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name
+* phone number??
+`,
+  });
+  assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('renderTable renders a "??"-suffixed read-model field stripped, same as a trailing "?"', () => {
+  const dir = baseFixture({
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name?
+* address??
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  assert.match(html, /<li>address<\/li>/); // trailing "??" stripped for display
+  assert.match(html, /<li>name<\/li>/); // trailing "?" stripped for display
+});
+
+
 
 test('renderArrows tags a human-triggered command edge as "triggers" and its produced-event edge as "produces"', () => {
   const dir = baseFixture();

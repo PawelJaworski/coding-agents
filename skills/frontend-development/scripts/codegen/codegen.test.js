@@ -563,10 +563,22 @@ const SEARCH_OPENAPI = {
   },
 };
 
-test('parseSections collects * field? as searchFields', () => {
+test('parseSections collects * field? as both a field and a search field', () => {
   const [s] = parseSections('## x\n* field one\n* search one?\n');
-  assert.deepEqual(s.fields.map((f) => f.name), ['fieldOne']);
+  // Same as the backend: a `?` field is a regular projected field AND a search
+  // criterion. It stays in `fields` (openapi serves it) and is indexed as
+  // searchable for the criteria expansion.
+  assert.deepEqual(s.fields.map((f) => f.name), ['fieldOne', 'searchOne']);
   assert.deepEqual(s.searchFields.map((f) => f.name), ['searchOne']);
+});
+
+test('parseSections collects * field?? ONLY as a search field, never as a response field', () => {
+  const [s] = parseSections('## x\n* field one\n* search only??\n');
+  // Unlike `?`, a `??` field has no backing response field at all — it must
+  // never enter `fields` (that would be CONTRACT DRIFT against openapi.json,
+  // since the backend never persists/serves it), only `searchFields`.
+  assert.deepEqual(s.fields.map((f) => f.name), ['fieldOne']);
+  assert.deepEqual(s.searchFields.map((f) => f.name), ['searchOnly']);
 });
 
 test('a Map<String,String> openapi param is expanded into individual criteria from ? fields', () => {

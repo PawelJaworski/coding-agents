@@ -165,9 +165,21 @@ ConsistsOf: order-summary, stock-levels
   ```
 
   Works the same way on commands and events, not just read models.
-- A trailing `?` on a field name marks it as a search criterion (e.g.
-  `* policy holder?`). The `?` is stripped for display in the diagram —
-  the card shows `policy holder`, not `policy holder?`.
+- A trailing `?` on a **read-model** field name marks it as a search criterion
+  answerable by a direct DB query, and is a normal passthrough field — it must
+  still trace back to an upstream event field (e.g. `* policy holder?`). A
+  trailing `??` marks a search-ONLY criterion: a query parameter with **no
+  stored value at all** — never a field on the entity, never persisted, never
+  part of the response, and NOT derived from any upstream event field (e.g.
+  `* policy coverage risk??`) — see "Diagram consistency" below for the
+  diagram-consistency exemption this implies. Matching a `??` criterion is a
+  hand-written Java predicate applied by the persisting projector to the query
+  result AFTER it comes back from the repository — never a DB column or a
+  generated `Specification`/`JpaSpecificationExecutor` predicate (see
+  `backend-development/scripts/codegen/emit.js`'s `projectionDecider` /
+  `persistingProjector` for the generated stub). Both `?` and `??` are stripped
+  for display in the diagram — the card shows `policy holder`, not
+  `policy holder?` or `policy coverage risk??`.
 - Ignore anything else (descriptions, prose, `#` title lines).
 - **No orphan events**: the script throws if an event has no `Produces:` link.
 - **No inline command Actor**: the script throws if any command in
@@ -339,16 +351,16 @@ Run once per read model, in `readmodels.md` order, against the **current**
 This keeps every command→event→view slice visually grouped, and guarantees
 no two read models ever share a column.
 
-### Geometry constants (`scripts/generate.js`)
+### Geometry constants
 
-```
-GUT = 180, COL = 360           // gutter + per-column width
-TIME_H=40, ROLE_H=130, SYS_H=130, MID_H=120, PROC_H=150
-UI 210x76, Command 200x56, Event 220x74 (+14 for the bold `{aggregateName}:Id` line), Read model 220x60, Time badge 26x26
-```
+All layout constants (gutter/column width, row heights, card sizes,
+`AGG_ID_H` per identifying line) live as named `const`s near the top of the
+"2. Layout" section in `scripts/generate.js` — read them there, don't
+duplicate the numbers here (they're allowed to change; this doc shouldn't
+need an edit every time they do). `width`/`height` are derived from them plus
+the column/row counts (`T`, `R`, `P`) printed in the generator's stdout
+summary.
 
-`width = GUT + T*COL` where `T` = events + inserted read-model columns.
-`height = TIME_H + R*ROLE_H + (hasSystem ? SYS_H : 0) + MID_H + P*PROC_H`.
 The System row is fully omitted (not just hidden) when no command has
 `Observes:` — don't reserve its band.
 
@@ -382,53 +394,26 @@ meets a flat edge, not the rounded notch.
 ### Interactivity
 
 `reference/interactivity.js` is copied byte-identical into the page's
-`<script>` by the generator — **never hand-edit or rephrase it**. It's a
-click-to-focus filter, **upstream-only**: clicking a card dims (opacity,
-`.dim` class — never `display:none`) every card/arrow that is not the
-clicked card or one of its ancestors (walking `data-from`/`data-to` edges
-backwards, i.e. from the card to whatever produced it, transitively).
-Descendants/downstream siblings of the clicked card are dimmed, not
-highlighted. Clicking the focused card again, or the background, clears
-focus. The layout never reflows on click.
+`<script>` by the generator — **never hand-edit or rephrase it; edit the
+source file and the doc comments there instead.** It's a click-to-focus
+filter, **upstream-only** (walks `data-from`/`data-to` edges backwards from
+the clicked card, dimming everything that isn't an ancestor), with one
+documented exception: a UI is normally a terminal ancestor (its `displays`
+edge into a read model is not walked further), except when the UI *itself*
+is the clicked card, in which case that edge is its own causal chain and is
+followed. The full rationale is in the comments at the top of that file —
+read them there if you need to change the behavior, don't re-derive it here.
+Each arrow's `data-kind` (`triggers`/`produces`/`observes`/`observes-cmd`/
+`displays`) is what lets the traversal distinguish edge semantics.
 
-Each arrow also carries a `data-kind` attribute — `triggers` (UI→command),
-`produces` (command→event), `observes`/`observes-cmd` (event→read-model or
-event→system-command), or `displays` (read-model→UI) — so the traversal can
-distinguish edge semantics. UI cards are **terminal ancestors**: a UI
-*reached as an ancestor of another card* is included in the upstream set via
-its `triggers` edge into the command it triggers, but the backward walk does
-**not** continue past it through its `displays` edge into whatever read model
-that UI happens to show — that's an unrelated causal chain. E.g. clicking a
-read model highlights the event that produced it, the command behind that
-event, and the UI card(s) that trigger that command, but not any *other* read
-model those UI cards happen to display.
+## Colors
 
-**Exception — the clicked card itself.** When the *start* of the walk is an
-output UI, its own `displays` edge **is** its causal chain and is followed.
-Clicking an output UI therefore highlights the read model it displays, the
-events feeding that read model, and the commands/UIs behind them — rather
-than dimming the entire diagram (which is what happens if a UI is treated as
-terminal even when it's the clicked card).
-
-## Colors (reference palette)
-
-CSS custom properties in `:root`:
-
-| Element          | Variable      | Value       |
-| ---------------- | ------------- | ----------- |
-| Commands         | `--command`   | `#12cdd4`   |
-| Events           | `--event`     | `#fac710`   |
-| Read models      | `--view`      | `#8fd14f`   |
-| Ink / titles     | `--ink`       | `#0a0a0a`   |
-| Command caption  | —             | `#eafffb`   |
-| Event caption    | —             | `#8a6408`   |
-| View caption     | —             | `#35681f`   |
-| UI hint text     | —             | `#888888`   |
-| Arrows           | `--arrow`     | `#333333`   |
-| Event→read/auto  | `--read-line` | `#5E35B1`   |
-| Swimlane tint    | per row       | cycles through a pastel palette per role/subprocess; mid-row `#f7f8f9` |
-
-Fonts: `'OpenSans','Noto Sans',Arial,sans-serif`. Card titles 13, captions 10.
+CSS custom properties (`--command`, `--event`, `--view`, `--ink`, `--arrow`,
+`--read-line`) are defined once in the `:root` block emitted by
+`scripts/generate.js` — read them there rather than duplicating hex values
+here. Swimlanes cycle through a pastel palette per role/subprocess; the
+mid-row is `#f7f8f9`. Fonts: `'OpenSans','Noto Sans',Arial,sans-serif`; card
+titles 13px, captions 10px.
 
 ## Verification
 
@@ -483,6 +468,30 @@ Dataflow should be consistent. Attributes of read model should be derivated from
 The same for events. They should be derived from commands. If some attributes are missing in the backward flow (read models -> events -> commands) please add them.
 If attribute is not mapped directly (eg. calculated from two sources) then sorround this element with '[...]', eg. [balance calculation]
 
+## Field annotations: `?` vs `??`
+Two distinct, non-overlapping annotations exist for **read-model fields**:
+- A trailing `?` (e.g. `policy holder?`) marks a field answerable by a **direct DB
+  query** (a simple column/parameter match). It is a normal passthrough field: it
+  is **not** exempt from the passthrough-match check below — it must still trace
+  back to a real upstream event field.
+- A trailing `??` (e.g. `policy coverage risk??`) marks a **search-only** query
+  parameter with **no stored value at all** — it is never a projected/persisted
+  field (no entity column, no record component, no place in the response), and
+  has no upstream event field either. It **is exempt** from the passthrough-match
+  check below, the same way `[...]` is — there is nothing to trace, by design.
+  Unlike `?` (a plain DB predicate) or `[...]` (a computed VALUE), matching a `??`
+  criterion is business logic applied by the persisting projector to the query
+  result after it comes back from the repository — see the backend generator's
+  `projectionDecider`/`persistingProjector`, which scaffold an
+  `UnsupportedOperationException` stub (`matches<Field>(value, entity)`) for a
+  human to implement, exactly like a `[bracketed]` field's decider stub.
+
+Both are stripped for display (the diagram card shows `policy holder`, not
+`policy holder?`/`policy coverage risk??`) — purely search-capability markers,
+not the calculated/system-generated meaning of `[...]` (which, unlike `??`,
+still renders literally with its brackets).
+
+
 For events the aggregate-id attribute is mandatory:
 {aggregateName}:Id, eg. 'shipment:Id'. It means that it belongs to 'shipment' aggregate.
 **This is enforced as a hard blocker**: the generator throws (like the
@@ -530,31 +539,16 @@ Geometry: `AGG_ID_H` (14px) is now added **once per identifying line**
 one-time bump — a read model with `:Id` + 2 `:Key` lines grows 3 × 14px
 taller than its base height.
 
-### Special vs. Normal Attributes
+### Special vs. normal attributes
 
-The `attribute:Id` and `attribute:Key` syntax has **special meaning** (identifiers/keys)
-and is rendered as bold lines under the card title. You can also add these
-attributes as **normal field attributes** with different naming (e.g., `attributeId` or
-`attribute key`) — these will be rendered as regular bullet points.
-
-**Example:**
-```markdown
-## policy-details
-Name: Policy Details
-Subscribes: policy-issued
-policy:Id                    # Special identifier line (bold, under title)
-* policy id                  # Normal field attribute (bullet point) — transformation of policy:Id
-* policy holder
-* policy coverage
-```
-
-This distinction is important:
-- `policy:Id` → renders as a bold `{aggregateName}:Id` line under the card title
-- `* policy id` → renders as a regular bullet point in the field list (transformation of the special attribute)
-
-The same applies to `:Key`:
-- `customerId:Key` → renders as a bold `{keyName}:Key` line under the card title
-- `* customer id` → renders as a regular bullet point in the field list (transformation of the special attribute)
+`policy:Id` / `customerId:Key` (no bullet) are the **special** identifier
+lines described above — bold, under the title, never in the field list. A
+*normal* bullet field with a related name (`* policy id`, `* customer id`) is
+just a regular field, rendered in the field list like any other — the
+generator's field-consistency check (`isTransformationOfSpecialAttribute`)
+recognizes this camelCase→spaced+" id"/" key" naming as a legitimate
+passthrough of the special attribute rather than an orphan field. Don't
+conflate the two forms; only the colon form gets the bold card treatment.
 
 ## Read-model GWT (Given-When-Then) files
 
@@ -626,17 +620,11 @@ blocking generation outright. If `<docs>/business-definitions.html` can't be
 found, the check is skipped silently.
 
 
-**This is enforced by the generator, not just a manual convention.** During
-`buildModel()` (`scripts/generate.js`), for every event with a producing
-command, each non-bracketed event field must have a case-insensitive exact
-match (after trimming, and after stripping any `[...]` wrapper) among the
-producing command's fields; for every read model, each non-bracketed field
-must match a field on at least one subscribed event. A field wrapped in
-`[...]` (e.g. `[policy number]`) is exempt from this check — it's the
-documented way to mark a calculated or system-generated field with no direct
-upstream passthrough — and still renders normally (brackets included) in the
-HTML output. On a mismatch the script throws and exits non-zero, in the same
-style as the existing "no orphan events" check, e.g.:
+**This is enforced by the generator, not just a manual convention** — see
+"Diagram consistency" / "Field annotations: `?` vs `??`" above for the exact
+rules (`[...]` and `??` exempt from the passthrough check; `?` not exempt). On
+a mismatch the script throws and exits non-zero, in the same style as the
+existing "no orphan events" check, e.g.:
 
 ```
 Consistency error: event 'policy-accepted' field "policy number" has no

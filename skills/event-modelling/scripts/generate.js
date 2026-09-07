@@ -225,11 +225,20 @@ function parseMdText(text) {
     }
     // A bare bullet ("* field" / "- field", no colon) is a field/parameter
     // shown on the card, e.g. the payload of a read model or event.
-    // A trailing "?" marks a search criterion — strip it for display.
+    // A trailing "?" marks a search criterion answerable by a direct DB
+    // query — it's a real passthrough field, so it's stripped for display
+    // immediately here and still fully subject to the passthrough-match
+    // check below. A trailing "??" marks a read-model-only search criterion
+    // that is NOT derived from any upstream event — it belongs solely to the
+    // read model (e.g. implemented via backend logic over data the read
+    // model already has some other way), so it is kept intact here (not
+    // stripped) and only stripped for display later, at render time — see
+    // isDoubleQuestionField below, which exempts it from the passthrough
+    // check the same way [...] does.
     const field = line.match(/^\s*[*-]\s+(.+)/);
     if (field) {
       let fieldName = field[1].trim();
-      if (fieldName.endsWith('?')) fieldName = fieldName.slice(0, -1).trim();
+      if (!fieldName.endsWith('??') && fieldName.endsWith('?')) fieldName = fieldName.slice(0, -1).trim();
       (cur.fields || (cur.fields = [])).push(fieldName);
     }
   }
@@ -248,9 +257,27 @@ function isBracketedField(f) {
   return t.startsWith('[') && t.endsWith(']');
 }
 
-// Normalize a field for comparison: trim, strip an enclosing [...] wrapper
-// (so "[policy number]" and "policy number" are considered the same field),
-// lowercase. Simple case-insensitive exact-string match — no fuzzy matching.
+// A field with a trailing "??" is a read-model-only search criterion with no
+// upstream event field — see "Diagram consistency" in SKILL.md. Like [...],
+// it is exempt from the match check below. Unlike [...], the marker is
+// stripped for display (see fieldsHtml) rather than rendered literally.
+function isDoubleQuestionField(f) {
+  return String(f).trim().endsWith('??');
+}
+
+// Strip a trailing "??" for display purposes (the marker itself is never
+// shown on the card — only [...] renders literally).
+function stripDoubleQuestion(f) {
+  const t = String(f).trim();
+  return isDoubleQuestionField(t) ? t.slice(0, -2).trim() : t;
+}
+
+// Normalize a field for comparison: trim, strip an enclosing [...]
+// wrapper (so "[policy number]" and "policy number" are considered the same
+// field), lowercase. Simple case-insensitive exact-string match — no fuzzy
+// matching. (A trailing "?" is already stripped at parse time, before this
+// is ever called; a trailing "??" is exempt from matching entirely — see
+// isDoubleQuestionField.)
 function normalizeField(f) {
   let t = String(f).trim();
   if (isBracketedField(t)) t = t.slice(1, -1).trim();
@@ -560,11 +587,13 @@ function buildModel(inputDir) {
     const subEvents = (rm.subscribes || []).map((id) => events.find((e) => e.id === id)).filter(Boolean);
     (rm.fields || []).forEach((f) => {
       if (isBracketedField(f)) return;
+      if (isDoubleQuestionField(f)) return;
       if (hasMatchingField(f, subEvents.map((e) => e.fields))) return;
       if (isTransformationOfSpecialAttribute(f, rm.aggregateId, rm.keys)) return;
       throw new Error(
         `Consistency error: read model '${rm.id}' field "${f.trim()}" has no matching field in any subscribed event. ` +
         `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.trim()}]". ` +
+        `If it's a read-model-only search criterion with no upstream field at all, mark it "??", e.g. "${f.trim()}??". ` +
         `Otherwise add the field to the source event's payload.`
       );
     });
@@ -736,7 +765,7 @@ function fieldsHtml(fields) {
   if (!fields || !fields.length) return '';
   const capped = fields.length > MAX_FIELDS;
   const style = capped ? ` style="max-height:${MAX_FIELDS * FIELD_LINE_H}px;overflow-y:auto"` : '';
-  return `<div class="fields"${style}><ul>${fields.map((f) => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div>`;
+  return `<div class="fields"${style}><ul>${fields.map((f) => `<li>${escapeHtml(stripDoubleQuestion(f))}</li>`).join('')}</ul></div>`;
 }
 
 // Read-model-only: stacked bold lines directly under the title — the
@@ -1150,7 +1179,7 @@ if (require.main === module) {
 
 module.exports = {
   buildModel, computeGeometry, renderTable, renderArrows, renderPage,
-  parseMd, parseMdText, isBracketedField, normalizeField, hasMatchingField,
+  parseMd, parseMdText, isBracketedField, isDoubleQuestionField, normalizeField, hasMatchingField,
   isTransformationOfSpecialAttribute,
   parseGwtContent, discoverGwtFiles,
 };

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import naming from './naming.js';
-import { parseSections, parseField, parseDefinitions, injectIdentity, resolveKeyAttributePath } from './parse.js';
+import { parseSections, parseField, parseDefinitions, injectIdentity, resolveKeyAttributePath, requireSearchOnlyFieldsHaveData } from './parse.js';
 import {
   parseScaffoldVersion,
   stampScaffoldVersion,
@@ -664,6 +664,122 @@ test('persistingProjector delegates search to the repository, no in-memory filte
   assert.match(p.content, /return repository\.findAllBySearch\(search\)\.stream\(\)/);
   assert.doesNotMatch(p.content, /\.filter\(e -> matches/);
   assert.doesNotMatch(p.content, /repository\.findAll\(\)/);
+});
+
+// --- "??" search-only criteria: query params with no stored value --------------
+
+test('parseSections routes a "??" field to searchOnlyFields, not fields', () => {
+  const sections = parseSections(`
+## policy-list
+Subscribes: policy-issued
+policy:Key
+* policy holder
+* policy coverage risk??
+`);
+  const s = sections[0];
+  assert.equal(s.fields.length, 1);
+  assert.equal(s.fields[0].name, 'policyHolder');
+  assert.equal(s.searchOnlyFields.length, 1);
+  assert.deepEqual(s.searchOnlyFields[0], { label: 'policy coverage risk', name: 'policyCoverageRisk', searchOnly: true });
+});
+
+test('a "??" field cannot be [bracketed] or carry a :convention/:Key', () => {
+  assert.throws(
+    () => parseSections(`
+## policy-list
+* [policy coverage risk]??
+`),
+    /Search-only criterion .* cannot be \[bracketed\]/,
+  );
+});
+
+// --- "??" search-only criteria must be answerable from the read model's own data ---
+// A decider's `matches<Field>` gets no collaborator beyond a no-arg constructor, so a
+// criterion sharing no vocabulary with any stored field/attribute has no data path to
+// a real implementation. That must fail loudly at parse time, not surface later as a
+// hard-to-implement decider stub.
+
+test('requireSearchOnlyFieldsHaveData: a "??" field with zero overlap is a MODEL ERROR', () => {
+  assert.throws(
+    () => requireSearchOnlyFieldsHaveData(
+      'policy-list',
+      [{ label: 'policy key' }, { label: 'policy holder' }, { label: 'policy number' }],
+      [{ label: 'policy coverage risk' }],
+    ),
+    /declares "\?\?" search-only field "policy coverage risk" but none of its stored fields/,
+  );
+});
+
+test('requireSearchOnlyFieldsHaveData: overlap with a regular field label passes', () => {
+  assert.doesNotThrow(() =>
+    requireSearchOnlyFieldsHaveData(
+      'policy-list',
+      [{ label: 'policy key' }, { label: 'policy coverage' }],
+      [{ label: 'policy coverage risk' }],
+    ),
+  );
+});
+
+test('requireSearchOnlyFieldsHaveData: overlap with a value-object attribute passes', () => {
+  assert.doesNotThrow(() =>
+    requireSearchOnlyFieldsHaveData(
+      'policy-list',
+      [{ label: 'policy coverage', attrs: [{ name: 'coveragePeriod' }, { name: 'riskList' }] }],
+      [{ label: 'policy coverage risk' }],
+    ),
+  );
+});
+
+test('requireSearchOnlyFieldsHaveData: the read model\'s own aggregate name is not counted as overlap', () => {
+  // Every field here is "policy ..." by convention; without stripping the aggregate
+  // name this would trivially "overlap" on the word "policy" alone and never fire.
+  assert.throws(
+    () => requireSearchOnlyFieldsHaveData(
+      'policy-list',
+      [{ label: 'policy key' }, { label: 'policy holder' }],
+      [{ label: 'policy coverage risk' }],
+    ),
+    /none of its stored fields/,
+  );
+});
+
+test('requireSearchOnlyFieldsHaveData: no "??" fields is a no-op', () => {
+  assert.doesNotThrow(() => requireSearchOnlyFieldsHaveData('policy-list', [{ label: 'policy key' }], []));
+});
+
+test('projectionDecider generates a throwing matches<Field> stub for a search-only field', () => {
+  const rm = { ...vaRm(), deciderClassName: 'PolicyListProjectionDecider', searchOnlyFields: [{ label: 'policy coverage risk', name: 'policyCoverageRisk', searchOnly: true }] };
+  const eventsById = new Map([
+    ['policy-issued', { id: 'policy-issued', name: 'Policy Issued', aggregate: 'policy', fields: [
+      { name: 'policyHolder', javaType: 'PolicyHolder' },
+      { name: 'policyNumber', javaType: 'String' },
+    ] }],
+  ]);
+  const p = persistingProjector(rm, eventsById, BASE);
+  const deciderCollaborator = p.collaborators.find((c) => c.fieldName === 'decider');
+  const d = deciderCollaborator.scaffold();
+  assert.match(d.content, /public boolean matchesPolicyCoverageRisk\(String value, PolicyList entity\)/);
+  assert.match(d.content, /UnsupportedOperationException/);
+  assert.match(d.content, /\\"policy coverage risk\?\?\\" on read model 'policy-list' is a search criterion with no implementation yet/);
+});
+
+test('persistingProjector applies a post-query Java filter for a "??" field, delegating to the decider', () => {
+  const rm = { ...vaRm(), deciderClassName: 'PolicyListProjectionDecider', searchOnlyFields: [{ label: 'policy coverage risk', name: 'policyCoverageRisk', searchOnly: true }] };
+  const eventsById = new Map([
+    ['policy-issued', { id: 'policy-issued', name: 'Policy Issued', aggregate: 'policy', fields: [
+      { name: 'policyHolder', javaType: 'PolicyHolder' },
+      { name: 'policyNumber', javaType: 'String' },
+    ] }],
+  ]);
+  const p = persistingProjector(rm, eventsById, BASE);
+  // The DB-level search call is unchanged; the "??" field is filtered afterward.
+  assert.match(p.content, /repository\.findAllBySearch\(search\)\.stream\(\)/);
+  assert.match(p.content, /\.filter\(r -> \{/);
+  assert.match(p.content, /String v = search\.get\("policyCoverageRisk"\);/);
+  assert.match(p.content, /decider\.matchesPolicyCoverageRisk\(v, r\)/);
+  // The decider collaborator must now be wired in, even though no [bracketed]
+  // field ever delegates a projected VALUE to it.
+  assert.ok(p.collaborators.some((c) => c.fieldName === 'decider'));
 });
 
 test('persistingProjectorAbility exposes a search-capable DSL overload', () => {

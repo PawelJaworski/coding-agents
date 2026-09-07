@@ -91,7 +91,9 @@ test('a GWT prompt is test-first, verbatim-named, and Ability-only', () => {
       name: 'when x then y',
       source: 'gwt-policy-details.md',
       spec: 'src/test/groovy/a/b/policydetails/PolicyDetailsSpec.groovy',
-      hints: [],
+      hints: [
+        'Write the Spock method name DOUBLE-quoted and verbatim: def "when x then y"(). parseSpecNames matches only `def "..."`; a single-quoted name keeps this item pending forever.',
+      ],
     },
     0,
     1,
@@ -100,6 +102,8 @@ test('a GWT prompt is test-first, verbatim-named, and Ability-only', () => {
   assert.match(p, /PolicyDetailsSpec\.groovy/);
   assert.match(p, /VERBATIM/);
   assert.match(p, /only through \*Ability/);
+  assert.match(p, /DOUBLE-quoted/);
+  assert.match(p, /def "when x then y"\(\)/);
 });
 
 test('static steps need no patch', () => {

@@ -125,7 +125,10 @@ test('the GWT patch keeps the scenario name verbatim and names its spec file', (
   assert.equal(e.spec, 'src/test/groovy/a/b/policydetails/PolicyDetailsSpec.groovy');
   assert.equal(e.class, 'PolicyDetailsSpec');
   assert.equal(e.auto, false);
-  assert.deepEqual(e.hints, []); // a derivable spec path needs no advice
+  assert.deepEqual(e.hints, [
+    // a derivable spec path still carries the double-quote convention
+    'Write the Spock method name DOUBLE-quoted and verbatim: def "when issue policy then policy number has next ordinal"(). parseSpecNames matches only `def "..."`; a single-quoted name keeps this item pending forever.',
+  ]);
 });
 
 test('a business rule is routed to the command decider, not to a read model', () => {

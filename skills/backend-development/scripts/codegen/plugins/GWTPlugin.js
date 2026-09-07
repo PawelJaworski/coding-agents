@@ -82,11 +82,26 @@ const gwtStep = {
       '',
       'Test first: transcribe the name VERBATIM, run it, get a loud failure, then write',
       'the minimal logic in the decider the failure names. Drive it only through *Ability.',
+      ...(item.hints ?? []).map((h) => `  ${h}`),
       '',
       `Touch nothing else. ${left > 0 ? `${left} item(s) left in this step.` : 'Last item.'}`
     ].join('\n');
   }
 };
+
+/**
+ * Hint for a GWT patch entry: the one convention an implementing agent gets
+ * wrong and that silently keeps the item pending. `codegen --next` matches a
+ * scenario/rule to "done" by an exact spec method name, and parseSpecNames
+ * only recognizes double-quoted names (`def "..."`) — single quotes leave the
+ * item pending forever.
+ */
+export function nameQuotesHint(name) {
+  return (
+    `Write the Spock method name DOUBLE-quoted and verbatim: def "${name}"(). ` +
+    'parseSpecNames matches only `def "..."`; a single-quoted name keeps this item pending forever.'
+  );
+}
 
 // Plugin manifest
 export const GWTPlugin = {
@@ -142,7 +157,10 @@ export const GWTPlugin = {
           spec: where,
           package: target?.package ?? null,
           class: where ? where.split('/').pop().replace(/\.groovy$/, '') : null,
-          hints: where ? [] : ['spec path underivable — report it, do not guess'],
+          hints: [
+            nameQuotesHint(name),
+            ...(where ? [] : ['spec path underivable — report it, do not guess']),
+          ],
         };
       });
     },

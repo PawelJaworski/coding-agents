@@ -428,6 +428,16 @@ function projectionDecider(rm, eventsById) {
     }`);
     }
   }
+  // A "??" (search-only) criterion has no stored value, no event to project it
+  // from — its match logic is a pure business decision over the already-persisted
+  // read model, applied by the projector AFTER the repository query returns (see
+  // persistingProjector), never a DB column/Specification predicate.
+  for (const f of rm.searchOnlyFields || []) {
+    methods.push(`    public boolean matches${naming.cap(f.name)}(String value, ${rm.className} entity) {
+        throw new UnsupportedOperationException(
+                "\\"${f.label}??\\" on read model '${rm.id}' is a search criterion with no implementation yet");
+    }`);
+  }
   return {
     package: rm.package,
     className: rm.deciderClassName,
@@ -1135,7 +1145,23 @@ ${args.map((a) => `                ${a}`).join(',\n')});
         `\n            default -> null;\n        }`;
   const projectIdType = keyed ? rm.idClassName : 'UUID';
 
-  const collaborators = delegated ? [repository, decider] : [repository];
+  // A "??" search-only criterion needs the decider too (for its matches<Field>
+  // stub), even when no [bracketed] field ever delegated a projected VALUE to it.
+  const searchOnlyFields = rm.searchOnlyFields || [];
+  const collaborators = delegated || searchOnlyFields.length ? [repository, decider] : [repository];
+
+  // Applied to the query result AFTER the repository call returns — never a DB
+  // predicate. Each "??" field is checked only when present (and non-blank) in
+  // the incoming search map; absent/blank means "don't filter on it".
+  const searchOnlyFilters = searchOnlyFields
+    .map(
+      (f) =>
+        `                .filter(r -> {
+                    String v = search.get("${f.name}");
+                    return v == null || v.isBlank() || decider.matches${naming.cap(f.name)}(v, r);
+                })`,
+    )
+    .join('\n');
 
   const imports = importBlock([
     'java.util.List',
@@ -1175,7 +1201,7 @@ ${fieldDeclarations(collaborators)}
     public List<${rm.className}> ${rm.getterMethod}(@RequestParam Map<String, String> search) {
         return repository.findAllBySearch(search).stream()
                 .map(${rm.entityClassName}::toReadModel)
-                .toList();
+${searchOnlyFilters ? searchOnlyFilters + '\n' : ''}                .toList();
     }
 
     @Override

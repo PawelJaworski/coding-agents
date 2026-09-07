@@ -13,6 +13,12 @@
 //   <aggregate>:Id | :Key      (readmodels.md) projection strategy
 //   * field name               payload attribute / read-model column
 //   * field name?              search criterion field (generates query parameters)
+//   * field name??             search-ONLY criterion (read model only): a query
+//                              parameter with no backing response field at all —
+//                              never added to `fields`/the page's response type,
+//                              only to `searchFields`. Matched by hand-written
+//                              backend logic, not a DB column (see the backend
+//                              generator's grammar comment for the full rule).
 //   * [field name]:uuid|now    system-decided attribute (never a form input)
 //
 // Field TYPES come from `business-definitions-raw.md`, exactly as the backend
@@ -41,11 +47,20 @@ export function parseSections(text) {
     const field = line.match(/^[*-]\s+([^:]*\[?[^\]]*\]?(?::\w+)?)$/);
     if (field && !/^[A-Za-z][\w -]*:\s/.test(field[1])) {
       const fieldStr = field[1].trim();
-      if (fieldStr.endsWith('?')) {
-        current.searchFields.push(parseField(fieldStr.slice(0, -1).trim()));
-      } else {
-        current.fields.push(parseField(fieldStr));
+      // "??" (checked before the single-"?" case) is a search-only criterion:
+      // it has no backing response field at all, so — unlike "?" — it is NEVER
+      // added to `fields`, only to `searchFields`. See the grammar comment above.
+      if (fieldStr.endsWith('??')) {
+        const parsed = parseField(fieldStr.slice(0, -2).trim());
+        current.searchFields.push(parsed);
+        continue;
       }
+      const parsed = parseField(fieldStr.endsWith('?') ? fieldStr.slice(0, -1).trim() : fieldStr);
+      // A `?` field is searchable AND a regular projected field, exactly as the
+      // backend treats it (the record/entity includes it, openapi serves it). It
+      // must stay in `fields` or the response's own field becomes CONTRACT DRIFT.
+      current.fields.push(parsed);
+      if (fieldStr.endsWith('?')) current.searchFields.push(parsed);
       continue;
     }
     const aggregate = line.match(/^-?\s*([A-Za-z][\w -]*):(Id|Key)$/);

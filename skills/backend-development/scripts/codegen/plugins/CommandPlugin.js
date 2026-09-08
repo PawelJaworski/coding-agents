@@ -38,7 +38,7 @@ function commandHandler(c, e, ctx) {
   const decider = ctx.collaborator({
     fieldName: 'decider',
     className: c.deciderClassName,
-    testInstantiation: `new ${c.deciderClassName}()`,
+    testInstantiation: `${c.deciderClassName}Ability.INSTANCE`,
     scaffold: () => commandDecider(c, e, ctx)
   });
 
@@ -136,6 +136,39 @@ function commandDecider(c, e, ctx) {
   };
 }
 
+// --- Decider ability emitter (scaffolded once) -------------------------------
+//
+// Self-contained wiring for the decider. Every constructor collaborator is a
+// second ability's INSTANCE, so the generated *Ability references this one by a
+// stable name and a decider gaining a dependency is a one-line edit HERE — never
+// a fight with a byte-fixed generated caller.
+//   v1 - initial: INSTANCE = new <Decider>();
+
+const DECIDER_ABILITY_SCAFFOLD_VERSION = 1;
+
+function commandDeciderAbility(c, ctx) {
+  const className = `${c.deciderClassName}Ability`;
+  return {
+    category: 'commands',
+    test: true,
+    once: true,
+    version: DECIDER_ABILITY_SCAFFOLD_VERSION,
+    onceHint: `scaffolded once, then yours: wire the decider's collaborators as *Ability.INSTANCE references`,
+    package: c.package,
+    className,
+    content:
+      `// SCAFFOLDED ONCE by scripts/codegen — this file is YOURS.\n` +
+      `// scaffold-version: ${DECIDER_ABILITY_SCAFFOLD_VERSION}\n` +
+      `// Self-contained test wiring for the ${c.deciderClassName} decider. Every\n` +
+      `// constructor collaborator is another ability's INSTANCE, e.g.\n` +
+      `//   ${className}.INSTANCE = new ${c.deciderClassName}(SomeAbility.INSTANCE);\n` +
+      `package ${c.package};\n\n` +
+      `public interface ${className} {\n\n` +
+      `    ${c.deciderClassName} INSTANCE = new ${c.deciderClassName}();\n` +
+      `}\n`
+  };
+}
+
 // --- Command ability emitter ------------------------------------------------
 
 function commandAbility(c, ctx, collaborators) {
@@ -216,6 +249,7 @@ export const CommandPlugin = {
       const handler = commandHandler(c, e, ctx);
       files.push(command(c, ctx), handler);
       files.push(...ctx.collaboratorScaffolds(handler.collaborators));
+      files.push(commandDeciderAbility(c, ctx));
       files.push(commandAbility(c, ctx, handler.collaborators));
     }
 

@@ -99,30 +99,43 @@ parameter a default-friendly form the ability can still call, or add a new membe
 instead of reshaping the old one. Never edit the ability to match; it is generated, and
 that edit will fail `--check`.
 
-## Trap: `*Decider` state leaks across specs
+## Trap: stateful collaborators leak across specs
 
 `reset_event_stream()` clears the event stream and the registered projections. It does
-**not** reset `*Decider` state. A decider holding a sequence or counter is shared across
-every spec through the static ability instance, so a new spec that issues commands
-silently perturbs an already-green one, and the failure appears as test *ordering*:
+**not** reset the state a decider depends on. Deciders are stateless; the state they use
+lives in a collaborator (a repository, a sequence) exposed as a static `*Ability.INSTANCE`
+and shared across every spec through the static ability instances. A new spec that issues
+commands silently perturbs an already-green one, and the failure appears as test
+*ordering*:
 
 ```
 Condition not satisfied:
 expect_policy_details(firstId) { it.policyNumber() == "P-1" }   // got P-4
 ```
 
-If a decider is stateful, give it an explicit reset and call it from `setup()` in
+Anything with mutable state gets `reset()` on its OWN ability, called from `setup()` in
 **every** spec that exercises that slice:
 
 ```groovy
 def setup() {
     reset_event_stream()
-    IssuePolicyDecider.reset()
+    PolicyOrdinalRepositoryAbility.reset()
 }
 ```
 
-The decider is scaffolded-once and yours, so adding the reset hook is allowed. The
-generated handler calls `decider.policyNumber()` with no arguments — keep that
+## Self-contained abilities — where decider dependencies are wired
+
+The generated `*Ability` never constructs a decider: it references
+`<Command>DeciderAbility.INSTANCE` (scaffolded once, yours). To give the decider a new
+constructor collaborator:
+
+1. Create the collaborator's own ability (`XAbility` in `src/test/java/...`) holding its
+   `INSTANCE` — plus `static reset()` if it is mutable.
+2. Edit the decider ability's `INSTANCE = new XDecider(SomeAbility.INSTANCE);` line.
+3. Done — no generated file changes, `--check` stays green, and the decider needs no
+   no-arg constructor.
+
+The generated handler calls `decider.policyNumber()` with no arguments — keep that method
 signature, or the generated caller breaks (see the trap above).
 
 ## Verify

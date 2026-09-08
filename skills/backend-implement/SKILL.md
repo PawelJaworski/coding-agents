@@ -65,24 +65,24 @@ the command's own slice instead: `src/test/groovy/<base>/<command-package>/<Comm
   - `reset_event_stream()` in `setup()` — abilities share a static in-memory stream.
 - Groovy note: Lombok builders are fluent, so write `it.field("v")`, not `it.field = "v"`.
 
-### `reset_event_stream()` does NOT reset decider state
-It clears the event stream and the registered projections — nothing else. A `*Decider`
-holding a sequence or counter is shared across every spec via the static ability
-instance, so a new spec that issues commands silently perturbs an already-green one and
-the failure surfaces as test *ordering*:
+### `reset_event_stream()` does NOT reset collaborator state
+It clears the event stream and the registered projections — nothing else. Deciders are
+stateless; the state they use lives in a collaborator (a repository, a sequence) exposed
+as a static `*Ability.INSTANCE` and shared across every spec via the ability DSLs. A new
+spec that issues commands silently perturbs an already-green one and the failure surfaces
+as test *ordering*:
 
 ```
 Condition not satisfied:
 expect_policy_details(firstId) { it.policyNumber() == "P-1" }   // got P-4
 ```
 
-If a decider is stateful, give it an explicit reset (it is yours) and call it in
-`setup()` in **every** spec exercising that slice:
+Reset the collaborator's ability in `setup()` in **every** spec exercising that slice:
 
 ```groovy
 def setup() {
     reset_event_stream()
-    IssuePolicyDecider.reset()
+    PolicyOrdinalRepositoryAbility.reset()
 }
 ```
 
@@ -108,11 +108,17 @@ naming the GWT scenario that justifies it.
 - The decider is a `@Component` scaffolded once — it is yours, and regeneration preserves it.
 - Keep it scenario-scoped: no validation, error handling, persistence or generality the
   scenario does not exercise. That is scope creep, not implementation.
-- It must keep a no-argument constructor (the generated abilities instantiate it directly).
+- Constructor collaborators are wired in the decider's OWN ability (`<Command>DeciderAbility`,
+  scaffolded once, yours): the generated `*Ability` references `XDeciderAbility.INSTANCE` by
+  that stable name, so a decider may take any collaborators and does NOT need a no-arg
+  constructor. Gained a collaborator? Edit the `INSTANCE = new XDecider(SomeAbility.INSTANCE);`
+  line in the decider ability. Never touch the generated ability.
 
 ## 4. Verify
-`mvn clean verify` green. Always build clean — stale `target/` classes produce phantom
-Lombok failures. Then `node .opencode/skills/backend-development/scripts/codegen --check` must still report `up to date`.
+Iterate quickly during red/green: `./mvnw test -Dtest=<Spec>` runs only that spec and
+keeps the loop under ten seconds. Finish with the full gate: `./mvnw clean verify` green —
+always build clean once generated/Lombok classes changed, stale `target/` classes produce
+phantom Lombok failures. Then `node .opencode/skills/backend-development/scripts/codegen --check` must still report `up to date`.
 
 # Hard boundaries
 - **Never change the contract of a `// GENERATED ... DO NOT EDIT` file.** The contract is

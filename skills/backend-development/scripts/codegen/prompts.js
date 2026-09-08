@@ -25,10 +25,6 @@ export const STATIC_PROMPTS = {
     '3. Additional — not implemented.\n\n' +
     'An ADVISORY is not a failure; --check printing "up to date" IS the pass.\n' +
     'Never commit development-report.md or api/openapi.json.',
-
-  REVIEW:
-    'Delegate to backend-code-reviewer.\n' +
-    'Reviewing is READING — edit nothing. Report drift, do not resolve it.',
 };
 
 export const VERB_RULES = {

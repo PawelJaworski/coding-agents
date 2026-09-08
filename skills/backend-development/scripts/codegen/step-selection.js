@@ -16,17 +16,15 @@ const CATEGORY_OF = getCategoryOf();
  *   RUN_CODEGEN   the patch has auto:true entries -> the generator does them
  *   GENERATE_*    the first category with an auto:false entry -> one item
  *   VERIFY        nothing pending, no report yet
- *   REVIEW        report written, changes uncommitted
  *   DONE
  *
  * @param {object} params
  * @param {string|null} params.modelError - message, or null
  * @param {Record<string, object>} params.patches - category -> patch document
  * @param {boolean} params.hasReport
- * @param {boolean} params.hasUncommitted
  * @returns {{step:string, item:number}}
  */
-export function selectStep({ modelError, patches, hasReport, hasUncommitted }) {
+export function selectStep({ modelError, patches, hasReport }) {
   if (modelError) return { step: 'MODEL_ERROR', item: 0 };
 
   const all = Object.values(patches ?? {}).flatMap((p) => p?.entries ?? []);
@@ -40,7 +38,6 @@ export function selectStep({ modelError, patches, hasReport, hasUncommitted }) {
   }
 
   if (!hasReport) return { step: 'VERIFY', item: 0 };
-  if (hasUncommitted) return { step: 'REVIEW', item: 0 };
   return { step: 'DONE', item: 0 };
 }
 

@@ -15,7 +15,7 @@
 //   node <skill>/scripts/codegen --accept-scaffold        record once-files as reconciled
 //   node <skill>/scripts/codegen --project <dir> --model <dir>   explicit paths
 
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseModel } from './parse.js';
@@ -122,17 +122,6 @@ function walk(dir) {
     const full = path.join(dir, e.name);
     return e.isDirectory() ? walk(full) : [full];
   });
-}
-
-function hasUncommittedChanges() {
-  try {
-    return (
-      execSync('git status --porcelain', { cwd: projectRoot, encoding: 'utf8', timeout: 5_000 })
-        .trim().length > 0
-    );
-  } catch {
-    return false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -279,8 +268,7 @@ if (testMode) {
     ['GENERATE_TEST_DATA', 'testdata-patch.json has missing/null TestDataAbility data', 'fill TestDataAbility: derive from business-definition examples or invent'],
     ['GENERATE_GWTS', 'gwt-patch.json has a pending scenario/rule', 'implement ONE scenario, test-first'],
     ['VERIFY', 'nothing pending, no development-report.md', 'mvn clean verify + codegen --check + write the report'],
-    ['REVIEW', 'report exists, working tree dirty', 'delegate to backend-code-reviewer (reading only)'],
-    ['DONE', 'report exists, tree clean', 'all complete'],
+    ['DONE', 'report exists, nothing pending', 'all complete'],
   ];
   for (const [name, detect, action] of rows) {
     console.log(`  ${name}\n    detect: ${detect}\n    action: ${action}\n`);
@@ -330,7 +318,7 @@ function refreshPatches() {
   return { modelError: null };
 }
 
-function selectStep({ modelError, patches, hasReport, hasUncommitted }) {
+function selectStep({ modelError, patches, hasReport }) {
   if (modelError) return { step: 'MODEL_ERROR', item: 0 };
 
   const all = Object.values(patches ?? {}).flatMap((p) => p?.entries ?? []);
@@ -342,7 +330,6 @@ function selectStep({ modelError, patches, hasReport, hasUncommitted }) {
   }
 
   if (!hasReport) return { step: 'VERIFY', item: 0 };
-  if (hasUncommitted) return { step: 'REVIEW', item: 0 };
   return { step: 'DONE', item: 0 };
 }
 
@@ -413,7 +400,6 @@ if (nextMode) {
     modelError,
     patches,
     hasReport: fs.existsSync(path.join(projectRoot, 'development-report.md')),
-    hasUncommitted: hasUncommittedChanges(),
   });
   const result = buildResult(selection, patches, modelError);
 

@@ -15,7 +15,7 @@ import { PluginRegistry } from './registry.js';
 
 /**
  * @typedef {Object} StepResult
- * @property {'MODEL_ERROR'|'RUN_CODEGEN'|'GENERATE'|'VERIFY'|'REVIEW'|'DONE'} state
+ * @property {'MODEL_ERROR'|'RUN_CODEGEN'|'GENERATE'|'VERIFY'|'DONE'} state
  * @property {string} step
  * @property {StepPrompt|null} next
  * @property {number} remaining
@@ -50,7 +50,7 @@ export class WorkflowEngine {
    * Compute the next step and item to execute
    * @returns {Promise<StepResult>}
    */
-  async selectNext(model, modelError, patches, hasReport, hasUncommitted) {
+  async selectNext(model, modelError, patches, hasReport) {
     // 1. Model error takes precedence
     if (modelError) {
       return this.buildResult('MODEL_ERROR', { detail: modelError, prompt: this.renderModelError(modelError) }, 0);
@@ -78,12 +78,7 @@ export class WorkflowEngine {
       return this.buildResult('VERIFY', { detail: 'verify', prompt: this.renderVerify() }, 0);
     }
 
-    // 5. Review step
-    if (hasUncommitted) {
-      return this.buildResult('REVIEW', { detail: 'review', prompt: this.renderReview() }, 0);
-    }
-
-    // 6. Done
+    // 5. Done
     return this.buildResult('DONE', null, 0);
   }
 
@@ -139,15 +134,10 @@ export class WorkflowEngine {
       'An ADVISORY is not a failure; --check printing "up to date" IS the pass.\n' +
       'Never commit development-report.md or api/openapi.json.';
   }
-
-  renderReview() {
-    return 'Delegate to backend-code-reviewer.\n' +
-      'Reviewing is READING — edit nothing. Report drift, do not resolve it.';
-  }
 }
 
 /** Pure function: select next step (exported for testing) */
-export function selectStep(steps, patches, modelError, hasReport, hasUncommitted) {
+export function selectStep(steps, patches, modelError, hasReport) {
   if (modelError) return { step: 'MODEL_ERROR', item: 0 };
 
   const allEntries = Object.values(patches).flatMap(p => p.entries ?? []);
@@ -160,6 +150,5 @@ export function selectStep(steps, patches, modelError, hasReport, hasUncommitted
   }
 
   if (!hasReport) return { step: 'VERIFY', item: 0 };
-  if (hasUncommitted) return { step: 'REVIEW', item: 0 };
   return { step: 'DONE', item: 0 };
 }

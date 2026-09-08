@@ -109,6 +109,9 @@ test('a GWT prompt is test-first, verbatim-named, and Ability-only', () => {
 test('static steps need no patch', () => {
   assert.match(buildStep('TRANSLATE', null).prompt, /codegen --patch/);
   assert.match(buildStep('VERIFY', null).prompt, /mvn clean verify/);
-  assert.match(buildStep('REVIEW', null).prompt, /Reviewing is READING/);
   assert.match(buildStep('RUN_CODEGEN', null).prompt, /generator's own work/);
+});
+
+test('REVIEW is no longer a step in the flow', () => {
+  assert.match(buildStep('REVIEW', null).prompt, /Unknown step/);
 });

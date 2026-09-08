@@ -61,8 +61,8 @@ test('nothing pending and no report -> VERIFY', () => {
   assert.equal(selectStep({ ...clean, patches: { domain: patch('domain', []) } }).step, 'VERIFY');
 });
 
-test('report written, tree dirty -> REVIEW; tree clean -> DONE', () => {
-  assert.equal(selectStep({ ...clean, hasReport: true, hasUncommitted: true }).step, 'REVIEW');
+test('report written -> DONE, no review stage (dirty tree is not a step)', () => {
+  assert.equal(selectStep({ ...clean, hasReport: true, hasUncommitted: true }).step, 'DONE');
   assert.equal(selectStep({ ...clean, hasReport: true, hasUncommitted: false }).step, 'DONE');
 });
 

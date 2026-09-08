@@ -37,7 +37,6 @@ export function getAllSteps() {
     'TRANSLATE',
     'RUN_CODEGEN',
     ...generateSteps,
-    'VERIFY',
-    'REVIEW'
+    'VERIFY'
   ];
 }

@@ -41,6 +41,7 @@ import {
   loadPatch,
 } from './prompts.js';
 import { createDebugLogger, DEBUG_LOG_PATH } from './debug-log.js';
+import { runVerification, verificationFailurePrompt } from './verification.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
@@ -344,6 +345,11 @@ function refreshPatches() {
   return { modelError: null };
 }
 
+function verifyProject() {
+  debug.log('RUN_VERIFY');
+  return runVerification(projectRoot);
+}
+
 function selectStep({ modelError, patches, hasReport }) {
   if (modelError) return { step: 'MODEL_ERROR', item: 0 };
 
@@ -466,6 +472,24 @@ if (nextMode) {
       patches,
       hasReport: fs.existsSync(path.join(projectRoot, 'development-report.md')),
     });
+  }
+
+  if ((selection.step === 'VERIFY' || selection.step === 'DONE') && !modelError) {
+    const verification = verifyProject();
+    if (!verification.ok) {
+      const errResult = {
+        state: 'VERIFY',
+        step: 'VERIFY',
+        next: {
+          detail: 'verification failed',
+          prompt: verificationFailurePrompt(verification.output),
+        },
+        remaining: 0,
+      };
+      debug.log('SELECT_STEP', errResult);
+      printResult(errResult);
+      process.exit(1);
+    }
   }
 
   const result = buildResult(selection, patches, modelError);

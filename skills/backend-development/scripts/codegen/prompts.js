@@ -58,6 +58,10 @@ export function renderEntry(step, entry, index, total) {
     out.push('');
     out.push('Test first: transcribe the name VERBATIM, run it, get a loud failure, then write');
     out.push('the minimal logic in the aggregate or decider the failure names. Drive it only through *Ability.');
+    out.push('If green only happens after adding logic to a test-only *Ability double (an anonymous');
+    out.push('override, extra wiring) instead of the aggregate/decider itself, that is scope creep on');
+    out.push('the wrong side: the double may only call through to real production code, never stand in');
+    out.push('for logic production lacks.');
   } else {
     out.push(`  ${entry.op}  ${entry.path}`);
     if (entry.members?.length) out.push(`  members: ${entry.members.join(', ')}`);

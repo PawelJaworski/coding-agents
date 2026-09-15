@@ -652,8 +652,9 @@ function reportStaleScaffold() {
   staleScaffold.forEach((f) => console.error(`    ${f}`));
   console.error(
     `\n  These are YOURS — the generator will not touch them, and re-running it\n` +
-      `  changes nothing. Diff each against its template in scripts/codegen/runtime.js\n` +
-      `  and port the delta by hand, then record it:\n\n` +
+      `  changes nothing. Diff each against its CURRENT emitted template (the plugin's\n` +
+      `  \`content\`, not an older doc) and port the delta into the file body — the version\n` +
+      `  comment alone proves nothing. Then record it:\n\n` +
       `    node ${SKILL}/scripts/codegen --accept-scaffold\n`,
   );
 }

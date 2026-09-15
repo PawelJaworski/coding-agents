@@ -116,7 +116,9 @@ export function classifyFile({ file, currentContent, relPath }) {
       owner: 'yours',
       members: [],
       hints: [
-        `template v${onDisk} -> v${template}: port the delta from scripts/codegen/runtime.js,`,
+        `template v${onDisk} -> v${template}: port the delta into the file body — do not just`,
+        'bump the comment. Diff against the CURRENT generated `content` for this class (not an',
+        'older doc), confirm every new/changed member you copied is actually present on disk,',
         'then `codegen --accept-scaffold`. Your logic stays.',
       ],
     };

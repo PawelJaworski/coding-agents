@@ -15,7 +15,7 @@
 //      GENERATE_TEST_DATA step prompts until every constant holds data or is
 //      deliberately opted out with a trailing `// no test data` marker.
 //
-// Ownership mirrors the deciders: scaffolded once, then the project's. Data
+// Ownership mirrors aggregates/deciders: scaffolded once, then the project's. Data
 // edits are never reconciled away, and a command field without a constant is a
 // loud javac error naming the exact symbol (the generated DSL references it).
 

@@ -69,7 +69,6 @@
  * @property {string} className
  * @property {string} package
  * @property {string} handlerClassName
- * @property {string} deciderClassName
  * @property {string} abilityClassName
  * @property {string} postMapping
  * @property {string} dslMethod
@@ -171,7 +170,6 @@
  * @property {string} className
  * @property {string} package
  * @property {string} handlerClassName
- * @property {string} deciderClassName
  * @property {string} abilityClassName
  * @property {string} postMapping
  * @property {string} dslMethod

@@ -96,7 +96,7 @@ public class IssuePolicyHandler {
 public class IssuePolicyHandler {
     @PostMapping("issue-policy")
     public UUID handle(IssuePolicyCmd command) {
-        decider.check(command);
+        policyAggregate.check(command);
         return UUID.randomUUID();
     }
 }
@@ -109,7 +109,7 @@ public class IssuePolicyHandler {
   assert.ok(res);
   assert.equal(res.hasDrift, true);
   assert.equal(res.driftedMembers.length, 1);
-  assert.match(res.prompt, /decider\.check\(command\)/);
+  assert.match(res.prompt, /policyAggregate\.check\(command\)/);
   assert.match(res.prompt, /EXISTING LOGIC — do NOT rewrite/);
   assert.match(res.prompt, /REFERENCE ONLY, do not apply wholesale/);
   assert.match(res.prompt, /ONLY exception: it no longer compiles/);

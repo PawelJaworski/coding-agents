@@ -57,7 +57,7 @@ export function renderEntry(step, entry, index, total) {
     out.push(`  spec:     ${entry.spec}`);
     out.push('');
     out.push('Test first: transcribe the name VERBATIM, run it, get a loud failure, then write');
-    out.push('the minimal logic in the decider the failure names. Drive it only through *Ability.');
+    out.push('the minimal logic in the aggregate or decider the failure names. Drive it only through *Ability.');
   } else {
     out.push(`  ${entry.op}  ${entry.path}`);
     if (entry.members?.length) out.push(`  members: ${entry.members.join(', ')}`);

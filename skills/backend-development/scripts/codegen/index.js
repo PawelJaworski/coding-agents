@@ -532,7 +532,7 @@ for (const file of files) {
   const exists = fs.existsSync(target);
   const rel = path.relative(projectRoot, target);
 
-  // `once` files are scaffolded then owned by the project (deciders, runtime).
+  // `once` files are scaffolded then owned by the project (aggregates, deciders, runtime).
   if (file.once && exists) {
     const current = fs.readFileSync(target, 'utf8');
     const onDisk = parseScaffoldVersion(current);

@@ -1,6 +1,6 @@
 // Ownership bookkeeping for `once: true` files.
 //
-// `once` files (the event-sourcing runtime, plus every *Decider) are scaffolded
+// `once` files (the event-sourcing runtime, plus aggregates/deciders) are scaffolded
 // when absent and then belong to the project forever — the generator must never
 // rewrite them, because they carry hand-written business logic.
 //

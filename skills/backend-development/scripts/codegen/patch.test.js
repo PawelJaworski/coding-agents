@@ -131,7 +131,7 @@ test('the GWT patch keeps the scenario name verbatim and names its spec file', (
   ]);
 });
 
-test('a business rule is routed to the command decider, not to a read model', () => {
+test('a business rule is routed to the command aggregate, not to a read model', () => {
   const doc = buildGwtPatch([
     {
       kind: 'business-rule',

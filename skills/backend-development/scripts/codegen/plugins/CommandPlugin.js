@@ -115,7 +115,7 @@ function commandHandler(c, e, ctx, aggregate) {
 // overloaded per command type — Java resolves the right one from the
 // argument's static type, so a second command targeting the same aggregate
 // is a new overload, not a new class. One accessor per [bracketed] field,
-// same seam a per-command decider used to provide.
+// same seam the previous per-command decision helper used to provide.
 
 function commandAggregate(aggregate, entries, ctx) {
   const seenFields = new Map(); // field.name -> { commandId, javaType }

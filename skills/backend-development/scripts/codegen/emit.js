@@ -28,19 +28,18 @@ import naming from './naming.js';
 //   PRESERVED-BY-HAND: why  that a conflict was resolved deliberately. The only way
 //                           to close an UPDATE; without it the entry recurs forever.
 
-// Deciders are `once`, so they carry the same drift marker as the runtime.
-// Bump DECIDER_SCAFFOLD_VERSION only if the SHAPE of a scaffolded decider
-// changes (not when the model gains a field — a missing stub is already a loud
-// javac error naming the exact method).
-//   v2 - command deciders gained the always-present `check(cmd)` precondition seam.
-export const DECIDER_SCAFFOLD_VERSION = 2;
+// Aggregates/deciders are `once`, so they carry the same drift marker as the runtime.
+// Bump SCAFFOLD_VERSION only if the SHAPE of a scaffolded once-file changes
+// (not when the model gains a field — a missing stub is already a loud javac error
+// naming the exact method).
+export const SCAFFOLD_VERSION = 1;
 
 // `SCAFFOLDED ONCE` and `scaffold-version:` are both parsed (scaffold.js), so this
 // header is machinery, not commentary. The third line is the one thing a reader
 // cannot derive from the class itself: what belongs in it.
 const ONCE_HEADER = (what) =>
   `// SCAFFOLDED ONCE by scripts/codegen — this file is YOURS.\n` +
-  `// scaffold-version: ${DECIDER_SCAFFOLD_VERSION}\n` +
+  `// scaffold-version: ${SCAFFOLD_VERSION}\n` +
   `// Hand-written logic for ${what}: business rules in check(), one decision per\n` +
   `// [bracketed] field. Drive both in with a test.\n`;
 
@@ -55,9 +54,8 @@ export const components = (fields) => fields.map((f) => `${f.javaType} ${f.name}
 // knows only three things about one: what to declare as a field, how a TEST
 // instantiates it, and (optionally) a file to scaffold for it.
 //
-// It deliberately does NOT know what the dependency MEANS. "Decider" is not a
-// concept here — it is merely the collaborator the [bracket] convention happens
-// to produce today. A validator, a clock, a sequence or an ID generator would be
+// It deliberately does NOT know what the dependency MEANS. A validator, a clock,
+// a sequence or an ID generator would be
 // added as another producer of this same shape, touching no emitter and no
 // call site, because every emitter below consumes the LIST, never a named flag.
 //
@@ -65,7 +63,8 @@ export const components = (fields) => fields.map((f) => `${f.javaType} ${f.name}
 //                      derives the ctor signature from declaration order)
 //   className          declared type
 //   testInstantiation  expression a *Ability uses to build/obtain it. Varies by
-//                      kind — `new FooDecider()` for a fresh instance, a shared
+//                      kind — `FooAggregateAbility.INSTANCE` for a shared aggregate,
+//                      `new FooDecider()` for a fresh projection decider, a shared
 //                      static like `FooAbility.FOO_REPOSITORY` for a registered
 //                      one — which is exactly why this is per-collaborator data
 //                      and not a rule baked into the ability emitter.
@@ -191,7 +190,7 @@ public record ${c.className}(${components(c.fields)}) {
   };
 }
 
-function commandHandler(c, e, base) {
+function commandHandler(c, e, base, aggregate) {
   const args = [];
   const extraImports = [];
 
@@ -201,19 +200,18 @@ function commandHandler(c, e, base) {
     testInstantiation: 'EventStreamAbility.INSTANCE',
     imports: [`${base}.eventstream.EventStream`],
   });
-  // Produced by the [bracket] convention, consumed as a plain collaborator.
-  const decider = collaborator({
-    fieldName: 'decider',
-    className: c.deciderClassName,
-    testInstantiation: `new ${c.deciderClassName}()`,
-    scaffold: () => commandDecider(c, e),
+  const aggregateCollaborator = collaborator({
+    fieldName: aggregate.fieldName,
+    className: aggregate.className,
+    testInstantiation: `${aggregate.abilityClassName}.INSTANCE`,
+    imports: [`${aggregate.package}.${aggregate.className}`],
   });
 
   for (const f of e.fields) {
     const r = resolveArg(f, {
       sourceFields: c.fields,
       sourceExpr: 'command',
-      delegate: decider,
+      delegate: aggregateCollaborator,
     });
     if (!r) {
       throw new Error(
@@ -225,12 +223,7 @@ function commandHandler(c, e, base) {
     args.push(r.expr);
   }
 
-  // The decider is wired in ALWAYS, not only when a [bracket] delegates to it. It is
-  // the single seam where this command's hand-written logic lives — preconditions from
-  // business-rules-raw.md as well as [bracketed] decisions. Making the seam a
-  // by-product of bracket syntax would leave a rule on an unbracketed command with
-  // nowhere to go but a generated file or the model itself, and both are forbidden.
-  const collaborators = [eventStream, decider];
+  const collaborators = [eventStream, aggregateCollaborator];
 
   const imports = importBlock([
     'java.util.List',
@@ -269,7 +262,7 @@ ${fieldDeclarations(collaborators)}
     @PostMapping("${c.postMapping}")
     @Override
     public UUID handle(@RequestBody ${c.className} command) {
-        decider.check(command);
+        ${aggregate.fieldName}.check(command);
         var aggregateId = UUID.randomUUID();
         eventStream.append(List.of(new ${e.className}(
                 aggregateId,
@@ -282,42 +275,77 @@ ${argList})));
   };
 }
 
-function commandDecider(c, e) {
-  const decided = e.fields.filter((f) => f.bracketed && !f.convention);
-  const methods = decided
-    .map(
-      (f) => `    public ${f.javaType} ${f.name}() {
+function commandAggregate(aggregate, entries) {
+  const seenFields = new Map();
+  const methods = [];
+  const commandImports = [];
+  const decisionImports = [];
+
+  for (const { c, e } of entries) {
+    commandImports.push(`${c.package}.${c.className}`);
+    methods.push(`    public void check(${c.className} command) {
+    }`);
+
+    for (const f of e.fields.filter((it) => it.bracketed && !it.convention)) {
+      const seen = seenFields.get(f.name);
+      if (seen && seen.javaType !== f.javaType) {
+        throw new Error(
+          `Model gap: aggregate "${aggregate.className}" gets "[${f.label}]" from both ` +
+            `"${seen.commandId}" (${seen.javaType}) and "${c.id}" (${f.javaType}) with ` +
+            `incompatible types. Give the fields distinct labels.`,
+        );
+      }
+      if (seen) continue;
+      seenFields.set(f.name, { commandId: c.id, javaType: f.javaType });
+      decisionImports.push(...f.imports);
+      methods.push(`    public ${f.javaType} ${f.name}() {
         throw new UnsupportedOperationException(
                 "[${f.label}] on event '${e.id}' is a business decision with no GWT scenario yet");
-    }`,
-    )
-    .join('\n\n');
-  // Always emitted, always empty. "No rule yet" is a legitimate steady state, so this
-  // does NOT throw — unlike a [bracketed] decision, which is loudly unimplemented.
-  // Business rules constraining this command become guard clauses here, driven in by a
-  // spec. The generator names no field and knows no rule: the seam is the contract.
-  const guard = `    public void check(${c.className} command) {
-    }`;
-  const body = [guard, methods].filter(Boolean).join('\n\n');
+    }`);
+    }
+  }
+
   const imports = importBlock([
     'org.springframework.stereotype.Component',
-    ...decided.flatMap((f) => f.imports),
+    ...commandImports,
+    ...decisionImports,
   ]);
   return {
-    package: c.package,
-    className: c.deciderClassName,
+    package: aggregate.package,
+    className: aggregate.className,
     once: true,
-    version: DECIDER_SCAFFOLD_VERSION,
-    content: `${ONCE_HEADER(`command "${c.id}"`)}package ${c.package};
+    version: SCAFFOLD_VERSION,
+    content: `${ONCE_HEADER(`aggregate "${aggregate.className}"`)}package ${aggregate.package};
 
 ${imports}
 
 @Component
-public class ${c.deciderClassName} {
+public class ${aggregate.className} {
 
-${body}
+${methods.join('\n\n')}
 }
 `,
+  };
+}
+
+function commandAggregateAbility(aggregate) {
+  return {
+    package: aggregate.package,
+    className: aggregate.abilityClassName,
+    test: true,
+    once: true,
+    version: SCAFFOLD_VERSION,
+    onceHint: `scaffolded once, then yours: wire the aggregate's collaborators as *Ability.INSTANCE references`,
+    content:
+      `// SCAFFOLDED ONCE by scripts/codegen — this file is YOURS.\n` +
+      `// scaffold-version: ${SCAFFOLD_VERSION}\n` +
+      `// Self-contained test wiring for the ${aggregate.className} aggregate. Every\n` +
+      `// constructor collaborator is another ability's INSTANCE, e.g.\n` +
+      `//   ${aggregate.abilityClassName}.INSTANCE = new ${aggregate.className}(SomeAbility.INSTANCE);\n` +
+      `package ${aggregate.package};\n\n` +
+      `public interface ${aggregate.abilityClassName} {\n\n` +
+      `    ${aggregate.className} INSTANCE = new ${aggregate.className}();\n` +
+      `}\n`,
   };
 }
 
@@ -442,7 +470,7 @@ function projectionDecider(rm, eventsById) {
     package: rm.package,
     className: rm.deciderClassName,
     once: true,
-    version: DECIDER_SCAFFOLD_VERSION,
+    version: SCAFFOLD_VERSION,
     content: `${ONCE_HEADER(`read model "${rm.id}"`)}package ${rm.package};
 
 ${importBlock(imports)}
@@ -1285,17 +1313,24 @@ export function emit(model) {
   ev.push(serde(model.events, base));
   ev.push(eventStreamAbility(base));
 
-  // A slice emits its owner, whatever files its collaborators bring with them,
-  // and its ability — with no branch anywhere on what KIND of collaborator it
-  // is. A new collaborator kind plugs in by being produced above; nothing here
-  // changes.
+  const commandGroups = new Map();
   for (const c of model.commands) {
     const e = eventsById.get(c.producesId);
-    const handler = commandHandler(c, e, base);
+    const key = e.aggregate;
+    if (!commandGroups.has(key)) commandGroups.set(key, []);
+    commandGroups.get(key).push({ c, e });
+  }
+
+  for (const [aggregateName, entries] of commandGroups) {
+    const aggregate = naming.aggregate(base, aggregateName);
     const cmd = files.into('commands');
-    cmd.push(command(c), handler);
-    cmd.push(...collaboratorScaffolds(handler.collaborators));
-    cmd.push(commandAbility(c, base, handler.collaborators));
+    cmd.push(commandAggregate(aggregate, entries), commandAggregateAbility(aggregate));
+
+    for (const { c, e } of entries) {
+      const handler = commandHandler(c, e, base, aggregate);
+      cmd.push(command(c), handler);
+      cmd.push(commandAbility(c, base, handler.collaborators));
+    }
   }
 
   for (const rm of model.readModels) {
@@ -1338,7 +1373,8 @@ export {
   resolveArg,
   commandHandler,
   command,
-  commandDecider,
+  commandAggregate,
+  commandAggregateAbility,
   valueObject,
   readModel,
   projector,

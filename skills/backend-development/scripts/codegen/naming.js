@@ -38,7 +38,6 @@ const naming = {
     className: `${pascal(id)}Cmd`,
     package: `${base}.${slicePackage(id)}`,
     handlerClassName: `${pascal(id)}Handler`,
-    deciderClassName: `${pascal(id)}Decider`,
     abilityClassName: `${pascal(id)}Ability`,
     postMapping: id,
     dslMethod: words(id).join('_'),

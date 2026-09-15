@@ -103,7 +103,7 @@ export function classifyFile({ file, currentContent, relPath }) {
   const preserved = preservedReason(currentContent);
   if (preserved) return null; // a declared, deliberate deviation is not work
 
-  // `once` files (deciders, runtime) are never rewritten. The only thing that can
+  // `once` files (aggregates, deciders, runtime) are never rewritten. The only thing that can
   // be stale is the scaffold TEMPLATE they were born from.
   if (file.once) {
     const onDisk = parseScaffoldVersion(currentContent);

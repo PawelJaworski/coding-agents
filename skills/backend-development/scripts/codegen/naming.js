@@ -44,6 +44,16 @@ const naming = {
     dslMethod: words(id).join('_'),
   }),
 
+  // One aggregate per <aggregate>:Id/Key name in events.md — shared by every
+  // command whose produced event carries that name. `fieldName` is the
+  // constructor-collaborator name a command handler declares it under.
+  aggregate: (base, name) => ({
+    className: `${pascal(name)}Aggregate`,
+    package: `${base}.domain`,
+    abilityClassName: `${pascal(name)}AggregateAbility`,
+    fieldName: `${camel(name)}Aggregate`,
+  }),
+
   event: (base, id) => ({
     className: `${pascal(id)}Event`,
     package: `${base}.domain.events`,

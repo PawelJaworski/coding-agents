@@ -204,7 +204,7 @@ export function buildQueue({ pendingScenarios, pendingRules }, { groovyRoot, bas
           `Delegate to backend-implement: implement the scenario "${s.scenario}" ` +
           `from <docs>/${s.file}. Write the Spock spec at \`${where}\` (the read model's ` +
           `own slice; the test method is named after the scenario verbatim), watch it fail, ` +
-          `then implement the decision in the decider the failure names.`,
+          `then implement the decision in the aggregate or projection decider the failure names.`,
       };
     }),
     ...pendingRules.map((r) => {
@@ -213,7 +213,7 @@ export function buildQueue({ pendingScenarios, pendingRules }, { groovyRoot, bas
         : null;
       const where = sub
         ? specPath(groovyRoot, base, sub.slice, sub.specClass)
-        : `${groovyRoot}/<command-slice>/<Command>Spec.groovy  (could not map "${r.rule}" to a command unambiguously — pick the command whose Decider it constrains, name the spec after the rule verbatim, and place it in that command's slice)`;
+        : `${groovyRoot}/<command-slice>/<Command>Spec.groovy  (could not map "${r.rule}" to a command unambiguously — pick the command whose Aggregate it constrains, name the spec after the rule verbatim, and place it in that command's slice)`;
       return {
         kind: 'business-rule',
         detail: r,
@@ -221,7 +221,7 @@ export function buildQueue({ pendingScenarios, pendingRules }, { groovyRoot, bas
           `Delegate to backend-implement: enforce the business rule "${r.rule}" verbatim. ` +
           `Write the Spock spec at \`${where}\` (the command's own slice; the test method ` +
           `is named after the rule verbatim), then add the guard to that command's ` +
-          `Decider.check().`,
+          `Aggregate.check().`,
       };
     }),
   ];

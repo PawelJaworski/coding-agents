@@ -13,7 +13,7 @@ export function createDebugLogger({ enabled, projectRoot, nested = false, argv =
   const file = path.join(projectRoot, DEBUG_LOG_PATH);
   if (!enabled) {
     if (!nested && fs.existsSync(file)) fs.unlinkSync(file);
-    return { log() {} };
+    return { log() {}, prompt() {} };
   }
 
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -23,6 +23,12 @@ export function createDebugLogger({ enabled, projectRoot, nested = false, argv =
   return {
     log(step, details) {
       fs.appendFileSync(file, `\n## ${step}${renderDetails(details)}\n`);
+    },
+    // Logs the exact, unescaped text handed to the agent — readable as-is,
+    // not JSON-escaped the way log() renders structured details.
+    prompt(label, text) {
+      if (text === null || text === undefined) return;
+      fs.appendFileSync(file, `\n## PROMPT: ${label}\n\`\`\`\n${text}\n\`\`\`\n`);
     },
   };
 }

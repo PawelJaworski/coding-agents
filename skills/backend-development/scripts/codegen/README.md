@@ -84,9 +84,13 @@ one restricted to the minimal edit that turns a red build green.
 
 Only `basePackage` is required. Set `debugCodeGen` to `true` to replace
 `.codegen/codegen-debug.log` at the start of each top-level invocation and record the
-codegen phases, selected workflow step, and exact prompt returned to the agent. The
-nested patch refresh performed by `--next` is appended to that same invocation log.
-Setting it to `false` removes a stale debug log on the next invocation.
+codegen phases, selected workflow step, and exact prompt returned to the agent. Every
+generated prompt (model errors, generator/verify failures, and each `GENERATE_*` /
+`--prompt` step) is additionally logged verbatim, unescaped, in its own fenced
+` ## PROMPT: <step> ` block — read that block, not the JSON `SELECT_STEP` entry, when
+you need to see exactly what an agent was shown. The nested patch refresh performed by
+`--next` is appended to that same invocation log. Setting it to `false` removes a stale
+debug log on the next invocation.
 
 ## Model grammar
 

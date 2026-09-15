@@ -57,6 +57,31 @@ test('disabled debug logging removes a stale top-level log', () => {
 
   const logger = createDebugLogger({ enabled: false, projectRoot, argv: [] });
   logger.log('PARSE_MODEL');
+  logger.prompt('GENERATE_COMMANDS', 'some prompt');
 
   assert.equal(fs.existsSync(file), false);
+});
+
+test('prompt() writes the exact, unescaped prompt text in a fenced block', () => {
+  const projectRoot = tempProject();
+  const logger = createDebugLogger({ enabled: true, projectRoot, argv: ['--next'] });
+
+  const promptText = 'Line one.\nLine two with "quotes" and a trailing note.';
+  logger.prompt('GENERATE_COMMANDS', promptText);
+
+  const content = fs.readFileSync(path.join(projectRoot, DEBUG_LOG_PATH), 'utf8');
+  assert.match(content, /## PROMPT: GENERATE_COMMANDS/);
+  assert.match(content, /```\nLine one\.\nLine two with "quotes" and a trailing note\.\n```/);
+});
+
+test('prompt() is a no-op for a null or undefined prompt', () => {
+  const projectRoot = tempProject();
+  const file = path.join(projectRoot, DEBUG_LOG_PATH);
+  const logger = createDebugLogger({ enabled: true, projectRoot, argv: ['--next'] });
+
+  logger.prompt('DONE', null);
+  logger.prompt('DONE', undefined);
+
+  const content = fs.readFileSync(file, 'utf8');
+  assert.doesNotMatch(content, /## PROMPT/);
 });

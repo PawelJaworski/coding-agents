@@ -188,6 +188,7 @@ try {
       remaining: 0,
     };
     debug.log('SELECT_STEP', result);
+    debug.prompt('MODEL_ERROR', result.next.prompt);
     printResult(result);
     process.exit(1);
   }
@@ -320,6 +321,7 @@ if (promptMode) {
   const patch = category ? loadPatch(projectRoot, category) : null;
   const result = buildStep(step, patch, item);
   debug.log('PROMPT', { step, item: result.item, prompt: result.prompt });
+  debug.prompt(step, result.prompt);
 
   if (json) console.log(JSON.stringify(result, null, 2));
   else console.log(`\n${result.prompt}\n`);
@@ -461,6 +463,7 @@ if (nextMode) {
         remaining: 0,
       };
       debug.log('SELECT_STEP', errResult);
+      debug.prompt('RUN_CODEGEN_FAILED', errResult.next.prompt);
       printResult(errResult);
       process.exit(1);
     }
@@ -487,6 +490,7 @@ if (nextMode) {
         remaining: 0,
       };
       debug.log('SELECT_STEP', errResult);
+      debug.prompt('VERIFY_FAILED', errResult.next.prompt);
       printResult(errResult);
       process.exit(1);
     }
@@ -499,6 +503,7 @@ if (nextMode) {
     remaining: result.remaining,
     prompt: result.next?.prompt ?? null,
   });
+  debug.prompt(result.step, result.next?.prompt ?? null);
 
   printResult(result);
 

@@ -75,13 +75,18 @@ one restricted to the minimal edit that turns a red build green.
 ```json
 {
   "basePackage": "com.example.myapp",
+  "debugCodeGen": false,
   "modelDir": "../docs",
   "mainSourceRoot": "src/main/java",
   "testSourceRoot": "src/test/java"
 }
 ```
 
-Only `basePackage` is required.
+Only `basePackage` is required. Set `debugCodeGen` to `true` to replace
+`.codegen/codegen-debug.log` at the start of each top-level invocation and record the
+codegen phases, selected workflow step, and exact prompt returned to the agent. The
+nested patch refresh performed by `--next` is appended to that same invocation log.
+Setting it to `false` removes a stale debug log on the next invocation.
 
 ## Model grammar
 

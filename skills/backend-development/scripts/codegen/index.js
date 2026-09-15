@@ -40,6 +40,7 @@ import {
   pendingEntries,
   loadPatch,
 } from './prompts.js';
+import { createDebugLogger, DEBUG_LOG_PATH } from './debug-log.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
@@ -111,6 +112,19 @@ const modelDir = path.resolve(projectRoot, flag('model') || config.modelDir);
 const mainRoot = path.resolve(projectRoot, config.mainSourceRoot);
 const testRoot = path.resolve(projectRoot, config.testSourceRoot);
 const groovyTestRoot = path.resolve(projectRoot, config.groovyTestSourceRoot);
+const debug = createDebugLogger({
+  enabled: config.debugCodeGen === true,
+  projectRoot,
+  nested: process.env.CODEGEN_DEBUG_NESTED === '1',
+  argv: args,
+});
+debug.log('CONFIG', {
+  projectRoot,
+  modelDir,
+  mainSourceRoot: config.mainSourceRoot,
+  testSourceRoot: config.testSourceRoot,
+  groovyTestSourceRoot: config.groovyTestSourceRoot,
+});
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -148,15 +162,19 @@ if (path.resolve(testRoot) !== path.resolve(groovyTestRoot)) {
 let files;
 let model;
 try {
+  debug.log('PARSE_MODEL');
   model = parseModel({ modelDir, basePackage: config.basePackage });
   if (json && !nextMode && !patchMode && !promptMode) {
+    debug.log('MODEL_JSON', { domains: model.domains?.length ?? 0 });
     console.log(JSON.stringify(model, null, 2));
     process.exit(0);
   }
   files = emitWithPlugins(model);
+  debug.log('EMIT_MODEL', { files: files.length });
 } catch (err) {
+  debug.log('MODEL_ERROR', err.message);
   if (nextMode || promptMode) {
-    printResult({
+    const result = {
       state: 'MODEL_ERROR',
       step: 'MODEL_ERROR',
       next: {
@@ -167,7 +185,9 @@ try {
           `development-report.md.`,
       },
       remaining: 0,
-    });
+    };
+    debug.log('SELECT_STEP', result);
+    printResult(result);
     process.exit(1);
   }
   die(`MODEL ERROR  ${err.message}`);
@@ -178,6 +198,7 @@ try {
 // ---------------------------------------------------------------------------
 
 if (patchMode) {
+  debug.log('PATCH_START');
   const entries = [];
   for (const file of files) {
     const root = file.test ? testRoot : mainRoot;
@@ -230,6 +251,7 @@ if (patchMode) {
     fs.writeFileSync(path.join(outDir, name), `${JSON.stringify(doc, null, 2)}\n`);
     summary.push({ category, file: `${PATCH_DIR}/${name}`, ...doc.summary });
   }
+  debug.log('PATCH_RESULT', summary);
 
   if (json) {
     console.log(JSON.stringify({ patchDir: PATCH_DIR, patches: summary }, null, 2));
@@ -255,6 +277,7 @@ if (patchMode) {
 // ---------------------------------------------------------------------------
 
 if (testMode) {
+  debug.log('STEP_MACHINE', { steps: STEPS });
   console.log('\n  Backend Development — Step Machine\n');
   console.log('  codegen --next  ->  do the ONE prompt  ->  codegen --next  ->  ...\n');
   console.log('  The diff is scripted (codegen --patch). The agent only applies one entry.\n');
@@ -295,6 +318,7 @@ if (promptMode) {
   const category = CATEGORY_OF[step];
   const patch = category ? loadPatch(projectRoot, category) : null;
   const result = buildStep(step, patch, item);
+  debug.log('PROMPT', { step, item: result.item, prompt: result.prompt });
 
   if (json) console.log(JSON.stringify(result, null, 2));
   else console.log(`\n${result.prompt}\n`);
@@ -307,10 +331,12 @@ if (promptMode) {
 
 function refreshPatches() {
   const script = path.join(projectRoot, SKILL, 'scripts/codegen');
+  debug.log('REFRESH_PATCHES', { command: `node ${SKILL}/scripts/codegen --patch --json` });
   const res = spawnSync('node', [script, '--patch', '--json'], {
     cwd: projectRoot,
     encoding: 'utf8',
     timeout: 30_000,
+    env: { ...process.env, CODEGEN_DEBUG_NESTED: '1' },
   });
   if (res.status !== 0) {
     return { modelError: (res.stderr || res.stdout || 'unknown model error').trim() };
@@ -402,6 +428,12 @@ if (nextMode) {
     hasReport: fs.existsSync(path.join(projectRoot, 'development-report.md')),
   });
   const result = buildResult(selection, patches, modelError);
+  debug.log('SELECT_STEP', {
+    state: result.state,
+    step: result.step,
+    remaining: result.remaining,
+    prompt: result.next?.prompt ?? null,
+  });
 
   printResult(result);
 
@@ -413,6 +445,7 @@ if (nextMode) {
 // Default: regenerate code from model
 // ---------------------------------------------------------------------------
 
+debug.log('GENERATE_START', { files: files.length });
 const written = [];
 const preserved = [];
 const stale = [];
@@ -606,6 +639,13 @@ function reportAdvisoryDrifts() {
 }
 
 if (checkOnly) {
+  debug.log('CHECK_RESULT', {
+    stale,
+    staleScaffold,
+    staleGenerated,
+    needsManualMerge,
+    advisoryDrifts: advisoryDrifts.map((item) => item.relPath),
+  });
   if (stale.length) {
     console.error(`\n  OUT OF DATE  ${stale.length} generated file(s) differ from the model:`);
     stale.forEach((f) => console.error(`    ${f}`));
@@ -640,6 +680,14 @@ console.log(
   `\n  ${written.length} written, ${preserved.length} preserved, ` +
     `${files.length - written.length - preserved.length} unchanged`,
 );
+debug.log('GENERATE_RESULT', {
+  written,
+  preserved,
+  staleScaffold,
+  staleGenerated,
+  needsManualMerge,
+  debugLog: DEBUG_LOG_PATH,
+});
 if (staleGenerated.length) {
   reportStaleGenerated();
   process.exit(1);

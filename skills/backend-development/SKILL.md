@@ -86,3 +86,5 @@ Rewriting a method body is allowed and needs no marker — bodies are yours, the
 is the generator's. A *structural* deviation (a new type, a renamed field) needs
 `// PRESERVED-BY-HAND: <reason>`, which is also the only way to close an `UPDATE`.
 Which is which: `reference/edit-classification.md`.
+
+## During code generation NEVER change code generator js files

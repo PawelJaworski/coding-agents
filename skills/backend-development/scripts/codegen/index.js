@@ -407,26 +407,67 @@ function printResult(result) {
 
 if (nextMode) {
   // Refresh patches automatically
-  const { modelError } = refreshPatches();
+  let { modelError } = refreshPatches();
 
   // Load patches from disk
-  const patches = {};
-  for (const step of GENERATE_STEPS) {
-    const category = CATEGORY_OF[step];
-    const file = path.join(projectRoot, PATCH_DIR, `${category}-patch.json`);
-    if (!fs.existsSync(file)) continue;
-    try {
-      patches[category] = JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
-      /* a corrupt patch is treated as absent; the next --patch rewrites it */
+  function loadPatches() {
+    const p = {};
+    for (const step of GENERATE_STEPS) {
+      const category = CATEGORY_OF[step];
+      const file = path.join(projectRoot, PATCH_DIR, `${category}-patch.json`);
+      if (!fs.existsSync(file)) continue;
+      try {
+        p[category] = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch {
+        /* a corrupt patch is treated as absent; the next --patch rewrites it */
+      }
     }
+    return p;
   }
 
-  const selection = selectStep({
+  let patches = loadPatches();
+
+  let selection = selectStep({
     modelError,
     patches,
     hasReport: fs.existsSync(path.join(projectRoot, 'development-report.md')),
   });
+
+  // When auto:true entries exist, the generator's own work must run first.
+  // Auto-run it here so the agent never has to remember to loop.
+  if (selection.step === 'RUN_CODEGEN' && !modelError) {
+    debug.log('AUTO_RUN_CODEGEN');
+    const script = path.join(projectRoot, SKILL, 'scripts/codegen');
+    const res = spawnSync('node', [script], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 120_000,
+      env: { ...process.env, CODEGEN_DEBUG_NESTED: '1' },
+    });
+    if (res.status !== 0) {
+      const errResult = {
+        state: 'MODEL_ERROR',
+        step: 'MODEL_ERROR',
+        next: {
+          detail: (res.stderr || res.stdout || 'unknown generator error').trim(),
+          prompt: `The generator failed:\n${res.stderr || res.stdout || 'unknown generator error'}`,
+        },
+        remaining: 0,
+      };
+      debug.log('SELECT_STEP', errResult);
+      printResult(errResult);
+      process.exit(1);
+    }
+    // Re-refresh patches after running the generator, then re-select.
+    ({ modelError } = refreshPatches());
+    patches = loadPatches();
+    selection = selectStep({
+      modelError,
+      patches,
+      hasReport: fs.existsSync(path.join(projectRoot, 'development-report.md')),
+    });
+  }
+
   const result = buildResult(selection, patches, modelError);
   debug.log('SELECT_STEP', {
     state: result.state,

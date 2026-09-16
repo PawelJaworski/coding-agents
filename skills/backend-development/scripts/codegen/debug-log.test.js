@@ -9,11 +9,11 @@ function tempProject() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codegen-debug-'));
 }
 
-test('top-level codegen replaces the previous debug log', () => {
+test('top-level codegen appends to the existing debug log', () => {
   const projectRoot = tempProject();
   const file = path.join(projectRoot, DEBUG_LOG_PATH);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, 'old session');
+  fs.writeFileSync(file, '# Backend codegen debug\n\nold session\n');
 
   const logger = createDebugLogger({
     enabled: true,
@@ -23,7 +23,8 @@ test('top-level codegen replaces the previous debug log', () => {
   logger.log('SELECT_STEP', { step: 'VERIFY' });
 
   const content = fs.readFileSync(file, 'utf8');
-  assert.doesNotMatch(content, /old session/);
+  assert.match(content, /old session/);
+  assert.match(content, /# Invocation/);
   assert.match(content, /--next --json/);
   assert.match(content, /SELECT_STEP/);
   assert.match(content, /"step": "VERIFY"/);
@@ -49,17 +50,17 @@ test('nested codegen appends to the current debug log', () => {
   assert.match(content, /PATCH_RESULT/);
 });
 
-test('disabled debug logging removes a stale top-level log', () => {
+test('disabled debug logging leaves an existing log untouched', () => {
   const projectRoot = tempProject();
   const file = path.join(projectRoot, DEBUG_LOG_PATH);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, 'stale debug session');
+  fs.writeFileSync(file, 'existing debug session');
 
   const logger = createDebugLogger({ enabled: false, projectRoot, argv: [] });
   logger.log('PARSE_MODEL');
   logger.prompt('GENERATE_COMMANDS', 'some prompt');
 
-  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'existing debug session');
 });
 
 test('prompt() writes the exact, unescaped prompt text in a fenced block', () => {

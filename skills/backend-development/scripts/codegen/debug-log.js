@@ -11,14 +11,14 @@ function renderDetails(details) {
 
 export function createDebugLogger({ enabled, projectRoot, nested = false, argv = [] }) {
   const file = path.join(projectRoot, DEBUG_LOG_PATH);
-  if (!enabled) {
-    if (!nested && fs.existsSync(file)) fs.unlinkSync(file);
-    return { log() {}, prompt() {} };
-  }
+  if (!enabled) return { log() {}, prompt() {} };
 
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const header = `# Backend codegen debug\n\ncommand: node scripts/codegen ${argv.join(' ')}\n`;
-  fs.writeFileSync(file, header, { flag: nested ? 'a' : 'w' });
+  if (!fs.existsSync(file)) fs.writeFileSync(file, '# Backend codegen debug\n');
+  fs.appendFileSync(
+    file,
+    `\n# Invocation${nested ? ' (nested)' : ''}\n\ncommand: node scripts/codegen ${argv.join(' ')}\n`,
+  );
 
   return {
     log(step, details) {

@@ -123,20 +123,14 @@ def setup() {
 }
 ```
 
-## Self-contained abilities — where decider dependencies are wired
+## Handler decisions
 
-The generated `*Ability` never constructs a decider: it references
-`<Command>DeciderAbility.INSTANCE` (scaffolded once, yours). To give the decider a new
-constructor collaborator:
-
-1. Create the collaborator's own ability (`XAbility` in `src/test/java/...`) holding its
-   `INSTANCE` — plus `static reset()` if it is mutable.
-2. Edit the decider ability's `INSTANCE = new XDecider(SomeAbility.INSTANCE);` line.
-3. Done — no generated file changes, `--check` stays green, and the decider needs no
-   no-arg constructor.
-
-The generated handler calls `decider.policyNumber()` with no arguments — keep that method
-signature, or the generated caller breaks (see the trap above).
+A bracketed command decision starts as a private handler method. Keep its generated
+signature because the generated event construction calls it directly. Use collaborators
+the handler already owns. If correct behavior requires a new collaborator that generated
+test wiring cannot supply, report that wiring gap; do not edit a generated ability and
+do not move infrastructure into an aggregate. Aggregates are plain state hydrated only
+from their own event history.
 
 ## Verify
 

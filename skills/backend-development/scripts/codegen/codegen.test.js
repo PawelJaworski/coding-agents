@@ -19,7 +19,7 @@ import {
   resolveArg,
   commandHandler,
   command,
-  commandAggregate,
+  aggregate,
   valueObject,
   projector,
   readModelEntity,
@@ -52,8 +52,6 @@ test('aggregate naming', () => {
   const a = naming.aggregate(BASE, 'policy');
   assert.equal(a.className, 'PolicyAggregate');
   assert.equal(a.package, `${BASE}.domain`);
-  assert.equal(a.abilityClassName, 'PolicyAggregateAbility');
-  assert.equal(a.fieldName, 'policyAggregate');
 });
 
 test('event naming', () => {
@@ -367,12 +365,13 @@ test('only Groovy specs are flagged as misplaced', () => {
 // that NOTHING below mentions a decider, a repository or any other specific
 // kind — a new kind must work by construction, not by adding a branch.
 
-const AGGREGATE = collaborator({
-  fieldName: 'policyAggregate',
-  className: 'PolicyAggregate',
-  testInstantiation: 'PolicyAggregateAbility.INSTANCE',
-  scaffold: () => ({ className: 'PolicyAggregate', once: true }),
+const CLOCK = collaborator({
+  fieldName: 'clock',
+  className: 'Clock',
+  testInstantiation: 'Clock.systemUTC()',
+  scaffold: () => ({ className: 'Clock', once: true }),
 });
+const HANDLER = { fieldName: 'this' };
 
 const EVENT_STREAM = collaborator({
   fieldName: 'eventStream',
@@ -397,9 +396,9 @@ test('field declarations are emitted in order, one per collaborator', () => {
   // Order matters: Lombok derives the constructor signature from declaration
   // order, and the generated abilities call that exact signature positionally.
   assert.equal(
-    fieldDeclarations([EVENT_STREAM, AGGREGATE]),
+    fieldDeclarations([EVENT_STREAM, CLOCK]),
     '    private final EventStream eventStream;\n' +
-      '    private final PolicyAggregate policyAggregate;',
+      '    private final Clock clock;',
   );
 });
 
@@ -408,35 +407,35 @@ test('a single collaborator emits no stray separator', () => {
 });
 
 test('constructor args use each collaborator\'s own instantiation form', () => {
-  // The whole reason this is per-collaborator DATA and not a rule: an aggregate
-  // and a repository are different shared statics. Both are ordinary
+  // The whole reason this is per-collaborator DATA and not a rule: a clock
+  // and a repository have different construction expressions. Both are ordinary
   // collaborators; only their strings differ.
   assert.equal(
-    constructorArgs([REPOSITORY, AGGREGATE]),
-    'PolicyListProjectorAbility.POLICY_LIST_REPOSITORY, PolicyAggregateAbility.INSTANCE',
+    constructorArgs([REPOSITORY, CLOCK]),
+    'PolicyListProjectorAbility.POLICY_LIST_REPOSITORY, Clock.systemUTC()',
   );
   assert.equal(
-    constructorArgs([EVENT_STREAM, AGGREGATE]),
-    'EventStreamAbility.INSTANCE, PolicyAggregateAbility.INSTANCE',
+    constructorArgs([EVENT_STREAM, CLOCK]),
+    'EventStreamAbility.INSTANCE, Clock.systemUTC()',
   );
 });
 
 test('constructor args and field declarations agree on arity and order', () => {
-  const cs = [EVENT_STREAM, AGGREGATE, REPOSITORY];
+  const cs = [EVENT_STREAM, CLOCK, REPOSITORY];
   assert.equal(constructorArgs(cs).split(', ').length, fieldDeclarations(cs).split('\n').length);
   assert.equal(constructorArgs([]), '');
   assert.equal(fieldDeclarations([]), '');
 });
 
 test('collaborator imports are collected, including from same-package kinds that have none', () => {
-  assert.deepEqual(collaboratorImports([EVENT_STREAM, AGGREGATE]), [`${BASE}.eventstream.EventStream`]);
-  assert.deepEqual(collaboratorImports([AGGREGATE, REPOSITORY]), []);
+  assert.deepEqual(collaboratorImports([EVENT_STREAM, CLOCK]), [`${BASE}.eventstream.EventStream`]);
+  assert.deepEqual(collaboratorImports([CLOCK, REPOSITORY]), []);
 });
 
 test('only collaborators carrying a scaffold contribute a file', () => {
-  const files = collaboratorScaffolds([EVENT_STREAM, AGGREGATE, REPOSITORY]);
+  const files = collaboratorScaffolds([EVENT_STREAM, CLOCK, REPOSITORY]);
   assert.equal(files.length, 1);
-  assert.equal(files[0].className, 'PolicyAggregate');
+  assert.equal(files[0].className, 'Clock');
   assert.deepEqual(collaboratorScaffolds([EVENT_STREAM, REPOSITORY]), []);
 });
 
@@ -450,20 +449,20 @@ test('an arbitrary NEW collaborator kind needs no generator change', () => {
     imports: [`${BASE}.validation.IssuePolicyValidator`],
     scaffold: () => ({ className: 'IssuePolicyValidator', once: true }),
   });
-  const cs = [EVENT_STREAM, validator, AGGREGATE];
+  const cs = [EVENT_STREAM, validator, CLOCK];
   assert.equal(
     fieldDeclarations(cs),
     '    private final EventStream eventStream;\n' +
       '    private final IssuePolicyValidator validator;\n' +
-      '    private final PolicyAggregate policyAggregate;',
+      '    private final Clock clock;',
   );
   assert.equal(
     constructorArgs(cs),
-    'EventStreamAbility.INSTANCE, new IssuePolicyValidator(), PolicyAggregateAbility.INSTANCE',
+    'EventStreamAbility.INSTANCE, new IssuePolicyValidator(), Clock.systemUTC()',
   );
   assert.deepEqual(collaboratorScaffolds(cs).map((f) => f.className), [
     'IssuePolicyValidator',
-    'PolicyAggregate',
+    'Clock',
   ]);
 });
 
@@ -474,7 +473,7 @@ const field = (over = {}) => ({ name: 'policyNumber', label: 'policy number', im
 test('a convention field resolves to its expression, never to a collaborator', () => {
   const r = resolveArg(
     field({ convention: 'uuid', conventionExpr: 'UUID.randomUUID()', imports: ['java.util.UUID'] }),
-    { sourceFields: [], sourceExpr: 'command', delegate: AGGREGATE },
+    { sourceFields: [], sourceExpr: 'command', delegate: HANDLER },
   );
   assert.equal(r.expr, 'UUID.randomUUID()');
   assert.ok(!r.delegated);
@@ -484,7 +483,7 @@ test('a passthrough field is derived from the source, not delegated', () => {
   const r = resolveArg(field({ name: 'policyHolder' }), {
     sourceFields: [{ name: 'policyHolder' }],
     sourceExpr: 'command',
-    delegate: AGGREGATE,
+    delegate: HANDLER,
   });
   assert.equal(r.expr, 'command.policyHolder()');
   assert.ok(!r.delegated);
@@ -496,9 +495,9 @@ test('a bracketed field delegates to the collaborator by FIELD NAME, not by type
   const r = resolveArg(field({ bracketed: true }), {
     sourceFields: [],
     sourceExpr: 'command',
-    delegate: AGGREGATE,
+    delegate: HANDLER,
   });
-  assert.equal(r.expr, 'policyAggregate.policyNumber()');
+  assert.equal(r.expr, 'this.policyNumber()');
   assert.ok(r.delegated);
 
   const viaOther = resolveArg(field({ bracketed: true }), {
@@ -513,14 +512,14 @@ test('delegate args are passed through when the caller supplies them', () => {
   const r = resolveArg(field({ bracketed: true }), {
     sourceFields: [],
     sourceExpr: 'event',
-    delegate: { ...AGGREGATE, args: 'state, event' },
+    delegate: { ...HANDLER, args: 'state, event' },
   });
-  assert.equal(r.expr, 'policyAggregate.policyNumber(state, event)');
+  assert.equal(r.expr, 'this.policyNumber(state, event)');
 });
 
 test('an unresolvable field returns null so the caller can raise a model gap', () => {
   assert.equal(
-    resolveArg(field(), { sourceFields: [], sourceExpr: 'command', delegate: AGGREGATE }),
+    resolveArg(field(), { sourceFields: [], sourceExpr: 'command', delegate: HANDLER }),
     null,
   );
 });
@@ -529,41 +528,26 @@ test('a fallback resolves what the source cannot supply', () => {
   const r = resolveArg(field(), {
     sourceFields: [],
     sourceExpr: 'event',
-    delegate: AGGREGATE,
+    delegate: HANDLER,
     fallback: (f) => `state == null ? null : state.${f.name}()`,
   });
   assert.equal(r.expr, 'state == null ? null : state.policyNumber()');
 });
 
-// --- the command's logic seam ------------------------------------------------
-// A business rule constrains a command, not a field, so it cannot depend on the
-// [bracket] convention. These pin the seam down: it must exist for EVERY command,
-// or a rule on an unbracketed command has nowhere to live but a generated file or
-// the model — and both are forbidden during development.
+// --- command-owned decisions and aggregate state -----------------------------
 
 const cmdField = (label, javaType = 'String') => ({ ...parseField(label), javaType, imports: [] });
 
-test('a command with NO bracketed field still gets its aggregate seam', () => {
-  const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
-  const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
-  const aggregate = naming.aggregate(BASE, 'policy');
-
-  const handler = commandHandler(c, e, BASE, aggregate);
-  assert.match(handler.content, /private final PolicyAggregate policyAggregate;/);
-  assert.match(handler.content, /policyAggregate\.check\(command\);/);
-});
-
-test('check() is emitted empty — "no rule yet" is a legitimate state, unlike an undecided [bracket]', () => {
+test('a command with NO bracketed field injects only the event stream', () => {
   const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
   const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
 
-  const scaffold = commandAggregate(naming.aggregate(BASE, 'policy'), [{ c, e }]);
-  assert.match(scaffold.content, /public void check\(IssuePolicyCmd command\) \{\n    \}/);
-  assert.doesNotMatch(scaffold.content, /check[\s\S]*UnsupportedOperationException/);
-  assert.equal(scaffold.once, true);
+  const handler = commandHandler(c, e, BASE);
+  assert.match(handler.content, /private final EventStream eventStream;/);
+  assert.doesNotMatch(handler.content, /Aggregate|\.check\(command\)/);
 });
 
-test('the seam carries no field, rule or validator name from the generator', () => {
+test('a bracketed non-aggregate decision is a private throwing method in the handler', () => {
   const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
   const e = {
     ...naming.event(BASE, 'policy-issued'),
@@ -571,11 +555,25 @@ test('the seam carries no field, rule or validator name from the generator', () 
     fields: [cmdField('policy holder'), cmdField('[policy number]')],
   };
 
-  const scaffold = commandAggregate(naming.aggregate(BASE, 'policy'), [{ c, e }]);
-  // The [bracketed] decision is still stubbed loudly...
-  assert.match(scaffold.content, /public String policyNumber\(\)[\s\S]*UnsupportedOperationException/);
-  // ...but nothing about the RULES is baked in: no per-attribute guard, no validator.
-  assert.doesNotMatch(scaffold.content, /surname|notBlank|Validator|required/i);
+  const handler = commandHandler(c, e, BASE);
+  assert.match(handler.content, /policyNumber\(\)/);
+  assert.match(handler.content, /private String policyNumber\(\)[\s\S]*UnsupportedOperationException/);
+});
+
+test('an aggregate is plain state hydrated only from events in its boundary', () => {
+  const e = {
+    ...naming.event(BASE, 'policy-issued'),
+    id: 'policy-issued',
+    aggregate: 'policy',
+    fields: [cmdField('policy holder')],
+  };
+  const scaffold = aggregate('policy', [e], BASE);
+
+  assert.match(scaffold.content, /public record PolicyAggregate\(UUID id\) implements StateProjector<PolicyAggregate>/);
+  assert.match(scaffold.content, /apply\(PolicyAggregate state, PolicyIssuedEvent event\)/);
+  assert.match(scaffold.content, /new PolicyAggregate\(event\.aggregateId\(\)\)/);
+  assert.doesNotMatch(scaffold.content, /@Component|Ability|check\(/);
+  assert.equal(scaffold.once, true);
 });
 
 // --- read model entity: embeddable value objects become flattened columns ------
@@ -1119,7 +1117,7 @@ test('a GENERATED file carries no header — the patch answers that, and stays c
 
   const files = [
     command(c),
-    commandHandler(c, e, BASE, naming.aggregate(BASE, 'policy')),
+    commandHandler(c, e, BASE),
     readModelEntity(rm),
     readModelRepository(rm),
     persistingProjector(rm, new Map([['policy-issued', e]]), BASE),
@@ -1132,11 +1130,10 @@ test('a GENERATED file carries no header — the patch answers that, and stays c
 });
 
 test('a `once` file keeps its header — scaffold-version is state the patch cannot compute', () => {
-  const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
-  const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
-  const aggregate = commandAggregate(naming.aggregate(BASE, 'policy'), [{ c, e }]);
-  assert.match(aggregate.content, /^\/\/ SCAFFOLDED ONCE/);
-  assert.match(aggregate.content, /scaffold-version: \d+/);
+  const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', aggregate: 'policy', fields: [] };
+  const aggregateFile = aggregate('policy', [e], BASE);
+  assert.match(aggregateFile.content, /^\/\/ SCAFFOLDED ONCE/);
+  assert.match(aggregateFile.content, /scaffold-version: \d+/);
 });
 
 // --- parseModel end-to-end: named key attributes over a real model directory ---

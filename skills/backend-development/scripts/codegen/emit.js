@@ -63,7 +63,7 @@ export const components = (fields) => fields.map((f) => `${f.javaType} ${f.name}
 //                      derives the ctor signature from declaration order)
 //   className          declared type
 //   testInstantiation  expression a *Ability uses to build/obtain it. Varies by
-//                      kind — `FooAggregateAbility.INSTANCE` for a shared aggregate,
+//                      kind — `Clock.systemUTC()` for a runtime collaborator,
 //                      `new FooDecider()` for a fresh projection decider, a shared
 //                      static like `FooAbility.FOO_REPOSITORY` for a registered
 //                      one — which is exactly why this is per-collaborator data
@@ -190,9 +190,10 @@ public record ${c.className}(${components(c.fields)}) {
   };
 }
 
-function commandHandler(c, e, base, aggregate) {
+function commandHandler(c, e, base) {
   const args = [];
   const extraImports = [];
+  const decisions = [];
 
   const eventStream = collaborator({
     fieldName: 'eventStream',
@@ -200,19 +201,15 @@ function commandHandler(c, e, base, aggregate) {
     testInstantiation: 'EventStreamAbility.INSTANCE',
     imports: [`${base}.eventstream.EventStream`],
   });
-  const aggregateCollaborator = collaborator({
-    fieldName: aggregate.fieldName,
-    className: aggregate.className,
-    testInstantiation: `${aggregate.abilityClassName}.INSTANCE`,
-    imports: [`${aggregate.package}.${aggregate.className}`],
-  });
-
   for (const f of e.fields) {
-    const r = resolveArg(f, {
-      sourceFields: c.fields,
-      sourceExpr: 'command',
-      delegate: aggregateCollaborator,
-    });
+    const r =
+      f.bracketed && !f.convention
+        ? { expr: `${f.name}()`, imports: f.imports, delegated: true }
+        : resolveArg(f, {
+            sourceFields: c.fields,
+            sourceExpr: 'command',
+            delegate: { fieldName: 'unused' },
+          });
     if (!r) {
       throw new Error(
         `Model gap: event "${e.id}" field "${f.label}" is not supplied by command "${c.id}" ` +
@@ -221,9 +218,10 @@ function commandHandler(c, e, base, aggregate) {
     }
     extraImports.push(...r.imports);
     args.push(r.expr);
+    if (r.delegated) decisions.push(f);
   }
 
-  const collaborators = [eventStream, aggregateCollaborator];
+  const collaborators = [eventStream];
 
   const imports = importBlock([
     'java.util.List',
@@ -238,9 +236,20 @@ function commandHandler(c, e, base, aggregate) {
     `${e.package}.${e.className}`,
     ...collaboratorImports(collaborators),
     ...extraImports,
+    ...decisions.flatMap((f) => f.imports),
   ]);
 
   const argList = args.map((a) => `                ${a}`).join(',\n');
+  const decisionMethods = decisions
+    .map(
+      (f) => `
+
+    private ${f.javaType} ${f.name}() {
+        throw new UnsupportedOperationException(
+                "[${f.label}] on event '${e.id}' is a decision with no GWT scenario yet");
+    }`,
+    )
+    .join('');
 
   return {
     package: c.package,
@@ -262,90 +271,52 @@ ${fieldDeclarations(collaborators)}
     @PostMapping("${c.postMapping}")
     @Override
     public UUID handle(@RequestBody ${c.className} command) {
-        ${aggregate.fieldName}.check(command);
         var aggregateId = UUID.randomUUID();
         eventStream.append(List.of(new ${e.className}(
                 aggregateId,
 ${argList})));
         return aggregateId;
-    }
+    }${decisionMethods}
 }
 `,
     collaborators,
   };
 }
 
-function commandAggregate(aggregate, entries) {
-  const seenFields = new Map();
-  const methods = [];
-  const commandImports = [];
-  const decisionImports = [];
-
-  for (const { c, e } of entries) {
-    commandImports.push(`${c.package}.${c.className}`);
-    methods.push(`    public void check(${c.className} command) {
-    }`);
-
-    for (const f of e.fields.filter((it) => it.bracketed && !it.convention)) {
-      const seen = seenFields.get(f.name);
-      if (seen && seen.javaType !== f.javaType) {
-        throw new Error(
-          `Model gap: aggregate "${aggregate.className}" gets "[${f.label}]" from both ` +
-            `"${seen.commandId}" (${seen.javaType}) and "${c.id}" (${f.javaType}) with ` +
-            `incompatible types. Give the fields distinct labels.`,
-        );
-      }
-      if (seen) continue;
-      seenFields.set(f.name, { commandId: c.id, javaType: f.javaType });
-      decisionImports.push(...f.imports);
-      methods.push(`    public ${f.javaType} ${f.name}() {
-        throw new UnsupportedOperationException(
-                "[${f.label}] on event '${e.id}' is a business decision with no GWT scenario yet");
-    }`);
-    }
-  }
-
+function aggregate(aggregateName, events, base) {
+  const aggregateNameParts = naming.aggregate(base, aggregateName);
   const imports = importBlock([
-    'org.springframework.stereotype.Component',
-    ...commandImports,
-    ...decisionImports,
+    'java.util.UUID',
+    `${base}.eventstream.StateProjector`,
+    ...events.map((e) => `${e.package}.${e.className}`),
   ]);
+  const applyMethods = events
+    .map(
+      (e) => `    @Override
+    public ${aggregateNameParts.className} apply(${aggregateNameParts.className} state, ${e.className} event) {
+        return new ${aggregateNameParts.className}(event.aggregateId());
+    }`,
+    )
+    .join('\n\n');
+
   return {
-    package: aggregate.package,
-    className: aggregate.className,
+    package: aggregateNameParts.package,
+    className: aggregateNameParts.className,
     once: true,
     version: SCAFFOLD_VERSION,
-    content: `${ONCE_HEADER(`aggregate "${aggregate.className}"`)}package ${aggregate.package};
+    onceHint: 'scaffolded once, then yours: keep only state and rules derived from this aggregate history',
+    content: `// SCAFFOLDED ONCE by scripts/codegen — this file is YOURS.
+// scaffold-version: ${SCAFFOLD_VERSION}
+// Plain domain state hydrated only from events carrying this aggregate id.
+package ${aggregateNameParts.package};
 
 ${imports}
 
-@Component
-public class ${aggregate.className} {
+public record ${aggregateNameParts.className}(UUID id) implements StateProjector<${aggregateNameParts.className}> {
 
-${methods.join('\n\n')}
+${applyMethods}
 }
 `,
-  };
-}
-
-function commandAggregateAbility(aggregate) {
-  return {
-    package: aggregate.package,
-    className: aggregate.abilityClassName,
-    test: true,
-    once: true,
-    version: SCAFFOLD_VERSION,
-    onceHint: `scaffolded once, then yours: wire the aggregate's collaborators as *Ability.INSTANCE references`,
-    content:
-      `// SCAFFOLDED ONCE by scripts/codegen — this file is YOURS.\n` +
-      `// scaffold-version: ${SCAFFOLD_VERSION}\n` +
-      `// Self-contained test wiring for the ${aggregate.className} aggregate. Every\n` +
-      `// constructor collaborator is another ability's INSTANCE, e.g.\n` +
-      `//   ${aggregate.abilityClassName}.INSTANCE = new ${aggregate.className}(SomeAbility.INSTANCE);\n` +
-      `package ${aggregate.package};\n\n` +
-      `public interface ${aggregate.abilityClassName} {\n\n` +
-      `    ${aggregate.className} INSTANCE = new ${aggregate.className}();\n` +
-      `}\n`,
   };
 }
 
@@ -1313,24 +1284,21 @@ export function emit(model) {
   ev.push(serde(model.events, base));
   ev.push(eventStreamAbility(base));
 
-  const commandGroups = new Map();
-  for (const c of model.commands) {
-    const e = eventsById.get(c.producesId);
-    const key = e.aggregate;
-    if (!commandGroups.has(key)) commandGroups.set(key, []);
-    commandGroups.get(key).push({ c, e });
+  const aggregateEvents = new Map();
+  for (const e of model.events) {
+    if (!aggregateEvents.has(e.aggregate)) aggregateEvents.set(e.aggregate, []);
+    aggregateEvents.get(e.aggregate).push(e);
+  }
+  for (const [aggregateName, events] of aggregateEvents) {
+    files.into('domain').push(aggregate(aggregateName, events, base));
   }
 
-  for (const [aggregateName, entries] of commandGroups) {
-    const aggregate = naming.aggregate(base, aggregateName);
+  for (const c of model.commands) {
+    const e = eventsById.get(c.producesId);
     const cmd = files.into('commands');
-    cmd.push(commandAggregate(aggregate, entries), commandAggregateAbility(aggregate));
-
-    for (const { c, e } of entries) {
-      const handler = commandHandler(c, e, base, aggregate);
-      cmd.push(command(c), handler);
-      cmd.push(commandAbility(c, base, handler.collaborators));
-    }
+    const handler = commandHandler(c, e, base);
+    cmd.push(command(c), handler);
+    cmd.push(commandAbility(c, base, handler.collaborators));
   }
 
   for (const rm of model.readModels) {
@@ -1373,8 +1341,7 @@ export {
   resolveArg,
   commandHandler,
   command,
-  commandAggregate,
-  commandAggregateAbility,
+  aggregate,
   valueObject,
   readModel,
   projector,

@@ -158,6 +158,7 @@
  * @property {(s: string) => string} snake
  * @property {(s: string) => string} slicePackage
  * @property {(base: string, id: string) => CommandNaming} command
+ * @property {(base: string, name: string) => AggregateNaming} aggregate
  * @property {(base: string, id: string) => EventNaming} event
  * @property {(base: string, id: string, opts: {keyed?: boolean}) => ReadModelNaming} readModel
  * @property {(base: string, name: string) => {className: string, package: string}} valueObject
@@ -173,6 +174,12 @@
  * @property {string} abilityClassName
  * @property {string} postMapping
  * @property {string} dslMethod
+ */
+
+/**
+ * @typedef {Object} AggregateNaming
+ * @property {string} className
+ * @property {string} package
  */
 
 /**

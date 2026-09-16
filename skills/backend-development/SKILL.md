@@ -30,7 +30,7 @@ The prompt is complete on its own — hand it to a subagent with a fresh context
 A `gwt-scenario` or `business-rule` prompt is one unit of work for `backend-implement`.
 Dispatch it to that skill as its own subagent invocation (e.g. via the Task tool) —
 do not implement it inline in the orchestrating session. `backend-implement` owns the
-conventions (verbatim spec naming, ability-DSL-only tests, decider-state resets) that
+conventions (verbatim spec naming, ability-DSL-only tests, collaborator-state resets) that
 are easy to get subtly wrong from a fresh reading of just this facade.
 
 If `--next` ever disagrees with what you already verified — e.g. it re-reports a
@@ -41,7 +41,7 @@ not live state) rather than bugs, and re-deriving that from scratch by trial and
 wastes far more context than reading the ~200-line module once.
 
 The plugin system (`scripts/codegen/plugins/`) defines all constructs:
-DomainPlugin, EventPlugin, CommandPlugin, GWTPlugin. Steps are data, not code.
+DomainPlugin, EventPlugin, AggregatePlugin, CommandPlugin, GWTPlugin. Steps are data, not code.
 Adding a new construct = adding a new plugin file.
 
 `codegen --test` prints the step machine.
@@ -52,10 +52,21 @@ Only these, because a script cannot derive them.
 
 ## Brackets
 A `[bracketed]` model field has no upstream source. The generator delegates it to a
-decider that throws until a GWT scenario forces it into existence. Brackets mark what
-must be DECIDED; they say nothing about what must be ENFORCED. The decider is a
-command's ONE seam: `check(cmd)` for preconditions and business rules, plus one throwing
-method per bracketed field. A rule never needs a bracket, a model edit, or a new class.
+private command-handler method that throws until a GWT scenario forces it into
+existence. Brackets mark what must be DECIDED; they say nothing about what must be
+ENFORCED. Business-rule guards go directly in the hand-owned handler body. A rule never
+needs a bracket, a model edit, or a new class.
+
+## Aggregates
+An aggregate is a plain domain object, never a Spring component or injected collaborator.
+The generator scaffolds one `<Name>Aggregate` for each `<name>:Id` declared by an event.
+It implements `StateProjector` and is hydrated locally when a handler needs state:
+`new NameAggregate(...).hydrate(null, eventStream.findAllById(aggregateId))`.
+
+Only state and rules derived exclusively from events carrying that aggregate id belong
+inside it. Cross-aggregate decisions (for example, a policy number based on all policies)
+stay in a private handler method or a dedicated domain service/repository. A handler that
+does not need aggregate state must not hydrate or inject the aggregate.
 
 ## The model is frozen
 Every model document — `commands.md`, `events.md`, `readmodels.md`, `uis.md`,

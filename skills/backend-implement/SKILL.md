@@ -4,7 +4,8 @@ description: >
   # Responsibility
   Implements ONE GWT scenario, test-first, in a sliced event-sourced project where all
   scaffolding is already generated. Writes exactly two things: a Spock test transcribed
-  from the GWT file, and the minimal business logic inside a *Decider that makes it green.
+  from the GWT file, and the minimal production logic in the handler, aggregate, projector,
+  or projection decider that makes it green.
   Touches nothing else.
   # When to use
   Use after scaffolding has been generated (see backend-development), when a
@@ -31,7 +32,8 @@ pending forever.
    verbatim by the caller — you were asked to implement. Never go looking for, or writing,
    a `.md`.
 2. The generated `*Ability` interfaces of the slices it mentions (`src/test/java/...`).
-3. The `*Decider` class(es) in those slices (`src/main/java/...`).
+3. The handler/projector and, when relevant, its plain `*Aggregate` or
+   `*ProjectionDecider` (`src/main/java/...`).
 
 Do NOT read `commands.md`, `events.md`, `readmodels.md`, the whole `src/` tree, or any
 other slice. The scaffolding is already correct by construction; re-deriving it wastes
@@ -40,12 +42,12 @@ context and risks contradicting the generator.
 # Two kinds of work
 | you were asked to | path |
 |---|---|
-| implement a `<docs>/gwt-*.md` scenario | the flow below — logic lands in a `*Decider` |
-| enforce a business rule quoted from `business-rules-raw.md` | the flow below — the guard lands in `<Command>Decider.check(cmd)`, which is already generated and already called by the handler. The spec is named after the rule: a rule has no GWT file and you must NOT create one |
+| implement a `<docs>/gwt-*.md` scenario | the flow below — logic lands in the production handler, aggregate, projector, or projection decider |
+| enforce a business rule quoted from `business-rules-raw.md` | the flow below — the guard lands in the command handler. Move it into a hydrated aggregate only if it depends exclusively on that aggregate's event history. The spec is named after the rule: a rule has no GWT file and you must NOT create one |
 | add a query/filter/sort/search over fields a read model ALREADY has | **ad-hoc extension** — same red/green discipline, but logic lands in the slice's projector/repository. See `.opencode/skills/backend-development/reference/ad-hoc-extensions.md` |
 
 An ad-hoc improvement has no GWT file, so its spec name is plainly descriptive instead
-of a scenario heading, and it needs no `[bracketed]` field and therefore no decider. It
+of a scenario heading, and it needs no `[bracketed]` field. It
 is still test-first. Anything that would require a new *field* or a new *event* is a
 model change, not ad-hoc — stop and report it back to the caller; the model is frozen
 during development and must NOT be changed.
@@ -66,8 +68,8 @@ the command's own slice instead: `src/test/groovy/<base>/<command-package>/<Comm
 - Groovy note: Lombok builders are fluent, so write `it.field("v")`, not `it.field = "v"`.
 
 ### `reset_event_stream()` does NOT reset collaborator state
-It clears the event stream and the registered projections — nothing else. Deciders are
-stateless; the state they use lives in a collaborator (a repository, a sequence) exposed
+It clears the event stream and the registered projections — nothing else. State used by
+a handler decision may live in a collaborator (a repository, a sequence) exposed
 as a static `*Ability.INSTANCE` and shared across every spec via the ability DSLs. A new
 spec that issues commands silently perturbs an already-green one and the failure surfaces
 as test *ordering*:
@@ -92,27 +94,31 @@ Run it. It MUST compile. A red-but-compiling test here is the expected state.
 A correct red looks like:
 ```
 UnsupportedOperationException: [policy number] on event 'policy-issued' is a
-business decision with no GWT scenario yet
-    at IssuePolicyDecider.policyNumber(IssuePolicyDecider.java:12)
+decision with no GWT scenario yet
+    at IssuePolicyHandler.policyNumber(IssuePolicyHandler.java:34)
 ```
-That stack trace IS the assignment. Open that decider, that method.
+That stack trace IS the assignment. Open that handler method.
 
 For a business rule there is no stub to throw, so the red is the command *succeeding*
 when the rule says it must not — the spec fails on the assertion that no event was
-appended. Your target is that command's `check(cmd)`.
+appended. Your target is that command handler.
 
-## 3. Implement the decision — in the decider, minimally
+## 3. Implement the decision — at the correct boundary, minimally
 Replace the `throw` with the simplest logic that satisfies the scenario. Add a comment
 naming the GWT scenario that justifies it.
 
-- The decider is a `@Component` scaffolded once — it is yours, and regeneration preserves it.
+- A command handler is hand-owned logic. Its generated private decision method is the
+  default home for a bracketed value that does not belong to aggregate state.
+- A plain aggregate is constructed and hydrated locally from
+  `eventStream.findAllById(aggregateId)` only when the rule needs state derived solely
+  from that aggregate's events. It is never injected and never a Spring component.
+- Cross-aggregate/global decisions stay in the handler or move to a dedicated domain
+  service/repository when they need collaborators or reuse.
 - Keep it scenario-scoped: no validation, error handling, persistence or generality the
   scenario does not exercise. That is scope creep, not implementation.
-- Constructor collaborators are wired in the decider's OWN ability (`<Command>DeciderAbility`,
-  scaffolded once, yours): the generated `*Ability` references `XDeciderAbility.INSTANCE` by
-  that stable name, so a decider may take any collaborators and does NOT need a no-arg
-  constructor. Gained a collaborator? Edit the `INSTANCE = new XDecider(SomeAbility.INSTANCE);`
-  line in the decider ability. Never touch the generated ability.
+- Use collaborators the handler already owns. If correct behavior requires a new
+  collaborator that generated test wiring cannot supply, report the wiring gap instead
+  of putting infrastructure dependencies into an aggregate or editing an ability.
 
 ## 4. Verify
 Iterate quickly during red/green: `./mvnw test -Dtest=<Spec>` runs only that spec and
@@ -140,7 +146,7 @@ phantom Lombok failures. Then `node .opencode/skills/backend-development/scripts
   scaffolding.)
 - **Never edit a generated `*Ability`.** That fails `--check`.
 - **Never edit the event-modelling docs or the GWT files.**
-- If the scenario cannot be satisfied by a decision in a decider — because it needs a field
+- If the scenario cannot be satisfied in the handler/aggregate/projector — because it needs a field
   the model does not have, or the business intent is ambiguous — STOP, implement nothing for
   it, and report it back to the caller so it lands in `development-report.md`. Do not
   invent behavior, and do not weaken the test to make it pass.

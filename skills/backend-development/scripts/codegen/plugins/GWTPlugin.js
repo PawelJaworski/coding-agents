@@ -81,7 +81,7 @@ const gwtStep = {
       `  spec:     ${item.spec}`,
       '',
       'Test first: transcribe the name VERBATIM, run it, get a loud failure, then write',
-      'the minimal logic in the aggregate or decider the failure names. Drive it only through *Ability.',
+      'the minimal production logic in the handler, aggregate, or projection decider the failure names.',
       ...(item.hints ?? []).map((h) => `  ${h}`),
       '',
       `Touch nothing else. ${left > 0 ? `${left} item(s) left in this step.` : 'Last item.'}`

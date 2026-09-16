@@ -4,6 +4,7 @@
 import { PluginRegistry } from '../core/registry.js';
 import { DomainPlugin } from './DomainPlugin.js';
 import { EventPlugin } from './EventPlugin.js';
+import { AggregatePlugin } from './AggregatePlugin.js';
 import { CommandPlugin } from './CommandPlugin.js';
 import { ReadModelPlugin } from './ReadModelPlugin.js';
 import { TestDataPlugin } from './TestDataPlugin.js';
@@ -16,6 +17,7 @@ export function createBuiltinRegistry() {
   registry.registerAll([
     DomainPlugin,
     EventPlugin,
+    AggregatePlugin,
     CommandPlugin,
     ReadModelPlugin,
     TestDataPlugin,

@@ -76,7 +76,7 @@ one restricted to the minimal edit that turns a red build green.
 {
   "basePackage": "com.example.myapp",
   "debugCodeGen": false,
-  "modelDir": "../docs",
+  "modelDir": "docs/",
   "mainSourceRoot": "src/main/java",
   "testSourceRoot": "src/test/java"
 }

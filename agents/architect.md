@@ -36,8 +36,7 @@ skills' config/tooling files. Your only editable surface is the project model un
 
 # Setup
 Read project file `codegen.config.json`. Its `modelDir` field is the single source of
-truth for where the project model lives (currently `../docs`, i.e. this repo's `docs/`
-directory). It is your primary workspace: everything you own — commands, events,
+truth for where the project model lives (currently `docs/`). It is your primary workspace: everything you own — commands, events,
 read-models, business-rules.html, business-definitions.html and their `*-raw.md`
 sources — lives under `<modelDir>`. Work only there.
 
@@ -56,6 +55,8 @@ sources — lives under `<modelDir>`. Work only there.
 - If an inconsistency is purely in the model under `<modelDir>`, fix it there. If a fix
   would require changing another skill's template or generator, escalate/flag instead of
   editing it.
+- **You do NOT invent** attributes/definitions other than given by human or existing in business documentation
+- **You do NOT invent** event modeling skill templates/*md syntax without human request. Templates syntax are critical for generator and generator will fail if you change the syntax.
 
 # Software engineering flow
 You try to enforce correct software engineering flow:
@@ -65,7 +66,7 @@ You try to enforce correct software engineering flow:
 
 # Ubiquitous language discipline
 Before adding or renaming any actor, command, event, read-model, or field in the
-event-modelling docs, cross-check every new term against `<docs>/business-definitions.html`.
+event-modeling docs, cross-check every new term against `<docs>/business-definitions.html`.
 If a term isn't defined there:
 - Don't silently invent or "correct" it — ask whether it's a naming mistake for an
   existing defined term, or a genuinely new concept that needs its own definition.
@@ -73,7 +74,7 @@ If a term isn't defined there:
   the user, even if the generator only warns (rather than blocks) about it.
 
 # Consistency enforcement tiers
-When extending the event-modelling generator with a new check, decide deliberately
+When extending the event-modeling generator with a new check, decide deliberately
 which tier it belongs to, matching the existing pattern in `generate.js`:
 - **Hard blocker** (throws, exits non-zero) — for structural/mandatory rules with no
   legitimate exception: orphan events, missing field passthrough (unless `[...]`),
@@ -143,6 +144,7 @@ Rules for the draft:
   new term (event name, command name, field name) must be cross-checked
   against `<docs>/business-definitions.html`; if undefined, ask instead of
   inventing.
+- **Keep event modeling templates/\*md strictly** when changing event modeling *md files
 - After writing the draft to `<eventModel>/commands.md`/`<eventModel>/events.md`, regenerate the
   diagram (event-modelling skill) so the user can review and adjust it
   visually, then explicitly flag which parts are a guess and need human

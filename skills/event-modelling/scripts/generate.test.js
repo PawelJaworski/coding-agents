@@ -502,6 +502,59 @@ Type: html
   assert.match(svg, /data-kind="displays"/);
 });
 
+test('fan-out and output copies of one UI use distinct interaction node ids', () => {
+  const dir = baseFixture({
+    commands: `
+## add-policy-holder
+Name: Add Policy Holder
+Produces: policy-holder-added
+* name
+
+## update-policy-holder
+Name: Update Policy Holder
+Produces: policy-holder-updated
+* name
+`,
+    events: `
+## policy-holder-added
+Name: Policy Holder Added
+policyHolder:Id
+* name
+
+## policy-holder-updated
+Name: Policy Holder Updated
+policyHolder:Id
+* name
+`,
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added, policy-holder-updated
+policyHolderId:Key
+* name
+`,
+    uis: `
+## policy-holder-screen
+Name: Policy Holder Screen
+Actor: Clerk
+Type: html
+Triggers: add-policy-holder, update-policy-holder
+ConsistsOf: policy-holder-view
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const table = renderTable(model, geo);
+  const svg = renderArrows(model, geo);
+
+  assert.match(table, /data-element="ui-policy-holder-screen--triggers-add-policy-holder"/);
+  assert.match(table, /data-element="ui-policy-holder-screen--triggers-update-policy-holder"/);
+  assert.match(table, /data-element="ui-policy-holder-screen--displays"/);
+  assert.match(svg, /data-from="ui-policy-holder-screen--triggers-add-policy-holder" data-to="add-policy-holder"/);
+  assert.match(svg, /data-from="ui-policy-holder-screen--triggers-update-policy-holder" data-to="update-policy-holder"/);
+  assert.match(svg, /data-from="policy-holder-view" data-to="ui-policy-holder-screen--displays"/);
+});
+
 // ---------------------------------------------------------------------------
 // buildModel / renderTable — read-model `{keyName}:Key` attribute
 // ---------------------------------------------------------------------------
@@ -903,25 +956,39 @@ test('renderPage includes GWT modal CSS styles', () => {
  */
 function loadInteractivity({ cards, arrows }) {
   const vm = require('node:vm');
+  const scrollCalls = [];
 
   const mkNode = (attrs) => {
     const classes = new Set();
+    const handlers = {};
+    const capturedPointers = new Set();
     return {
       _attrs: attrs,
       classList: {
         toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
         add: (c) => classes.add(c),
-        remove: (c) => classes.remove(c),
+        remove: (c) => classes.delete(c),
         contains: (c) => classes.has(c),
       },
       has: (c) => classes.has(c),
       getAttribute: (k) => (k in attrs ? attrs[k] : null),
       addEventListener: function (ev, fn) {
-        this._click = fn;
+        (handlers[ev] ||= []).push(fn);
       },
-      click: function () {
-        this._click({ stopPropagation() {} });
+      dispatch: function (ev, event = {}) {
+        const fullEvent = {
+          stopPropagation() {},
+          preventDefault() {},
+          target: this,
+          ...event,
+        };
+        (handlers[ev] || []).forEach((fn) => fn.call(this, fullEvent));
       },
+      click: function () { this.dispatch('click'); },
+      closest: () => null,
+      setPointerCapture: (id) => capturedPointers.add(id),
+      hasPointerCapture: (id) => capturedPointers.has(id),
+      releasePointerCapture: (id) => capturedPointers.delete(id),
     };
   };
 
@@ -943,13 +1010,44 @@ function loadInteractivity({ cards, arrows }) {
 
   const src = fs.readFileSync(
     path.join(__dirname, '..', 'reference', 'interactivity.js'), 'utf8');
-  vm.runInNewContext(src, { document, window: {} });
+  vm.runInNewContext(src, {
+    document,
+    window: {
+      scrollBy(x, y) { scrollCalls.push([x, y]); },
+    },
+  });
 
   return {
     clickCard(id) {
       cardNodes[cards.indexOf(id)].click();
       return {
         dimmed: cards.filter((c, i) => cardNodes[i].has('dim')),
+        highlighted: cards.filter((c, i) => !cardNodes[i].has('dim')),
+      };
+    },
+    clickBackground() {
+      noop.dispatch('click');
+      return cards.filter((c, i) => !cardNodes[i].has('dim'));
+    },
+    dragBackground(from, to) {
+      const pointerId = 1;
+      noop.dispatch('pointerdown', {
+        button: 0,
+        pointerId,
+        clientX: from.x,
+        clientY: from.y,
+        target: { closest: () => null },
+      });
+      noop.dispatch('pointermove', {
+        pointerId,
+        clientX: to.x,
+        clientY: to.y,
+      });
+      noop.dispatch('pointerup', { pointerId });
+      noop.dispatch('click');
+      return {
+        scrollCalls: [...scrollCalls],
+        isPanning: noop.has('is-panning'),
         highlighted: cards.filter((c, i) => !cardNodes[i].has('dim')),
       };
     },
@@ -1006,11 +1104,93 @@ test('a UI reached as an ancestor is still terminal — its displays edge is not
   ].sort());
 });
 
-test('clicking an input UI dims everything downstream of it', () => {
+test('clicking an input UI highlights its complete downstream slice', () => {
   const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
   const { highlighted } = dom.clickCard('ui-issue-policy');
 
-  // Start node follows its own displays edge, so its source read model shows;
-  // the command/event/read model it triggers are downstream and stay dimmed.
-  assert.deepEqual(highlighted.sort(), ['rm-unrelated', 'ui-issue-policy'].sort());
+  assert.deepEqual(highlighted.sort(), [
+    'cmd-issue-policy',
+    'evt-policy-issued',
+    'rm-policy-details',
+    'ui-issue-policy',
+    'ui-policy-details',
+  ].sort());
+});
+
+test('dragging the diagram background pans without clearing the current focus', () => {
+  const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
+  const focused = dom.clickCard('rm-policy-details').highlighted.sort();
+  const result = dom.dragBackground({ x: 120, y: 80 }, { x: 75, y: 65 });
+
+  assert.deepEqual(result.scrollCalls, [[45, 15]]);
+  assert.equal(result.isPanning, false);
+  assert.deepEqual(result.highlighted.sort(), focused);
+});
+
+test('clicking the diagram background without dragging still clears focus', () => {
+  const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
+  dom.clickCard('rm-policy-details');
+
+  assert.deepEqual(dom.clickBackground().sort(), INTERACTIVITY_FIXTURE.cards.sort());
+});
+
+test('clicking a command fed by a fan-out UI highlights only its visual UI copy', () => {
+  const fixture = {
+    cards: [
+      'ui-shared--triggers-cmd-a',
+      'ui-shared--triggers-cmd-b',
+      'ui-shared--displays',
+      'cmd-a',
+      'cmd-b',
+      'evt-a',
+      'evt-b',
+      'rm-shared',
+    ],
+    arrows: [
+      ['ui-shared--triggers-cmd-a', 'cmd-a', 'triggers'],
+      ['ui-shared--triggers-cmd-b', 'cmd-b', 'triggers'],
+      ['cmd-a', 'evt-a', 'produces'],
+      ['cmd-b', 'evt-b', 'produces'],
+      ['evt-a', 'rm-shared', 'observes'],
+      ['evt-b', 'rm-shared', 'observes'],
+      ['rm-shared', 'ui-shared--displays', 'displays'],
+    ],
+  };
+  const dom = loadInteractivity(fixture);
+
+  assert.deepEqual(dom.clickCard('cmd-a').highlighted.sort(), [
+    'cmd-a',
+    'ui-shared--triggers-cmd-a',
+  ].sort());
+});
+
+test('clicking one fan-out UI copy follows only that copy command slice', () => {
+  const fixture = {
+    cards: [
+      'ui-shared--triggers-cmd-a',
+      'ui-shared--triggers-cmd-b',
+      'cmd-a',
+      'cmd-b',
+      'evt-a',
+      'evt-b',
+      'rm-a',
+      'rm-b',
+    ],
+    arrows: [
+      ['ui-shared--triggers-cmd-a', 'cmd-a', 'triggers'],
+      ['ui-shared--triggers-cmd-b', 'cmd-b', 'triggers'],
+      ['cmd-a', 'evt-a', 'produces'],
+      ['cmd-b', 'evt-b', 'produces'],
+      ['evt-a', 'rm-a', 'observes'],
+      ['evt-b', 'rm-b', 'observes'],
+    ],
+  };
+  const dom = loadInteractivity(fixture);
+
+  assert.deepEqual(dom.clickCard('ui-shared--triggers-cmd-a').highlighted.sort(), [
+    'cmd-a',
+    'evt-a',
+    'rm-a',
+    'ui-shared--triggers-cmd-a',
+  ].sort());
 });

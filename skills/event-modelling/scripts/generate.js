@@ -641,7 +641,6 @@ function buildModel(inputDir) {
   });
 
   const colIndexForView = (viewId) => columns.findIndex((c) => c.type === 'view' && c.viewId === viewId);
-
   // Placement column for an output UI: the rightmost column among its source
   // read models (a UI can only be drawn in one column, so composite/multi-
   // view UIs land next to their last-produced input, same convention as
@@ -780,6 +779,14 @@ function idKeyLinesHtml(rm) {
   return lines.map((l) => `<div class="agg-id">${l}</div>`).join('');
 }
 
+function triggerUiElementId(uiId, commandId) {
+  return `ui-${uiId}--triggers-${commandId}`;
+}
+
+function outputUiElementId(uiId) {
+  return `ui-${uiId}--displays`;
+}
+
 function renderTable(model, geo) {
   const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiPlacementCol, eventProducer, columns, midRow, roles, hasSystem, subprocesses, standaloneUis } = model;
 
@@ -827,7 +834,8 @@ function renderTable(model, geo) {
           const cards = triggerUis.map((ui) => {
             const label = ui && ui.uiType ? ui.uiType.toUpperCase() : 'UI';
             const uiId = ui.id;
-            return `<div class="card ui-card" data-element="ui-${uiId}" data-type="ui" title="ui-${uiId} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(ui.name || cmd.name)}</div></div>`;
+            const elementId = triggerUiElementId(uiId, cmd.id);
+            return `<div class="card ui-card" data-element="${elementId}" data-ui-id="${uiId}" data-type="ui" title="ui-${uiId} → ${cmd.id} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(ui.name || cmd.name)}</div></div>`;
           }).join('');
           content = triggerUis.length > 1 ? `<div class="ui-fanin-row">${cards}</div>` : cards;
         }
@@ -840,7 +848,8 @@ function renderTable(model, geo) {
         const outUi = uis.find((u) => uiPlacementCol[u.id] === i && u.actor === role);
         if (outUi) {
           const label = outUi.uiType ? outUi.uiType.toUpperCase() : 'UI';
-          content = `<div class="card ui-card" data-element="ui-${outUi.id}" data-type="ui" title="ui-${outUi.id} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(outUi.name || outUi.id)}</div></div>`;
+          const elementId = outputUiElementId(outUi.id);
+          content = `<div class="card ui-card" data-element="${elementId}" data-ui-id="${outUi.id}" data-type="ui" title="ui-${outUi.id} ← read model(s) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(outUi.name || outUi.id)}</div></div>`;
         }
       }
       cells += `<td class="lane-cell" style="background:${roleColor(r)}">${content}</td>`;
@@ -922,7 +931,7 @@ function renderArrows(model, geo) {
       const totalW = K * UI_W + (K - 1) * GAP;
       triggerUis.forEach((ui, k) => {
         const boxCx = K > 1 ? (cx - totalW / 2 + UI_W / 2 + k * (UI_W + GAP)) : cx;
-        arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: `ui-${ui.id}`, to: cmd.id, marker: 'arrow', kind: 'triggers' });
+        arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: triggerUiElementId(ui.id, cmd.id), to: cmd.id, marker: 'arrow', kind: 'triggers' });
       });
     } else {
       const obsIdx = colIndexForEvent(cmd.observes);
@@ -999,13 +1008,13 @@ function renderArrows(model, geo) {
       const rmCx = geo.colCenterX(idx);
       const rmTop = geo.midCenterY() - rm._h / 2;
       if (idx === placementIdx) {
-        arrows.push({ x1: rmCx, y1: rmTop, x2: uiCx, y2: roleBottom, from: rm.id, to: `ui-${ui.id}`, marker: 'arrow', kind: 'displays' });
+        arrows.push({ x1: rmCx, y1: rmTop, x2: uiCx, y2: roleBottom, from: rm.id, to: outputUiElementId(ui.id), marker: 'arrow', kind: 'displays' });
       } else {
         const exitX = idx < placementIdx ? rmCx + VIEW_W / 2 - RADIUS : rmCx - VIEW_W / 2 + RADIUS;
         const bandY = roleBottom + 15; // card-free band just below the role row
         arrows.push({
           polyline: [[exitX, rmTop], [exitX, bandY], [uiCx, bandY], [uiCx, roleBottom]],
-          from: rm.id, to: `ui-${ui.id}`, marker: 'arrow',
+          from: rm.id, to: outputUiElementId(ui.id), marker: 'arrow',
           kind: 'displays',
         });
       }
@@ -1057,7 +1066,8 @@ function renderPage(model, geo, tableHtml, arrowsHtml) {
 }
 *{box-sizing:border-box}
 body{margin:0;padding:40px;background:#fafafa;font-family:'OpenSans','Noto Sans',Arial,sans-serif;color:var(--ink)}
-.wrap{position:relative;width:${geo.width}px;margin:0 auto}
+.wrap{position:relative;width:${geo.width}px;margin:0 auto;cursor:grab;touch-action:none}
+.wrap.is-panning{cursor:grabbing}
 table{table-layout:fixed;border-collapse:collapse;width:${geo.width}px}
 td{padding:0;vertical-align:middle;text-align:center;border:none}
 .gutter{font-size:12px;font-weight:600;color:#555;padding:0 10px;text-align:left;vertical-align:middle}

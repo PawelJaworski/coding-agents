@@ -228,6 +228,9 @@ views):
   `Actor:`. This is the mirror image of the fan-in case above: one UI fans
   **out** to several different commands, while fan-in is several UIs feeding
   **into** the same command — both are legitimate and can be combined freely.
+  Each visual box is a separate interaction node, so clicking one fan-out
+  copy focuses only the command connection represented by that copy rather
+  than merging all commands triggered by the logical UI.
 
 - A UI whose id matches a **read model** id, and/or lists read model ids in
   `ConsistsOf:`, is that view's (or views') rendered **output** (e.g. a pdf
@@ -395,16 +398,27 @@ meets a flat edge, not the rounded notch.
 
 `reference/interactivity.js` is copied byte-identical into the page's
 `<script>` by the generator — **never hand-edit or rephrase it; edit the
-source file and the doc comments there instead.** It's a click-to-focus
-filter, **upstream-only** (walks `data-from`/`data-to` edges backwards from
-the clicked card, dimming everything that isn't an ancestor), with one
-documented exception: a UI is normally a terminal ancestor (its `displays`
-edge into a read model is not walked further), except when the UI *itself*
-is the clicked card, in which case that edge is its own causal chain and is
-followed. The full rationale is in the comments at the top of that file —
-read them there if you need to change the behavior, don't re-derive it here.
+source file and the doc comments there instead.** It's normally an upstream
+click-to-focus filter (walks `data-from`/`data-to` edges backwards from the
+clicked card, dimming everything that isn't an ancestor). A clicked trigger
+UI copy is the exception: because it starts a slice and has no upstream
+ancestors, the traversal follows that copy's outgoing trigger and the
+resulting command/event/view chain forward. A UI reached as an ancestor is
+still terminal (its `displays` edge into a read model is not walked further),
+while a clicked output UI follows its own `displays` edge backwards. The full
+rationale is in the comments at the top of that file — read them there if you
+need to change the behavior, don't re-derive it here.
 Each arrow's `data-kind` (`triggers`/`produces`/`observes`/`observes-cmd`/
 `displays`) is what lets the traversal distinguish edge semantics.
+When one logical UI is rendered more than once, each visual trigger copy and
+its output/view copy use distinct `data-element` graph ids; the original
+markdown UI id remains available as `data-ui-id`.
+
+The diagram background also supports pointer drag-to-pan: press on empty
+space and drag to scroll the viewport horizontally or vertically. Cards and
+interactive controls keep their normal click behavior. A short background
+click still clears the focus filter, while a completed drag suppresses that
+click so panning does not unexpectedly reset the current focus.
 
 ## Colors
 

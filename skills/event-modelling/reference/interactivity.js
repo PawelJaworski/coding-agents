@@ -12,16 +12,19 @@
  *   type — see kind meanings below.
  * - the outer container has class "wrap"
  * - CSS defines .card.dim (dimmed) and .card.active (focused) states,
- *   plus a dim rule for arrows, e.g.:
+ *   a dim rule for arrows, and grab/grabbing cursors for .wrap, e.g.:
  *     .card.dim{opacity:.12}
  *     .card.active{outline:3px solid #333;outline-offset:2px}
  *     svg [data-from].dim{opacity:.08}
+ *     .wrap{cursor:grab}
+ *     .wrap.is-panning{cursor:grabbing}
  *
- * Click-to-focus filter is UPSTREAM-ONLY: clicking a card highlights the
- * card itself plus everything that causally led to it (walking data-from
- * backwards from data-to along "triggers"/"produces"/"observes"/
- * "observes-cmd" edges), i.e. its ancestors, never its descendants/
- * downstream siblings.
+ * Click-to-focus normally highlights the clicked card plus everything that
+ * causally led to it (walking data-from backwards from data-to), i.e. its
+ * upstream ancestors. Trigger UI copies are the deliberate exception: because
+ * they are the first element in a slice and therefore have no ancestors,
+ * clicking one walks forward from its own "triggers" edge through the command,
+ * event, read models, automations, and output UIs in that represented slice.
  *
  * UI cards are treated as TERMINAL ancestors: a UI reached as an ancestor
  * of some other card is included in the upstream set (via the "triggers"
@@ -46,7 +49,24 @@ document.querySelectorAll('[data-from]').forEach(function(l){
   EDGES.push([l.getAttribute('data-from'), l.getAttribute('data-to'), l.getAttribute('data-kind')]);
 });
 var focused=null;
+var wrap=document.querySelector('.wrap');
+var pan=null;
+var suppressBackgroundClick=false;
 function connectedSet(startId){
+  var isTriggerUi=EDGES.some(function(e){return e[0]===startId && e[2]==='triggers';});
+  if(isTriggerUi){
+    var downstream={};downstream[startId]=true;
+    var forwardQueue=[startId];
+    while(forwardQueue.length){
+      var forwardId=forwardQueue.shift();
+      EDGES.forEach(function(e){
+        if(e[0]!==forwardId || downstream[e[1]]) return;
+        downstream[e[1]]=true;
+        forwardQueue.push(e[1]);
+      });
+    }
+    return downstream;
+  }
   // Upstream-only: walk backwards along data-from -> data-to edges,
   // i.e. from startId to whatever produced it (ancestors), never forwards
   // to what it produces (descendants). A UI reached as an ancestor is a
@@ -93,7 +113,43 @@ document.querySelectorAll('.card').forEach(function(c){
     refresh();
   });
 });
-document.querySelector('.wrap').addEventListener('click',function(){
+wrap.addEventListener('pointerdown',function(e){
+  if(e.button!==0 || e.target.closest('.card,.gwt-modal-content,button,a,input,textarea,select')) return;
+  pan={pointerId:e.pointerId,x:e.clientX,y:e.clientY,distance:0};
+  wrap.classList.add('is-panning');
+  if(wrap.setPointerCapture) wrap.setPointerCapture(e.pointerId);
+});
+wrap.addEventListener('pointermove',function(e){
+  if(!pan || e.pointerId!==pan.pointerId) return;
+  var dx=e.clientX-pan.x,dy=e.clientY-pan.y;
+  pan.x=e.clientX;pan.y=e.clientY;
+  pan.distance+=Math.abs(dx)+Math.abs(dy);
+  if(pan.distance>3){
+    window.scrollBy(-dx,-dy);
+    e.preventDefault();
+  }
+});
+function finishPan(e){
+  if(!pan || e.pointerId!==pan.pointerId) return;
+  suppressBackgroundClick=pan.distance>3;
+  pan=null;
+  wrap.classList.remove('is-panning');
+  if(wrap.releasePointerCapture && wrap.hasPointerCapture && wrap.hasPointerCapture(e.pointerId)){
+    wrap.releasePointerCapture(e.pointerId);
+  }
+}
+wrap.addEventListener('pointerup',finishPan);
+wrap.addEventListener('pointercancel',function(e){
+  if(!pan || e.pointerId!==pan.pointerId) return;
+  pan=null;
+  suppressBackgroundClick=false;
+  wrap.classList.remove('is-panning');
+});
+wrap.addEventListener('click',function(){
+  if(suppressBackgroundClick){
+    suppressBackgroundClick=false;
+    return;
+  }
   focused=null; refresh();
 });
 refresh();

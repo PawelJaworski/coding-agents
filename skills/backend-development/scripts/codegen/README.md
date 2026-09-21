@@ -82,7 +82,8 @@ one restricted to the minimal edit that turns a red build green.
 }
 ```
 
-Only `basePackage` is required. Set `debugCodeGen` to `true` to create
+Only `basePackage` and `modelDir` are required — there is no built-in default
+for where the model lives; every project declares it. Set `debugCodeGen` to `true` to create
 `.codegen/codegen-debug.log` when it does not exist and append every subsequent
 invocation, codegen phase, selected workflow step, and exact prompt. Every
 generated prompt (model errors, generator/verify failures, and each `GENERATE_*` /

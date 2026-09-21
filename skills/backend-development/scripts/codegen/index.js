@@ -45,7 +45,6 @@ import { runVerification, verificationFailurePrompt } from './verification.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
-  modelDir: '../docs',
   mainSourceRoot: 'src/main/java',
   testSourceRoot: 'src/test/java',
   groovyTestSourceRoot: 'src/test/groovy',
@@ -102,12 +101,13 @@ if (!projectRoot) {
       flag('project') || process.cwd(),
     )} or any parent directory.\n` +
       `  Create one at your project root:\n\n` +
-      `    { "basePackage": "com.example.myapp", "modelDir": "../docs" }\n`,
+      `    { "basePackage": "com.example.myapp", "modelDir": "docs" }\n`,
   );
 }
 
 const config = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(path.join(projectRoot, CONFIG_FILE), 'utf8')) };
 if (!config.basePackage) die(`CONFIG ERROR  ${CONFIG_FILE} must declare "basePackage".`);
+if (!config.modelDir && !flag('model')) die(`CONFIG ERROR  ${CONFIG_FILE} must declare "modelDir".`);
 
 const modelDir = path.resolve(projectRoot, flag('model') || config.modelDir);
 const mainRoot = path.resolve(projectRoot, config.mainSourceRoot);

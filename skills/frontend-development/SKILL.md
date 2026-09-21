@@ -155,13 +155,14 @@ The generator is domain-agnostic. A project needs one thing at its root:
 ```json
 // fecodegen.config.json
 {
-  "modelDir": "../docs",
+  "modelDir": "docs",
   "pagesRoot": "src/app/pages",
   "apiBase": "/api",
   "openapiPath": "../insurance-company-service/api/openapi.json"
 }
 ```
-(`appRoot` defaults to `src/app`. Omitting `openapiPath` falls back to typing fields
+(`appRoot` defaults to `src/app`. `modelDir` is required — the generator never
+guesses where the model lives. Omitting `openapiPath` falls back to typing fields
 from `business-definitions-raw.md` — weaker, since it can only guess `string` and
 `string[]`.) The app also needs `provideHttpClient()` in `app.config.ts` — the
 generated API clients inject `HttpClient`.

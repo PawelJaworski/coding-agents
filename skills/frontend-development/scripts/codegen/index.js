@@ -16,7 +16,6 @@ import { emit } from './emit.js';
 
 const CONFIG_FILE = 'fecodegen.config.json';
 const DEFAULTS = {
-  modelDir: '../docs',
   appRoot: 'src/app',
   pagesRoot: 'src/app/pages',
   apiBase: '/api',
@@ -55,11 +54,12 @@ if (!projectRoot) {
   die(
     `CONFIG ERROR  No ${CONFIG_FILE} found in ${path.resolve(flag('project') || process.cwd())} ` +
       `or any parent directory.\n  Create one at your project root:\n\n` +
-      `    { "modelDir": "../docs", "pagesRoot": "src/app/pages", "apiBase": "/api" }\n`,
+      `    { "modelDir": "docs", "pagesRoot": "src/app/pages", "apiBase": "/api" }\n`,
   );
 }
 
 const config = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(path.join(projectRoot, CONFIG_FILE), 'utf8')) };
+if (!config.modelDir && !flag('model')) die(`CONFIG ERROR  ${CONFIG_FILE} must declare "modelDir".`);
 const modelDir = path.resolve(projectRoot, flag('model') || config.modelDir);
 const openapiRef = flag('openapi') || config.openapiPath;
 const openapiPath = openapiRef ? path.resolve(projectRoot, openapiRef) : null;

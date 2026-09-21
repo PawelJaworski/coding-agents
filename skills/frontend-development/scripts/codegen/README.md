@@ -17,20 +17,23 @@ node .opencode/skills/frontend-development/scripts/codegen --project <dir> --mod
 
 ```json
 {
-  "modelDir": "../docs",
+  "modelDir": "docs",
   "pagesRoot": "src/app/pages",
   "apiBase": "/api",
   "openapiPath": "../insurance-company-service/api/openapi.json"
 }
 ```
 
-| key | default | meaning |
-|---|---|---|
-| `modelDir` | `../docs` | where `uis.md`, `commands.md`, `readmodels.md` live |
-| `appRoot` | `src/app` | used only to find `app.routes.ts` for the wiring warning |
-| `pagesRoot` | `src/app/pages` | where page folders are written |
-| `apiBase` | `/api` | prefix in front of every path taken from the contract |
-| `openapiPath` | *(none)* | the backend's published OpenAPI document. Set -> it decides field names, field types and URLs. Unset -> types are inferred from the markdown model, as before. |
+`modelDir` is required — there is no built-in default for where the model
+lives; every project declares it.
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `modelDir` | yes | — | where `uis.md`, `commands.md`, `readmodels.md` live |
+| `appRoot` | | `src/app` | used only to find `app.routes.ts` for the wiring warning |
+| `pagesRoot` | | `src/app/pages` | where page folders are written |
+| `apiBase` | | `/api` | prefix in front of every path taken from the contract |
+| `openapiPath` | | *(none)* | the backend's published OpenAPI document. Set -> it decides field names, field types and URLs. Unset -> types are inferred from the markdown model, as before. |
 
 
 ## Output per page

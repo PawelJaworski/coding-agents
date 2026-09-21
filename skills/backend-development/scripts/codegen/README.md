@@ -112,6 +112,53 @@ Subscribes: <e1>, <e2>   (read models)
 Field types resolve from `<modelDir>/business-definitions-raw.md`: a concept with
 listed attributes becomes a value-object record; a concept without becomes `String`.
 
+### Lists and nested payloads
+
+Use `(List)` after a field name to declare a list and repeat `*` to indent child
+attributes. A field with nested attributes declares a generated object named from
+that field. This notation is valid in commands, events, and read models:
+
+```markdown
+* product (List)
+* * name
+* * description
+```
+
+generates:
+
+```java
+public record Product(String name, String description) {}
+// in the command/event/read-model payload:
+List<Product> productList
+```
+
+Nested objects may themselves carry a list:
+
+```markdown
+* insured parties (List)
+* * name
+* * addresses (List)
+* * * street
+```
+
+The generated transport type is `List<InsuredParties>` (or
+`InsuredParties` without `(List)`) for a nested field and `List<String>` for a
+leaf list. A direct command→event passthrough requires the field name, `(list)`
+marker, child order, and every nested child to be identical — a mismatch there
+is a `MODEL ERROR` that stops generation, since a command must supply an event's
+data exactly.
+
+An event→read-model field is more forgiving: when it can't be derived
+automatically (name/shape don't match, or the read model only wants to flatten
+part of a nested/list event field), generation does **not** abort. The field is
+delegated to the read model's `*ProjectionDecider` — same mechanism as a
+`[bracketed]` field — and the generated decider method throws
+`UnsupportedOperationException` explaining exactly which field/event it
+couldn't map and why. Every other file, field, and read model is generated
+normally; hand-implement that one method once the real flattening/filtering/
+aggregation rule is known (a GWT scenario), same as any other projection
+decision.
+
 ### The identity attribute is implicit
 
 The `<aggregate>:Id|:Key` line is itself a read model attribute. Every read model

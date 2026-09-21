@@ -165,6 +165,23 @@ ConsistsOf: order-summary, stock-levels
   ```
 
   Works the same way on commands and events, not just read models.
+- A field ending in ` (List)` is a list of generated nested objects. Repeating
+  the bullet marker nests its attributes: `* product (List)`, `* * name`, and
+  `* * description` generate `Product` and a `List<Product> productList`
+  payload member. A nested field without `(List)` generates one object member.
+  The notation is valid on commands, events, and read models. A
+  direct command→event or event→read-model mapping is valid only if the
+  field name, list marker, child order, and every nested child match exactly.
+  If the same root field has a different structure, **diagram generation**
+  fails with `Unsupported structured-field mapping ... Add a more detailed
+  mapping prompt`; the diagram generator does not guess flattening,
+  aggregation, or renaming, so this stays a modelling decision to resolve here
+  before it's considered final. (Backend **codegen** is more lenient for the
+  event→read-model case specifically: rather than aborting the whole run, it
+  delegates the unmappable field to the read model's `*ProjectionDecider`,
+  which throws `UnsupportedOperationException` explaining the mismatch —
+  everything else still generates. That keeps implementation unblocked while
+  the model itself still needs this fixed or clarified.)
 - A trailing `?` on a **read-model** field name marks it as a search criterion
   answerable by a direct DB query, and is a normal passthrough field — it must
   still trace back to an upstream event field (e.g. `* policy holder?`). A

@@ -5,6 +5,11 @@ flows left to right in the diagram. Use `Subprocess:` to group related events
 into the same horizontal band. Every event must declare `{aggregateName}:Id`.
 One heading per event.
 
+`* product (List)` plus nested `* *` attributes declares `Product` and
+`List<Product> productList`.
+
+Lists use `* field (list)` and child attributes use repeated bullets (`* * child`).
+
 ## policy-application-submitted
 policy:Id
 Name: Policy Application Submitted

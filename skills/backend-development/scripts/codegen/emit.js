@@ -106,10 +106,44 @@ function resolveArg(field, { sourceFields, sourceExpr, delegate, fallback }) {
       delegated: true,
     };
   }
+  // A (list)/nested "* *" field that parse.js could not derive automatically
+  // from its subscribed events (see markUnmappableReadModelFields) is never
+  // silently mismapped to a same-named-but-different-shape event field or a
+  // stale-state fallback. It is delegated to the read model's decider, same as
+  // a [bracketed] field, whose generated stub throws explaining why — this
+  // keeps the rest of the projector (and the whole codegen run) generating
+  // normally instead of aborting.
+  if (field.unmappable) {
+    return {
+      expr: `${delegate.fieldName}.${field.name}(${delegate.args ?? ''})`,
+      imports: [],
+      delegated: true,
+    };
+  }
   const match = sourceFields.find((f) => f.name === field.name);
-  if (match) return { expr: `${sourceExpr}.${field.name}()`, imports: [] };
+  if (match) {
+    if (!hasSameStructuredShape(field, match)) {
+      throw new Error(
+        `Unsupported structured-field mapping for "${field.label}": the source and target ` +
+          `do not have the same (list)/nested "* *" shape. Add a more detailed mapping ` +
+          `prompt before generating this projector or handler; the generator will not guess.`,
+      );
+    }
+    return { expr: `${sourceExpr}.${field.name}()`, imports: [] };
+  }
   if (fallback) return { expr: fallback(field), imports: [] };
   return null;
+}
+
+function hasSameStructuredShape(target, source) {
+  const children = (field) => field.children || [];
+  if (Boolean(target.list) !== Boolean(source.list)) return false;
+  const targetChildren = children(target);
+  const sourceChildren = children(source);
+  if (targetChildren.length !== sourceChildren.length) return false;
+  return targetChildren.every((child, index) =>
+    child.name === sourceChildren[index].name && hasSameStructuredShape(child, sourceChildren[index]),
+  );
 }
 
 // --- emitters ----------------------------------------------------------------
@@ -117,9 +151,9 @@ function resolveArg(field, { sourceFields, sourceExpr, delegate, fallback }) {
 function valueObject(vo) {
   const needsList = vo.fields.some((f) => f.javaType.startsWith('List<'));
   const immutable = !needsList;
-  const headers = [];
+  const headers = vo.fields.flatMap((f) => f.imports || []);
   if (immutable) headers.push('import jakarta.persistence.Embeddable;');
-  const imports = [...headers, ...(needsList ? ['import java.util.List;'] : [])];
+  const imports = uniq([...headers, ...(needsList ? ['import java.util.List;'] : [])]);
   return {
     package: vo.package,
     className: vo.className,
@@ -426,6 +460,14 @@ function projectionDecider(rm, eventsById) {
                 "[${f.label}] on read model '${rm.id}' is a projection decision with no GWT scenario yet");
     }`);
     }
+    for (const f of rm.fields.filter((x) => x.unmappable)) {
+      imports.push(...f.imports, `${e.package}.${e.className}`);
+      methods.push(`    public ${f.javaType} ${f.name}(${rm.className} state, ${e.className} event) {
+        throw new UnsupportedOperationException(
+                "Unsupported structured-field mapping: ${f.unmappable.reason}. Add a more detailed " +
+                "mapping prompt, then implement this method by hand.");
+    }`);
+    }
   }
   // A "??" (search-only) criterion has no stored value, no event to project it
   // from — its match logic is a pure business decision over the already-persisted
@@ -712,7 +754,7 @@ function readModelEntity(rm) {
   const nonKeyFields = rm.fields.filter((f) => !keyNames.has(f.name));
   // A value object with a list attribute cannot be a JPA embeddable and is stored as
   // JSON; a scalar-only value object is embedded and flattened into prefixed columns.
-  const jsonFields = nonKeyFields.filter((f) => f.valueObject && !f.embeds);
+  const jsonFields = nonKeyFields.filter((f) => (f.valueObject && !f.embeds) || f.list || f.children?.length);
   const importBlockList = [
     ...(keyed ? ['jakarta.persistence.EmbeddedId'] : ['java.util.UUID', 'jakarta.persistence.Id']),
     'jakarta.persistence.AttributeOverride',
@@ -753,7 +795,7 @@ function readModelEntity(rm) {
           .join(',\n');
         return `    @Embedded\n    @AttributeOverrides({\n${overrides}\n    })\n    private ${f.javaType} ${f.name};`;
       }
-      if (f.valueObject) {
+      if (f.valueObject || f.list || f.children?.length) {
         return `    @JdbcTypeCode(SqlTypes.JSON)\n    private ${f.javaType} ${f.name};`;
       }
       return `    private ${f.javaType} ${f.name};`;
@@ -890,7 +932,7 @@ function searchableFields(rm) {
           attrAccessor: `.${a.name}()`,
         });
       }
-    } else if (!f.valueObject) {
+    } else if (!f.valueObject && !f.list && !f.children?.length) {
       out.push({
         key: f.name,
         criteriaPath: `root.get("${f.name}")`,

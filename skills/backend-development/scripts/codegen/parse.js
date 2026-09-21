@@ -10,6 +10,8 @@
 //   <aggregate>:Key          persisting read model: JPA entity keyed by the aggregate id,
 //                            updated on append, listable across aggregates
 //   * field name             plain payload attribute (passthrough)
+//   * field name (list)      a list of nested field-name objects
+//   * * nested field          a child attribute; each extra `*` adds one level
 //
 // The <aggregate>:Id|:Key line is itself an attribute: every read model implicitly
 // carries a first component `<aggregate>Id` (or `Key`, UUID) equal to the event's
@@ -47,12 +49,27 @@ function parseSections(text) {
     }
     if (!current || !line || line.startsWith('#')) continue;
 
-    const field = line.match(/^\*\s+(.+)$/);
+    const field = line.match(/^(\*(?:\s+\*)*)\s+(.+)$/);
     if (field) {
-      const trimmed = field[1].trim();
+      const depth = field[1].split(/\s+/).length;
+      const trimmed = field[2].trim();
       // "??" (checked before the single-"?" case) is a search-only criterion: it
       // never becomes a projected/persisted field, so it's kept out of
       // `current.fields` entirely — see parseSearchOnlyField.
+      if (depth > 1) {
+        const parent = findNestedParent(current.fields, depth);
+        if (!parent) {
+          throw new Error(
+            `Nested field "${line}" has no parent at depth ${depth - 1}. ` +
+              `A nested field must immediately follow its parent.`,
+          );
+        }
+        if (trimmed.endsWith('??')) {
+          throw new Error(`Nested field "${trimmed}" cannot be a "??" search-only criterion.`);
+        }
+        (parent.children || (parent.children = [])).push(parseField(trimmed));
+        continue;
+      }
       if (trimmed.endsWith('??')) {
         current.searchOnlyFields.push(parseSearchOnlyField(trimmed));
       } else {
@@ -88,12 +105,25 @@ function parseSections(text) {
   return sections;
 }
 
+function findNestedParent(fields, depth) {
+  let siblings = fields;
+  let parent = null;
+  for (let level = 1; level < depth; level += 1) {
+    parent = siblings.at(-1);
+    if (!parent) return null;
+    siblings = parent.children || [];
+  }
+  return parent;
+}
+
 function parseField(raw) {
   let searchable = false;
   if (raw.endsWith('?')) {
     searchable = true;
     raw = raw.slice(0, -1).trim();
   }
+  const list = /\s+\(list\)$/i.test(raw);
+  if (list) raw = raw.replace(/\s+\(list\)$/i, '').trim();
   // [policy number]:uuid  |  [policy number]  |  policy holder  |  policy number:Key
   // A trailing `:Key` marks the field as part of a persisting read model's composite
   // (natural) id; it is mutually exclusive with a [bracket] and a :convention.
@@ -103,7 +133,7 @@ function parseField(raw) {
     if (base.bracketed || base.convention) {
       throw new Error(`":Key" goes on a plain field, not a [bracketed]/:convention one ("${raw}")`);
     }
-    return { ...base, key: true, searchable: searchable || base.searchable };
+    return { ...base, key: true, ...(list ? { list: true } : {}), searchable: searchable || base.searchable };
   }
   const m = raw.match(/^(\[)?([^\]]+?)(\])?(?::(\w+))?$/);
   if (!m) throw new Error(`Cannot parse field: "${raw}"`);
@@ -116,7 +146,7 @@ function parseField(raw) {
   if (convention && !bracketed) {
     throw new Error(`Convention ":${convention}" is only valid on a [bracketed] field ("${label}")`);
   }
-  return { label, name: naming.field(label), bracketed, convention, searchable };
+  return { label, name: naming.field(label), bracketed, convention, searchable, ...(list ? { list: true } : {}) };
 }
 
 // A "??" field is a search-only criterion: purely a query parameter with no
@@ -365,9 +395,69 @@ function resolveTypes(defs, base) {
 }
 
 function typeOf(field, byKey) {
+  if (field.list) return { javaType: 'List<String>', imports: ['java.util.List'] };
   if (field.convention) return CONVENTIONS[field.convention];
   const hit = byKey.get(naming.words(field.label).join(' '));
   return hit || { javaType: 'String', imports: [] };
+}
+
+function hasSameValueObjectShape(left, right) {
+  return left.fields.length === right.fields.length &&
+    left.fields.every((field, index) =>
+      field.name === right.fields[index].name && field.javaType === right.fields[index].javaType,
+    );
+}
+
+function hasSameStructuredShape(target, source) {
+  const children = (field) => field.children || [];
+  if (Boolean(target.list) !== Boolean(source.list)) return false;
+  const targetChildren = children(target);
+  const sourceChildren = children(source);
+  if (targetChildren.length !== sourceChildren.length) return false;
+  return targetChildren.every((child, index) =>
+    child.name === sourceChildren[index].name && hasSameStructuredShape(child, sourceChildren[index]),
+  );
+}
+
+// A read-model field that cannot be derived automatically from its subscribed
+// events' structured ((list)/nested "* *") fields is NOT a generation-stopping
+// error: mapping a nested/list event field into a read model can require real
+// flattening/filtering/aggregation judgment calls that no generator should
+// guess. Instead of throwing here and aborting the whole run, mark the field
+// `unmappable` with an explanatory reason; `emit.js` turns that into a
+// generated (but throwing) projector/decider stub for just this field, while
+// every other file and field is still generated normally. Once a GWT scenario
+// spells out the real mapping, the stub is hand-implemented, same as any
+// other [bracketed] projection decision.
+function markUnmappableReadModelFields(readModelId, fields, events) {
+  const structuredSources = events.flatMap((event) =>
+    event.fields.filter((field) => field.list || field.children?.length),
+  );
+  for (const field of fields) {
+    if (field.identity) continue;
+    const exactMatch = structuredSources.find((source) => source.name === field.name);
+    if (exactMatch) {
+      if (!hasSameStructuredShape(field, exactMatch)) {
+        field.unmappable = {
+          reason:
+            `field '${field.label}' on read model '${readModelId}' shares a name with event field ` +
+            `'${exactMatch.label}${exactMatch.list ? ' (list)' : ''}' but not the same (list)/nested ` +
+            `'* *' shape`,
+        };
+      }
+      continue;
+    }
+    const relatedSource = structuredSources.find((source) =>
+      field.name.startsWith(naming.field(source.label)),
+    );
+    if (relatedSource) {
+      field.unmappable = {
+        reason:
+          `field '${field.label}' on read model '${readModelId}' cannot be derived automatically ` +
+          `from '${relatedSource.label}${relatedSource.list ? ' (list)' : ''}'`,
+      };
+    }
+  }
 }
 
 // ---- top level ------------------------------------------------------------
@@ -384,18 +474,55 @@ export function parseModel({ modelDir, basePackage }) {
     basePackage,
   );
 
-  const decorate = (fields) =>
-    fields.map((f) => {
-      const t = typeOf(f, byKey);
+  const nestedValueObjects = new Map();
+  const decorate = (fields) => fields.map(decorateField);
+  function decorateField(f) {
+    const children = f.children?.length ? decorate(f.children) : [];
+    if (children.length) {
+      const valueObject = naming.valueObject(basePackage, f.label);
+      const embeds = children.every((child) => child.javaType === 'String');
+      const nested = {
+        kind: 'value-object',
+        className: valueObject.className,
+        package: valueObject.package,
+        fields: children,
+        attrs: children,
+        embeds,
+        examples: [],
+      };
+      const existing = nestedValueObjects.get(valueObject.className);
+      if (existing && !hasSameValueObjectShape(existing, nested)) {
+        throw new Error(
+          `Nested object "${valueObject.className}" has conflicting structures. ` +
+            `Add a more detailed modelling prompt; the generator will not merge object definitions.`,
+        );
+      }
+      nestedValueObjects.set(valueObject.className, nested);
       return {
         ...f,
-        javaType: t.javaType,
-        imports: t.imports,
-        conventionExpr: t.expr || null,
-        ...(t.examples?.length ? { examples: t.examples } : {}),
-        ...(t.valueObject ? { valueObject: t.valueObject, embeds: t.embeds, attrs: t.attrs } : {}),
+        name: f.list ? naming.field(`${f.label} list`) : f.name,
+        javaType: f.list ? `List<${valueObject.className}>` : valueObject.className,
+        imports: [
+          ...(f.list ? ['java.util.List'] : []),
+          `${valueObject.package}.${valueObject.className}`,
+        ],
+        valueObject,
+        embeds,
+        attrs: children,
+        children,
       };
-    });
+    }
+    const t = typeOf(f, byKey);
+    return {
+      ...f,
+      name: f.list ? naming.field(`${f.label} list`) : f.name,
+      javaType: t.javaType,
+      imports: t.imports,
+      conventionExpr: t.expr || null,
+      ...(t.examples?.length ? { examples: t.examples } : {}),
+      ...(t.valueObject ? { valueObject: t.valueObject, embeds: t.embeds, attrs: t.attrs } : {}),
+    };
+  }
 
   const events = parseSections(read('events.md')).map((s) => {
     if (!s.aggregate) throw new Error(`Event "${s.id}" has no <aggregate>:Id line`);
@@ -530,10 +657,20 @@ export function parseModel({ modelDir, basePackage }) {
           `search param) only exists on a persisting ("<aggregate>:Key") read model.`,
       );
     }
+    const structuredKeyFields = keyFields.filter((field) => field.list || field.children?.length);
+    if (structuredKeyFields.length) {
+      throw new Error(
+        `Read model "${s.id}" uses structured field(s) ` +
+          `${structuredKeyFields.map((field) => `"${field.label}"`).join(', ')} as its key. ` +
+          `Add a more detailed mapping prompt before generating this projector; persistence ` +
+          `of a (list)/nested "* *" field as a natural key has no unambiguous contract.`,
+      );
+    }
     // Decorated the same way as regular fields (so a search-only criterion named
     // after a business concept gets the right javaType), but never merged into
     // `fields` — see parseSearchOnlyField.
     const searchOnlyFields = decorate(s.searchOnlyFields);
+    markUnmappableReadModelFields(s.id, fields, subscribes.map((id) => eventById.get(id)));
 
     // A "??" criterion has no stored value, so its decider (`matches<Field>`) can
     // only compute a match from data the read model's OWN fields actually carry —
@@ -561,7 +698,27 @@ export function parseModel({ modelDir, basePackage }) {
     };
   });
 
-  return { meta: { basePackage }, valueObjects, events, commands, readModels };
+  const generatedValueObjects = [...nestedValueObjects.values()];
+  for (const nested of generatedValueObjects) {
+    const existing = valueObjects.find((valueObject) => valueObject.className === nested.className);
+    if (existing && !hasSameValueObjectShape(existing, nested)) {
+      throw new Error(
+        `Nested object "${nested.className}" conflicts with the business definition of the same name. ` +
+          `Add a more detailed modelling prompt; the generator will not choose between them.`,
+      );
+    }
+
+  }
+  return {
+    meta: { basePackage },
+    valueObjects: [
+      ...valueObjects,
+      ...generatedValueObjects.filter((nested) => !valueObjects.some((valueObject) => valueObject.className === nested.className)),
+    ],
+    events,
+    commands,
+    readModels,
+  };
 }
 
 export { parseSections, parseField, parseSearchOnlyField, parseDefinitions, CONVENTIONS };

@@ -235,12 +235,39 @@ function parseMdText(text) {
     // stripped) and only stripped for display later, at render time — see
     // isDoubleQuestionField below, which exempts it from the passthrough
     // check the same way [...] does.
-    const field = line.match(/^\s*[*-]\s+(.+)/);
+    const field = line.match(/^\s*(\*(?:\s+\*)*|-)\s+(.+)/);
     if (field) {
-      let fieldName = field[1].trim();
+      const marker = field[1];
+      const depth = marker === '-' ? 1 : marker.split(/\s+/).length;
+      let fieldName = field[2].trim();
       if (!fieldName.endsWith('??') && fieldName.endsWith('?')) fieldName = fieldName.slice(0, -1).trim();
-      (cur.fields || (cur.fields = [])).push(fieldName);
+      const tree = {
+        name: fieldName.replace(/\s+\(list\)$/i, '').trim(),
+        list: /\s+\(list\)$/i.test(fieldName),
+        children: [],
+      };
+      if (depth === 1) {
+        (cur.fieldTrees || (cur.fieldTrees = [])).push(tree);
+      } else {
+        const parent = lastFieldAtDepth(cur.fieldTrees || [], depth - 1);
+        if (!parent) {
+          throw new Error(`Nested field "${line.trim()}" has no parent at depth ${depth - 1}.`);
+        }
+        parent.children.push(tree);
+      }
+      (cur.fields || (cur.fields = [])).push(`${'  '.repeat(depth - 1)}${fieldName}`);
     }
+  }
+
+  function lastFieldAtDepth(fields, depth) {
+    let level = fields;
+    let parent = null;
+    for (let i = 0; i < depth; i += 1) {
+      parent = level.at(-1);
+      if (!parent) return null;
+      level = parent.children;
+    }
+    return parent;
   }
   return items;
 }
@@ -287,6 +314,19 @@ function normalizeField(f) {
 function hasMatchingField(field, upstreamFieldsList) {
   const target = normalizeField(field);
   return upstreamFieldsList.some((fields) => (fields || []).some((f) => normalizeField(f) === target));
+}
+
+function hasMatchingStructuredField(field, upstreamTrees) {
+  return upstreamTrees.some((trees) => (trees || []).some((candidate) =>
+    normalizeField(candidate.name) === normalizeField(field.name) && hasSameFieldShape(field, candidate),
+  ));
+}
+
+function hasSameFieldShape(left, right) {
+  if (left.list !== right.list || left.children.length !== right.children.length) return false;
+  return left.children.every((child, index) =>
+    normalizeField(child.name) === normalizeField(right.children[index].name) && hasSameFieldShape(child, right.children[index]),
+  );
 }
 
 // Check if a field is a transformation of a special :Id/:Key attribute.
@@ -568,12 +608,19 @@ function buildModel(inputDir) {
   events.forEach((e) => {
     const cmd = eventProducer[e.id];
     if (!cmd) return; // already reported as an orphan event above
-    (e.fields || []).forEach((f) => {
-      if (isBracketedField(f)) return;
-      if (!hasMatchingField(f, [cmd.fields])) {
+    (e.fieldTrees || []).forEach((f) => {
+      if (isBracketedField(f.name)) return;
+      if (!hasMatchingStructuredField(f, [cmd.fieldTrees])) {
+        const sourceWithSameName = (cmd.fieldTrees || []).some((source) => normalizeField(source.name) === normalizeField(f.name));
+        if (sourceWithSameName) {
+          throw new Error(
+            `Unsupported structured-field mapping for event '${e.id}' field "${f.name}": its (list)/nested "* *" shape differs from command '${cmd.id}'. ` +
+              `Add a more detailed mapping prompt; the generator will not guess.`,
+          );
+        }
         throw new Error(
-          `Consistency error: event '${e.id}' field "${f.trim()}" has no matching field in producing command '${cmd.id}'. ` +
-          `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.trim()}]". ` +
+          `Consistency error: event '${e.id}' field "${f.name}" has no matching field in producing command '${cmd.id}'. ` +
+          `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.name}]". ` +
           `Otherwise add the field to the command's payload.`
         );
       }
@@ -585,15 +632,29 @@ function buildModel(inputDir) {
   // a special :Id/:Key attribute (e.g., "policy id" matches "policy:Id").
   readmodels.forEach((rm) => {
     const subEvents = (rm.subscribes || []).map((id) => events.find((e) => e.id === id)).filter(Boolean);
-    (rm.fields || []).forEach((f) => {
-      if (isBracketedField(f)) return;
-      if (isDoubleQuestionField(f)) return;
-      if (hasMatchingField(f, subEvents.map((e) => e.fields))) return;
-      if (isTransformationOfSpecialAttribute(f, rm.aggregateId, rm.keys)) return;
+    (rm.fieldTrees || []).forEach((f) => {
+      if (isBracketedField(f.name)) return;
+      if (isDoubleQuestionField(f.name)) return;
+      if (hasMatchingStructuredField(f, subEvents.map((e) => e.fieldTrees))) return;
+      if (isTransformationOfSpecialAttribute(f.name, rm.aggregateId, rm.keys)) return;
+      const sourceWithSameName = subEvents.some((event) =>
+        (event.fieldTrees || []).some((source) => normalizeField(source.name) === normalizeField(f.name)),
+      );
+      const sourceWithRelatedName = subEvents.some((event) =>
+        (event.fieldTrees || []).some((source) =>
+          normalizeField(f.name).startsWith(`${normalizeField(source.name)} `),
+        ),
+      );
+      if (sourceWithSameName || sourceWithRelatedName) {
+        throw new Error(
+          `Unsupported structured-field mapping for read model '${rm.id}' field "${f.name}": it does not directly match a nested "(List)"/"* *" field from a subscribed event. ` +
+            `Add a more detailed mapping prompt; the generator will not guess how to flatten, filter, or aggregate nested objects.`,
+        );
+      }
       throw new Error(
-        `Consistency error: read model '${rm.id}' field "${f.trim()}" has no matching field in any subscribed event. ` +
-        `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.trim()}]". ` +
-        `If it's a read-model-only search criterion with no upstream field at all, mark it "??", e.g. "${f.trim()}??". ` +
+        `Consistency error: read model '${rm.id}' field "${f.name}" has no matching field in any subscribed event. ` +
+        `If this field is system-generated or calculated (not a direct passthrough), wrap it in [...], e.g. "[${f.name}]". ` +
+        `If it's a read-model-only search criterion with no upstream field at all, mark it "??", e.g. "${f.name}??". ` +
         `Otherwise add the field to the source event's payload.`
       );
     });

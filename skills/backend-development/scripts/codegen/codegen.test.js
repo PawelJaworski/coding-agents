@@ -119,6 +119,35 @@ policy:Id
   assert.deepEqual(s.fields.map((f) => f.name), ['policyNumber', 'policyHolder']);
 });
 
+test('sections parse (list) fields and nested star attributes into a field tree', () => {
+  const [s] = parseSections(`## issue-policy
+Produces: policy-issued
+* insured parties (list)
+* * name
+* * addresses (list)
+* * * street
+`);
+  assert.equal(s.fields.length, 1);
+  assert.equal(s.fields[0].name, 'insuredParties');
+  assert.equal(s.fields[0].list, true);
+  assert.deepEqual(s.fields[0].children.map((field) => field.name), ['name', 'addresses']);
+  assert.equal(s.fields[0].children[1].list, true);
+  assert.equal(s.fields[0].children[1].children[0].name, 'street');
+});
+
+test('nested fields without an immediate parent fail loudly', () => {
+  assert.throws(
+    () => parseSections('## issue-policy\n* * name\n'),
+    /Nested field .* has no parent at depth 1/,
+  );
+});
+
+test('nested list fields declare the object structure that parseModel turns into a value object', () => {
+  const [s] = parseSections('## issue-policy\n* insured parties (list)\n* * name\n');
+  assert.equal(s.fields[0].list, true);
+  assert.equal(s.fields[0].children[0].name, 'name');
+});
+
 test('aggregate id line is not mistaken for a field', () => {
   const [s] = parseSections('## x\nproposal:Id\n* a\n');
   assert.equal(s.fields.length, 1);
@@ -1047,6 +1076,64 @@ test('resolveArg sources the identity attribute from the aggregate id, never a n
   assert.deepEqual(r.imports, ['java.util.UUID']);
 });
 
+test('resolveArg refuses a list or nested mapping whose source shape differs', () => {
+  assert.throws(
+    () => resolveArg(
+      { name: 'insuredParties', label: 'insured parties', list: true, children: [{ name: 'name', children: [] }] },
+      {
+        sourceFields: [
+          { name: 'insuredParties', label: 'insured parties', list: true, children: [{ name: 'fullName', children: [] }] },
+        ],
+        sourceExpr: 'event',
+      },
+    ),
+    /Unsupported structured-field mapping.*more detailed mapping prompt/,
+  );
+});
+
+test('resolveArg delegates an unmappable structured field to the decider instead of throwing', () => {
+  const field = { name: 'productName', label: 'product name', javaType: 'String', imports: [], unmappable: { reason: "field 'product name' cannot be derived automatically from 'product (list)'" } };
+  const r = resolveArg(field, {
+    sourceFields: [],
+    sourceExpr: 'event',
+    delegate: { fieldName: 'decider', args: 'state, event' },
+  });
+  assert.equal(r.delegated, true);
+  assert.equal(r.expr, 'decider.productName(state, event)');
+});
+
+test('a projector for an unmappable structured read-model field generates but delegates to a throwing decider stub', () => {
+  const rm = {
+    id: 'stored-product',
+    className: 'StoredProduct',
+    package: 'pl.pjaworski.insurance_company.storedproduct',
+    deciderClassName: 'StoredProductProjectionDecider',
+    projectorClassName: 'StoredProductProjector',
+    getterMethod: 'getStoredProduct',
+    getMapping: 'stored-product/{aggregateId}',
+    subscribes: ['products-added'],
+    searchOnlyFields: [],
+    keyFields: [],
+    fields: [
+      IDENTITY_FIELD,
+      { name: 'productName', label: 'product name', javaType: 'String', imports: [], unmappable: { reason: "field 'product name' cannot be derived automatically from 'product (list)'" } },
+    ],
+  };
+  const event = {
+    id: 'products-added',
+    name: 'Products Added',
+    package: 'pl.pjaworski.insurance_company.domain.events',
+    className: 'ProductsAddedEvent',
+    fields: [{ name: 'productList', label: 'product', list: true, children: [{ name: 'name' }, { name: 'description' }], javaType: 'List<Product>', imports: [] }],
+  };
+  const p = projector(rm, new Map([['products-added', event]]), BASE);
+  assert.match(p.content, /decider\.productName\(state, event\)/);
+  const decider = p.collaborators.find((c) => c.scaffold).scaffold();
+  assert.match(decider.content, /public String productName\(StoredProduct state, ProductsAddedEvent event\)/);
+  assert.match(decider.content, /throw new UnsupportedOperationException\(/);
+  assert.match(decider.content, /cannot be derived automatically from 'product \(list\)'/);
+});
+
 test('an on-demand projector folds the identity attribute from event.aggregateId()', () => {
   const rm = {
     id: 'policy-details',
@@ -1228,6 +1315,76 @@ policyHolderSurname:Key
       { field: 'policyHolder', attr: 'surname' },
     ],
   );
+});
+
+test('parseModel generates a Product value object and List<Product> productList from nested list syntax', () => {
+  const model = withModelDir(
+    {
+      'business-definitions-raw.md': '',
+      'commands.md': `## add-products
+Produces: products-added
+* product (List)
+* * name
+* * description
+`,
+      'events.md': `## products-added
+product:Id
+* product (List)
+* * name
+* * description
+`,
+      'readmodels.md': `## products
+product:Id
+Subscribes: products-added
+* product (List)
+* * name
+* * description
+`,
+    },
+    (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+  );
+  const product = model.valueObjects.find((valueObject) => valueObject.className === 'Product');
+  assert.deepEqual(product.fields.map((field) => [field.javaType, field.name]), [
+    ['String', 'name'],
+    ['String', 'description'],
+  ]);
+  for (const element of [...model.commands, ...model.events, ...model.readModels]) {
+    const productList = element.fields.find((field) => field.name === 'productList');
+    assert.equal(productList.javaType, 'List<Product>');
+    assert.deepEqual(productList.imports, ['java.util.List', 'a.b.domain.Product']);
+  }
+});
+
+test('parseModel marks a flattened read-model mapping from a nested product list unmappable instead of aborting', () => {
+  const model = withModelDir(
+    {
+      'business-definitions-raw.md': '',
+      'commands.md': `## add-products
+Produces: products-added
+* product (List)
+* * name
+* * description
+`,
+      'events.md': `## products-added
+product:Id
+* product (List)
+* * name
+* * description
+`,
+      'readmodels.md': `## stored-product
+product:Key
+Subscribes: products-added
+* product name
+* product description
+`,
+    },
+    (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+  );
+  const rm = model.readModels.find((r) => r.id === 'stored-product');
+  const productName = rm.fields.find((f) => f.name === 'productName');
+  const productDescription = rm.fields.find((f) => f.name === 'productDescription');
+  assert.match(productName.unmappable.reason, /cannot be derived automatically from 'product \(list\)'/);
+  assert.match(productDescription.unmappable.reason, /cannot be derived automatically from 'product \(list\)'/);
 });
 
 test('parseModel raises a MODEL ERROR — not a silent guess or a crash elsewhere — when a named key attribute matches no field', () => {

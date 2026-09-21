@@ -7,6 +7,11 @@ Every read model must declare at least one of `{aggregateName}:Id` or one or
 more `{keyName}:Key` lines (see SKILL.md) — a read model with neither is a
 hard error.
 
+Lists use `* field (list)` and child attributes use repeated bullets (`* * child`).
+
+`* product (List)` plus nested `* *` attributes maps directly only from an
+identically structured event.
+
 Note: `attribute:Id` and `attribute:Key` have special meanings (identifiers/keys)
 and are rendered as bold lines under the card title. You can also add these
 attributes as normal field attributes with different naming (e.g., `attributeId`

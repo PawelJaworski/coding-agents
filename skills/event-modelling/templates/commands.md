@@ -3,6 +3,11 @@
 Commands are the actions actors ask the system to perform. Each command is an
 `## heading` whose text is its id. One heading per command.
 
+`* product (List)` plus nested `* *` attributes declares `Product` and
+`List<Product> productList`.
+
+Lists use `* field (list)` and child attributes use repeated bullets (`* * child`).
+
 ## submit-policy-application
 Name: Submit Policy Application
 Produces: policy-application-submitted

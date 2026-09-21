@@ -98,6 +98,22 @@ Produces: policy-holder-added
   assert.deepEqual(items[0].fields, ['name', 'address']);
 });
 
+test('parseMdText retains (list) and nested-star structure while rendering indented fields', () => {
+  const [item] = parseMdText(`
+## issue-policy
+Produces: policy-issued
+* insured parties (list)
+* * name
+* * addresses (list)
+* * * street
+`);
+  assert.deepEqual(item.fields, ['insured parties (list)', '  name', '  addresses (list)', '    street']);
+  assert.equal(item.fieldTrees[0].name, 'insured parties');
+  assert.equal(item.fieldTrees[0].list, true);
+  assert.equal(item.fieldTrees[0].children[1].list, true);
+  assert.equal(item.fieldTrees[0].children[1].children[0].name, 'street');
+});
+
 test('parseMdText parses an events.md-shaped entry with {aggregateName}:Id', () => {
   const items = parseMdText(`
 ## policy-holder-added
@@ -374,6 +390,71 @@ policyHolderId:Key
 `,
   });
   assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('buildModel accepts a structurally identical nested list passthrough', () => {
+    const dir = baseFixture({
+      commands: `## add-policy-holder
+Produces: policy-holder-added
+* addresses (list)
+* * street
+`,
+      events: `## policy-holder-added
+policyHolder:Id
+* addresses (list)
+* * street
+`,
+      readmodels: `## policy-holder-view
+Subscribes: policy-holder-added
+policyHolderId:Key
+* addresses (list)
+* * street
+`,
+    });
+    assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('buildModel refuses a nested read-model mapping whose source shape differs', () => {
+    const dir = baseFixture({
+      commands: `## add-policy-holder
+Produces: policy-holder-added
+* addresses (list)
+* * street
+`,
+      events: `## policy-holder-added
+policyHolder:Id
+* addresses (list)
+* * street
+`,
+      readmodels: `## policy-holder-view
+Subscribes: policy-holder-added
+policyHolderId:Key
+* addresses (list)
+* * postal code
+`,
+    });
+
+    test('buildModel refuses flattening a nested list into read-model fields without mapping details', () => {
+      const dir = baseFixture({
+        commands: `## add-policy-holder
+    Produces: policy-holder-added
+    * product (List)
+    * * name
+    `,
+        events: `## policy-holder-added
+    policyHolder:Id
+    * product (List)
+    * * name
+    `,
+        readmodels: `## policy-holder-view
+    Subscribes: policy-holder-added
+    policyHolderId:Key
+    * product name
+    `,
+      });
+      assert.throws(() => buildModel(dir), /Unsupported structured-field mapping.*more detailed mapping prompt/);
+    });
+    assert.throws(() => buildModel(dir), /Unsupported structured-field mapping.*more detailed mapping prompt/);
 });
 
 test('buildModel allows a "??"-suffixed read-model field that matches an upstream event field', () => {

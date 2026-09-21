@@ -214,6 +214,20 @@ by command "do-thing" and is not [bracketed]. Either add it to the command or br
 
 Fix the model — never work around it in code.
 
+**Degrade, don't abort.** A model gap whose *shape* is still knowable (only the value
+is unguessable) does **not** stop the run. The generator emits a **throwing stub** for
+just that element, prints a `WARNING`, and keeps generating everything else:
+
+- an unresolvable named key attribute (e.g. `productCode:Key` over flat fields) becomes a
+  fallback `String` key component; the projector delegates it to the read model's decider,
+  which throws `UnsupportedOperationException` naming the attribute until implemented;
+- a structured `(list)`/nested `"* *"` field used as a key degrades the same way;
+- `[bracketed]` fields and unmappable structured fields already work like this.
+
+Warnings are **never hidden** (printed by `--check` too) and `--check` still exits 0:
+the generated stub is valid, compilable code whose body throws the error message, so the
+gap is a loud runtime failure until a GWT scenario — or a model fix — resolves it.
+
 ## Projection strategy: `:Id` vs `:Key`
 
 A read model must declare one or the other; the generator refuses to guess.
@@ -256,6 +270,22 @@ a persisting read model can be marked with a trailing `:Key` (e.g. `* policy num
   repositories/lookups operate on `<Name>Key` instead of `UUID aggregateId`. Multiple
   aggregates project into distinct rows identified by their business keys;
 - when no field carries `:Key`: the entity falls back to `UUID aggregateId` as `@Id`.
+
+### Named key attributes and unresolvable keys
+
+Besides marking a whole field `:Key`, a header line can name one specific attribute of an
+already-declared value-object field — `policyHolderName:Key` over `* policy holder` keys
+by just that holder's `name` attribute (the composite id then carries a derived
+`policyHolderName` component reading `.name()` off the value object). This is the only
+form whose key does not live on the read model record itself.
+
+A named key attribute that **no** declared field/attribute decomposes into (`productCode:Key`
+over flat `* product name`/`* product description` fields) is not a `MODEL ERROR`: the
+generator emits a `String productCode` key component and delegates the key to the read
+model's decider, whose `productCode(…)` throws `UnsupportedOperationException` telling you
+exactly which attribute to add or rename. The run completes with a `WARNING` (see
+*Failure modes*); every other element still generates. Fix it by declaring the value-object
+field the key reads from, or by renaming the key to a field that exists.
 
 A value-object field on the read model becomes:
 

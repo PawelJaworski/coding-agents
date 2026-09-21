@@ -269,8 +269,9 @@ export function requireSearchOnlyFieldsHaveData(readModelId, fields, searchOnlyF
  * guess"): the name's leading words must exactly match an existing field's own
  * label, and the exact remainder must exactly match exactly one of that
  * field's value-object attributes. Zero or multiple matches both return null
- * — the caller turns that into a MODEL ERROR naming the read model and the
- * unresolved path, rather than silently picking one or inventing a field.
+ * — the caller degrades the key to a throwing String-key stub and records a
+ * WARNING (see the read-model loop), rather than silently picking one or
+ * inventing a field.
  *
  * @param {string} name - the header line's name, e.g. "policyHolderName"
  * @param {object[]} fields - the read model's OWN decorated fields
@@ -463,6 +464,9 @@ function markUnmappableReadModelFields(readModelId, fields, events) {
 // ---- top level ------------------------------------------------------------
 
 export function parseModel({ modelDir, basePackage }) {
+  // Non-fatal model issues: the run keeps generating, these surface as WARNINGs
+  // (see emit.js — the affected element becomes a generated-but-throwing stub).
+  const warnings = [];
   const read = (f) => {
     const p = path.join(modelDir, f);
     if (!fs.existsSync(p)) throw new Error(`Missing model file: ${p}`);
@@ -617,14 +621,28 @@ export function parseModel({ modelDir, basePackage }) {
         }
         const resolved = resolveKeyAttributePath(name, decoratedFields);
         if (!resolved) {
-          throw new Error(
-            `Read model "${s.id}" names key attribute "${name}:Key" but no declared field's ` +
-              `value-object attribute matches that path. It must decompose into an already-` +
-              `declared field ("* <value-object field>") followed by exactly one of that ` +
-              `value object's own attributes — e.g. "policyHolderName" needs a field ` +
-              `"* policy holder" whose value object has an attribute "name". Add the missing ` +
-              `field or fix the name; the generator does not guess.`,
+          // An unresolvable named key is NOT a run-stopping MODEL ERROR. The
+          // key's value is unguessable, but its SHAPE is not: degrade it to a
+          // plain String key component and let emit.js generate a throwing
+          // decider stub (see resolveKeyAttributePath above) — every other
+          // element still generates. Report the gap as a WARNING, then let a
+          // hand-implemented stub (or a model fix) resolve it later.
+          warnings.push(
+            `Read model "${s.id}" names key attribute "${name}:Key" that no declared ` +
+              `value-object field/attribute matches. Generated a throwing stub with a fallback ` +
+              `String key. Add a "* <value-object field>" whose value object has the named ` +
+              `attribute, or fix the name.`,
           );
+          return {
+            name: name[0].toLowerCase() + name.slice(1),
+            label: name,
+            key: true,
+            javaType: 'String', // fallback only — the generator does not guess the real type
+            imports: [],
+            unmappableKey: {
+              reason: `key attribute '${name}:Key' matches no declared field's value-object attribute`,
+            },
+          };
         }
         return {
           // The header line's name IS the camelCase field name already (unlike a
@@ -659,11 +677,22 @@ export function parseModel({ modelDir, basePackage }) {
     }
     const structuredKeyFields = keyFields.filter((field) => field.list || field.children?.length);
     if (structuredKeyFields.length) {
-      throw new Error(
+      // A structured ((list)/nested "* *") field as a natural key has no
+      // unambiguous persistence contract either — same class of "unknowable
+      // value, knowable shape" as an unresolvable named key. Degrade the same
+      // way: emit.js delegates the key to a throwing decider stub and the run
+      // keeps going.
+      for (const field of structuredKeyFields) {
+        field.unmappableKey = {
+          reason: `structured field '${field.name}' used as a key — persistence of a (list)/nested "* *" field as a natural key has no unambiguous contract`,
+        };
+      }
+      warnings.push(
         `Read model "${s.id}" uses structured field(s) ` +
-          `${structuredKeyFields.map((field) => `"${field.label}"`).join(', ')} as its key. ` +
-          `Add a more detailed mapping prompt before generating this projector; persistence ` +
-          `of a (list)/nested "* *" field as a natural key has no unambiguous contract.`,
+          `${structuredKeyFields.map((field) => `"${field.name}"`).join(', ')} as its key. ` +
+          `Generated a throwing decider stub. Add a more detailed mapping prompt before ` +
+          `implementing this projector's key; persistence of a (list)/nested "* *" field as a ` +
+          `natural key has no unambiguous contract.`,
       );
     }
     // Decorated the same way as regular fields (so a search-only criterion named
@@ -711,6 +740,7 @@ export function parseModel({ modelDir, basePackage }) {
   }
   return {
     meta: { basePackage },
+    warnings,
     valueObjects: [
       ...valueObjects,
       ...generatedValueObjects.filter((nested) => !valueObjects.some((valueObject) => valueObject.className === nested.className)),

@@ -381,7 +381,7 @@ function projector(rm, eventsById, base) {
     fieldName: 'decider',
     className: rm.deciderClassName,
     testInstantiation: `new ${rm.deciderClassName}()`,
-    scaffold: () => projectionDecider(rm, eventsById),
+    scaffold: () => projectionDecider(rm, eventsById, base),
   });
 
   let delegated = false;
@@ -448,9 +448,39 @@ ${applies.join('\n\n')}
   };
 }
 
-function projectionDecider(rm, eventsById) {
+function projectionDecider(rm, eventsById, base) {
   const methods = [];
   const imports = ['org.springframework.stereotype.Component'];
+  // A degraded key (unmappableKey) emits a `key(state, event)` stub below. If a
+  // regular field of the SAME name is also marked unmappable (a model like
+  // `* product code` + `productCode:Key`), both loops would emit the identical
+  // signature — skip the field stub so the key stub is the single implementation.
+  const unmappableKeyNames = new Set((rm.keyFields || []).filter((f) => f.unmappableKey).map((f) => f.name));
+  // An unresolvable/structured key (parse.js marked it `unmappableKey`) can't be
+  // derived automatically, so the projector delegates it to the decider exactly
+  // like an unmappable field. Two overloads: the apply() path passes the concrete
+  // event (state, event), while project(DomainEvent) only has the generic
+  // interface — a stub that throws the same message until hand-implemented.
+  for (const f of rm.keyFields || []) {
+    if (!f.unmappableKey) continue;
+    imports.push(`${base}.eventstream.DomainEvent`, ...(f.imports || []));
+    for (const eid of rm.subscribes) {
+      const e = eventsById.get(eid);
+      imports.push(`${e.package}.${e.className}`);
+      methods.push(`    public ${f.javaType} ${f.name}(${rm.className} state, ${e.className} event) {
+        throw new UnsupportedOperationException(
+                "Key attribute '${f.label}:Key' on read model '${rm.id}' matches no declared field's " +
+                "value-object attribute. Add a \\"* <value-object field>\\" whose value object has the " +
+                "named attribute, or fix the name, then implement this method by hand.");
+    }`);
+      methods.push(`    public ${f.javaType} ${f.name}(DomainEvent event) {
+        throw new UnsupportedOperationException(
+                "Key attribute '${f.label}:Key' on read model '${rm.id}' matches no declared field's " +
+                "value-object attribute. Add a \\"* <value-object field>\\" whose value object has the " +
+                "named attribute, or fix the name, then implement this method by hand.");
+    }`);
+    }
+  }
   for (const eid of rm.subscribes) {
     const e = eventsById.get(eid);
     for (const f of rm.fields.filter((x) => x.bracketed && !x.convention)) {
@@ -460,7 +490,7 @@ function projectionDecider(rm, eventsById) {
                 "[${f.label}] on read model '${rm.id}' is a projection decision with no GWT scenario yet");
     }`);
     }
-    for (const f of rm.fields.filter((x) => x.unmappable)) {
+    for (const f of rm.fields.filter((x) => x.unmappable && !unmappableKeyNames.has(x.name))) {
       imports.push(...f.imports, `${e.package}.${e.className}`);
       methods.push(`    public ${f.javaType} ${f.name}(${rm.className} state, ${e.className} event) {
         throw new UnsupportedOperationException(
@@ -1114,10 +1144,14 @@ function persistingProjector(rm, eventsById, base) {
     fieldName: 'decider',
     className: rm.deciderClassName,
     testInstantiation: `new ${rm.deciderClassName}()`,
-    scaffold: () => projectionDecider(rm, eventsById),
+    scaffold: () => projectionDecider(rm, eventsById, base),
   });
 
   let delegated = false;
+  // An unresolvable/structured key delegates to the decider like any unmappable
+  // field — the decider collaborator must be wired even when no regular field ever
+  // delegates a projected VALUE to it.
+  if (rm.keyFields.some((f) => f.unmappableKey)) delegated = true;
   const applies = rm.subscribes.map((eid) => {
     const e = eventsById.get(eid);
     const args = rm.fields.map((f) => {
@@ -1137,8 +1171,12 @@ function persistingProjector(rm, eventsById, base) {
     // A derived field (one attribute carved out of a value-object field, e.g.
     // "policyHolderName") has no accessor of its own on the projected record —
     // it was never added as one of its components — so it reads through the
-    // owning field instead: `projected.policyHolder().name()`.
-    const projectedKeyArg = (f) => (f.derivedFrom ? `projected.${f.derivedFrom.field}().${f.derivedFrom.attr}()` : `projected.${f.name}()`);
+    // owning field instead: `projected.policyHolder().name()`. An unresolvable
+    // key delegates to the decider, which throws until hand-implemented.
+    const projectedKeyArg = (f) => {
+      if (f.unmappableKey) return `decider.${f.name}(state, event)`;
+      return f.derivedFrom ? `projected.${f.derivedFrom.field}().${f.derivedFrom.attr}()` : `projected.${f.name}()`;
+    };
     const entitySave = keyed
       ? `repository.save(new ${rm.entityClassName}(new ${rm.idClassName}(${rm.keyFields.map(projectedKeyArg).join(', ')}), ${rm.fields.filter((f) => !keyNames.has(f.name)).map((f) => `projected.${f.name}()`).join(', ')}));`
       : `repository.save(new ${rm.entityClassName}(event.aggregateId(), ${rm.fields.map((f) => `projected.${f.name}()`).join(', ')}));`;
@@ -1167,6 +1205,10 @@ ${args.map((a) => `                ${a}`).join(',\n')});
   const keyArgsFor = (eventClassName) =>
     rm.keyFields.map((f) => {
       if (f.identity) return 'event.aggregateId()';
+      // An unresolvable key has no event accessor to read — project(DomainEvent)
+      // only sees the generic interface, so it goes through the decider's
+      // DomainEvent overload (a throwing stub until hand-implemented).
+      if (f.unmappableKey) return `decider.${f.name}(event)`;
       const cast = `((${eventClassName}) event)`;
       // A derived field reads through the value-object field it was carved out
       // of — the event has no accessor of its own named after the derived path.

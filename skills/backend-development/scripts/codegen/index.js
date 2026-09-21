@@ -256,9 +256,10 @@ if (patchMode) {
   debug.log('PATCH_RESULT', summary);
 
   if (json) {
-    console.log(JSON.stringify({ patchDir: PATCH_DIR, patches: summary }, null, 2));
+    console.log(JSON.stringify({ patchDir: PATCH_DIR, patches: summary, warnings: model.warnings }, null, 2));
     process.exit(0);
   }
+  printWarnings(model.warnings);
   console.log(`\n  PATCH written to ${PATCH_DIR}/\n`);
   for (const s of summary) {
     console.log(
@@ -400,9 +401,20 @@ function buildResult(selection, patches, modelError = null) {
   };
 }
 
-function printResult(result) {
+function printWarnings(warnings = []) {
+  if (!warnings.length) return;
+  console.error(`\n  WARNING${warnings.length > 1 ? 'S' : ''} (model generated with fallbacks):`);
+  warnings.forEach((w) => console.error(`    ${w}`));
+  console.error(
+    `  Each warning became a generated-but-throwing stub. Implement the stub (or fix ` +
+      `the model) before relying on the affected element at runtime.\n`,
+  );
+}
+
+function printResult(result, warnings = []) {
+  printWarnings(warnings);
   if (json) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, warnings }, null, 2));
     return;
   }
   console.log(`\n  STEP: ${result.step}`);
@@ -501,11 +513,12 @@ if (nextMode) {
     state: result.state,
     step: result.step,
     remaining: result.remaining,
+    warnings: model.warnings,
     prompt: result.next?.prompt ?? null,
   });
   debug.prompt(result.step, result.next?.prompt ?? null);
 
-  printResult(result);
+  printResult(result, model.warnings);
 
   if (args.includes('--check')) process.exit(result.state === 'DONE' ? 0 : 1);
   process.exit(result.state === 'DONE' ? 0 : 1);
@@ -715,8 +728,13 @@ if (checkOnly) {
     staleScaffold,
     staleGenerated,
     needsManualMerge,
+    warnings: model.warnings,
     advisoryDrifts: advisoryDrifts.map((item) => item.relPath),
   });
+  // Warnings are non-blocking: the generator deliberately generated a throwing
+  // stub instead of aborting. They do not, on their own, make --check fail — but
+  // they always print, so the model issue is never hidden.
+  printWarnings(model.warnings);
   if (stale.length) {
     console.error(`\n  OUT OF DATE  ${stale.length} generated file(s) differ from the model:`);
     stale.forEach((f) => console.error(`    ${f}`));
@@ -751,12 +769,14 @@ console.log(
   `\n  ${written.length} written, ${preserved.length} preserved, ` +
     `${files.length - written.length - preserved.length} unchanged`,
 );
+printWarnings(model.warnings);
 debug.log('GENERATE_RESULT', {
   written,
   preserved,
   staleScaffold,
   staleGenerated,
   needsManualMerge,
+  warnings: model.warnings,
   debugLog: DEBUG_LOG_PATH,
 });
 if (staleGenerated.length) {

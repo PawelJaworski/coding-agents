@@ -1134,6 +1134,71 @@ test('a projector for an unmappable structured read-model field generates but de
   assert.match(decider.content, /cannot be derived automatically from 'product \(list\)'/);
 });
 
+test('a persisting projector for an unresolvable named key delegates the key to a throwing decider stub and keeps generating', () => {
+  const rm = {
+    id: 'stored-product',
+    className: 'StoredProduct',
+    package: `${BASE}.storedproduct`,
+    getterMethod: 'getStoredProduct',
+    getMapping: 'stored-product',
+    dslMethod: 'expect_stored_product',
+    entityClassName: 'StoredProductEntity',
+    idClassName: 'StoredProductKey',
+    abilityClassName: 'StoredProductProjectorAbility',
+    repositoryClassName: 'StoredProductRepository',
+    repositoryConstant: 'STORED_PRODUCT_REPOSITORY',
+    tableName: 'stored_product',
+    subscribes: ['products-added'],
+    searchOnlyFields: [],
+    keyFields: [
+      { name: 'productCode', label: 'productCode', key: true, javaType: 'String', imports: [], unmappableKey: { reason: "key attribute 'productCode:Key' matches no declared field's value-object attribute" } },
+    ],
+    fields: [
+      { name: 'productCode', label: 'product code', javaType: 'String', imports: [], unmappable: { reason: "field 'product code' cannot be derived automatically from 'product (list)'" } },
+      { name: 'productName', label: 'product name', javaType: 'String', imports: [], unmappable: { reason: "field 'product name' cannot be derived automatically from 'product (list)'" } },
+      { name: 'productDescription', label: 'product description', javaType: 'String', imports: [], unmappable: { reason: "field 'product description' cannot be derived automatically from 'product (list)'" } },
+    ],
+  };
+  const event = {
+    id: 'products-added',
+    name: 'Products Added',
+    package: `${BASE}.domain.events`,
+    className: 'ProductsAddedEvent',
+    typeEnum: 'PRODUCTS_ADDED',
+    fields: [{ name: 'productList', label: 'product', list: true, children: [{ name: 'code' }, { name: 'name' }, { name: 'description' }], javaType: 'List<Product>', imports: [] }],
+  };
+  const p = persistingProjector(rm, new Map([['products-added', event]]), BASE);
+  // apply: the composite key is delegated to the decider over the concrete event.
+  assert.match(p.content, /new StoredProductKey\(decider\.productCode\(state, event\)\)/);
+  // project(DomainEvent): the lookup key goes through the decider's DomainEvent
+  // overload, since the generic interface has no productCode accessor.
+  assert.match(p.content, /case PRODUCTS_ADDED -> new StoredProductKey\(decider\.productCode\(event\)\)/);
+  // The decider collaborator must be wired even though no regular field delegates.
+  assert.ok(p.collaborators.some((c) => c.fieldName === 'decider'));
+  const decider = p.collaborators.find((c) => c.scaffold).scaffold();
+  assert.match(decider.content, /public String productCode\(StoredProduct state, ProductsAddedEvent event\)/);
+  assert.match(decider.content, /public String productCode\(DomainEvent event\)/);
+  assert.match(decider.content, /throw new UnsupportedOperationException\(/);
+  assert.match(decider.content, /productCode:Key/);
+  assert.match(decider.content, /import .*\.eventstream\.DomainEvent;/);
+  // The model's SAME-named flat field (* product code) is also unmappable — its
+  // stub must NOT be emitted a second time, or the class has a duplicate overload.
+  const stateEventOverload = 'public String productCode(StoredProduct state, ProductsAddedEvent event)';
+  assert.equal(
+    decider.content.split(stateEventOverload).length - 1,
+    1,
+    'the unmappableKey key stub and a same-named unmappable field must collapse to one overload',
+  );
+  assert.ok(
+    !decider.content.includes("field 'product code' cannot be derived automatically"),
+    'the same-named unmappable field stub must not be emitted separately',
+  );
+  // The composite id keeps a plain String component (fallback type), so the whole
+  // slice compiles while the key decision throws at runtime until implemented.
+  const key = readModelKey(rm);
+  assert.match(key.content, /@Embeddable\s+public record StoredProductKey\(\s+String productCode\)/);
+});
+
 test('an on-demand projector folds the identity attribute from event.aggregateId()', () => {
   const rm = {
     id: 'policy-details',
@@ -1226,12 +1291,14 @@ test('a `once` file keeps its header — scaffold-version is state the patch can
 // --- parseModel end-to-end: named key attributes over a real model directory ---
 // Exercises the full pipeline (parseSections -> decorate -> resolveKeyAttributePath)
 // against real files, including the defensive guard: an unresolvable named key
-// attribute must be reported as a MODEL ERROR (a thrown, descriptive Error), never
-// silently accepted, silently dropped, or guessed at.
+// attribute no longer aborts the run — it degrades to a throwing String-key stub,
+// records a WARNING, and every other element still generates.
 
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parseModel } from './parse.js';
 
 function withModelDir(files, run) {
@@ -1387,7 +1454,7 @@ Subscribes: products-added
   assert.match(productDescription.unmappable.reason, /cannot be derived automatically from 'product \(list\)'/);
 });
 
-test('parseModel raises a MODEL ERROR — not a silent guess or a crash elsewhere — when a named key attribute matches no field', () => {
+test('parseModel degrades an unresolvable named key to a throwing-stub String key with a WARNING, instead of aborting', () => {
   const run = () =>
     withModelDir(
       {
@@ -1402,7 +1469,58 @@ policyHolderAddress:Key
       },
       (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
     );
-  assert.throws(run, /insured-policies.*policyHolderAddress:Key.*no declared field/s);
+  assert.doesNotThrow(run, 'an unresolvable named key must not abort the whole run');
+  const model = run();
+  const rm = model.readModels.find((r) => r.id === 'insured-policies');
+  // The key field becomes a plain String fallback, marked unmappableKey so
+  // emit.js can generate a throwing decider stub for it.
+  const key = rm.keyFields.find((f) => f.name === 'policyHolderAddress');
+  assert.ok(key, 'the degraded key field is present');
+  assert.equal(key.label, 'policyHolderAddress');
+  assert.equal(key.key, true);
+  assert.equal(key.javaType, 'String');
+  assert.ok(key.unmappableKey);
+  assert.match(key.unmappableKey.reason, /matches no declared field's value-object attribute/);
+  // The record itself is still exactly the declared fields — the degraded key
+  // lives only in the persistence key, never as a component.
+  assert.deepEqual(rm.fields.map((f) => f.name), ['policyHolder', 'noOfPolicies']);
+  // The gap is reported, never hidden: one warning naming the read model + path.
+  assert.equal(model.warnings.length, 1);
+  assert.match(model.warnings[0], /insured-policies.*policyHolderAddress:Key/s);
+});
+
+test('parseModel degrades a structured (list) field used as a key to a warning + throwing stub, instead of aborting', () => {
+  const model = withModelDir(
+    {
+      'business-definitions-raw.md': '',
+      'commands.md': `## add-products
+Produces: products-added
+* product (List)
+* * name
+* * description
+`,
+      'events.md': `## products-added
+product:Id
+* product (List)
+* * name
+* * description
+`,
+      'readmodels.md': `## products
+product:Key
+Subscribes: products-added
+* product (List):Key
+* * name
+* * description
+`,
+    },
+    (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+  );
+  const rm = model.readModels.find((r) => r.id === 'products');
+  const key = rm.keyFields.find((f) => f.name === 'productList');
+  assert.ok(key, 'the structured key field is still part of the key');
+  assert.ok(key.unmappableKey);
+  assert.match(key.unmappableKey.reason, /structured field 'productList' used as a key/);
+  assert.match(model.warnings.join('\n'), /structured field\(s\).*"productList".*as its key/s);
 });
 
 test('parseModel raises a MODEL ERROR when a named key attribute uses :Id instead of :Key', () => {
@@ -1440,4 +1558,42 @@ policy:Key
   assert.equal(rm.aggregate, 'policy');
   assert.equal(rm.fields[0].identity, true);
   assert.equal(rm.fields[0].name, 'policyKey');
+});
+
+test('CLI: an unresolvable named key generates a full project, warning prints, and --check exits 0 (warnings are non-blocking)', () => {
+  const project = mkdtempSync(path.join(tmpdir(), 'codegen-project-'));
+  const docs = path.join(project, 'docs');
+  const src = path.join(project, 'src');
+  mkdirSync(docs, { recursive: true });
+  mkdirSync(src, { recursive: true });
+  const cli = path.dirname(fileURLToPath(import.meta.url));
+  try {
+    writeFileSync(
+      path.join(project, 'codegen.config.json'),
+      JSON.stringify({ basePackage: 'com.example.myapp', modelDir: 'docs' }),
+    );
+    for (const [name, content] of Object.entries(NAMED_KEY_MODEL_FILES)) {
+      writeFileSync(path.join(docs, name), content);
+    }
+    writeFileSync(
+      path.join(docs, 'readmodels.md'),
+      `## insured-policies
+Name: Insured policies
+Subscribes: policy-issued
+policyHolderAddress:Key
+* policy holder
+* [no of policies]
+`,
+    );
+    const generate = spawnSync(process.execPath, [cli], { cwd: project, encoding: 'utf8' });
+    assert.equal(generate.status, 0, `generate must not abort on an unresolvable named key:\n${generate.stderr}`);
+    assert.match(generate.stderr, /WARNING.*policyHolderAddress:Key/s);
+
+    const check = spawnSync(process.execPath, [cli, '--check'], { cwd: project, encoding: 'utf8' });
+    assert.equal(check.status, 0, 'warnings alone must not fail the CI gate');
+    assert.match(check.stderr, /WARNING.*"policyHolderAddress:Key".*no declared value-object field\/attribute matches/s);
+    assert.match(check.stdout, /up to date/);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
 });

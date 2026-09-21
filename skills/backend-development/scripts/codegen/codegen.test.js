@@ -927,12 +927,44 @@ test('persistingProjector saves entity with composite key when keyFields present
   const p = persistingProjector(keyedRm(), eventsById, BASE);
   assert.match(p.content, /repository\.save\(new PolicyListEntity\(new PolicyListKey\(projected\.policyNumber\(\)\), projected\.policyHolder\(\)\)\);/);
   // A non-identity key field has no accessor on the generic DomainEvent project()
-  // receives — dispatch to the concrete event class happens one level deeper, in
-  // hydrate(). So the lookup key must be built from a cast, per subscribed event
-  // type, not a direct `event.policyNumber()` call (which would not compile).
-  assert.match(p.content, /case POLICY_ISSUED -> new PolicyListKey\(\(\(PolicyIssuedEvent\) event\)\.policyNumber\(\)\);/);
-  assert.doesNotMatch(p.content, /findById\(new PolicyListKey\(event\.policyNumber\(\)\)\)/);
+  // receives — dispatch pattern-matches the concrete event class directly, so the
+  // lookup key is built from the typed event in its own switch case, with no cast
+  // and no hydrate().
+  assert.match(p.content, /case PolicyIssuedEvent evt ->/);
+  assert.match(p.content, /repository\.findById\(new PolicyListKey\(evt\.policyNumber\(\)\)\)/);
+  assert.doesNotMatch(p.content, /\(\(PolicyIssuedEvent\) event\)/);
+  assert.doesNotMatch(p.content, /hydrate\(/);
   assert.doesNotMatch(p.content, /event\.aggregateId\(\)/);
+});
+
+test('a persisting projector is a per-event mapper, never a stream-rebuild state projector', () => {
+  const eventsById = new Map([
+    ['policy-issued', {
+      id: 'policy-issued',
+      name: 'Policy Issued',
+      package: 'pl.pjaworski.insurance_company.domain.events',
+      className: 'PolicyIssuedEvent',
+      typeEnum: 'POLICY_ISSUED',
+      fields: [
+        { name: 'policyHolder', javaType: 'PolicyHolder' },
+        { name: 'policyNumber', javaType: 'String' },
+      ],
+    }],
+  ]);
+  const p = persistingProjector(keyedRm(), eventsById, BASE);
+  // No whole-state machinery: the class does not implement StateProjector, hydrate
+  // is never called, and apply() is a plain per-event mapper (not an @Override).
+  assert.match(p.content, /public class PolicyListProjector implements PersistingProjector/);
+  assert.doesNotMatch(p.content, /StateProjector/);
+  assert.doesNotMatch(p.content, /hydrate\(/);
+  assert.doesNotMatch(p.content, /@Override\s+public PolicyList apply/);
+  assert.match(p.content, /project\(DomainEvent event\)/);
+  assert.match(p.content, /case PolicyIssuedEvent evt ->/);
+  assert.match(p.content, /default -> \{/);
+  // A missing row is a create: apply() must run even when the lookup is empty, so
+  // the row is never silently dropped on the first event for its key.
+  assert.match(p.content, /\.orElse\(null\);/);
+  assert.match(p.content, /apply\(state, evt\);/);
 });
 
 
@@ -1042,13 +1074,15 @@ test('persistingProjector looks state up by the embedded value-object key, not t
       fields: [{ name: 'policyHolder', javaType: 'PolicyHolder' }],
     }],
   ]);
-  const p = persistingProjector(embeddedKeyedRm(), eventsById, BASE);
+const p = persistingProjector(embeddedKeyedRm(), eventsById, BASE);
   // project(DomainEvent event) only has DomainEvent's own members (aggregateId())
-  // available on `event` — the concrete PolicyIssuedEvent cast is required before
-  // `.policyHolder()` can be called, and it is looked up per subscribed event type.
-  assert.match(p.content, /case POLICY_ISSUED -> new InsuredPoliciesKey\(\(\(PolicyIssuedEvent\) event\)\.policyHolder\(\)\);/);
-  assert.doesNotMatch(p.content, /findById\(new InsuredPoliciesKey\(event\.policyHolder\(\)\)\)/);
-  assert.match(p.content, /repository\.save\(new InsuredPoliciesEntity\(new InsuredPoliciesKey\(projected\.policyHolder\(\)\), projected\.policyKey\(\), projected\.noOfPolicies\(\)\)\);/);
+  // available on `event` — the concrete event is bound by per-event pattern
+  // dispatch, so `.policyHolder()` is callable on `evt` without a cast.
+  assert.match(p.content, /case PolicyIssuedEvent evt ->/);
+  assert.match(p.content, /repository\.findById\(new InsuredPoliciesKey\(evt\.policyHolder\(\)\)\)/);
+  assert.doesNotMatch(p.content, /\(\(PolicyIssuedEvent\) event\)/);
+  assert.doesNotMatch(p.content, /hydrate\(/);
+  assert.match(p.content, /repository\.save\(new InsuredPoliciesEntity\(new InsuredPoliciesKey\(projected\.policyHolder\(\)\), projected\.policyKey\(\), projected\.noOfPolicies\(\)\)\)/);
   assert.doesNotMatch(p.content, /repository\.findById\(event\.aggregateId\(\)\)/);
 });
 
@@ -1170,9 +1204,10 @@ test('a persisting projector for an unresolvable named key delegates the key to 
   const p = persistingProjector(rm, new Map([['products-added', event]]), BASE);
   // apply: the composite key is delegated to the decider over the concrete event.
   assert.match(p.content, /new StoredProductKey\(decider\.productCode\(state, event\)\)/);
-  // project(DomainEvent): the lookup key goes through the decider's DomainEvent
-  // overload, since the generic interface has no productCode accessor.
-  assert.match(p.content, /case PRODUCTS_ADDED -> new StoredProductKey\(decider\.productCode\(event\)\)/);
+  // project(): per-event typed dispatch delegates the lookup key to the decider's
+  // DomainEvent overload with the bound concrete event.
+  assert.match(p.content, /case ProductsAddedEvent evt ->/);
+  assert.match(p.content, /new StoredProductKey\(decider\.productCode\(evt\)\)/);
   // The decider collaborator must be wired even though no regular field delegates.
   assert.ok(p.collaborators.some((c) => c.fieldName === 'decider'));
   const decider = p.collaborators.find((c) => c.scaffold).scaffold();
@@ -1234,7 +1269,7 @@ test('an identity field marked :Key is a composite member looked up by the aggre
     };
   })();
   const p = persistingProjector(rm, new Map([['policy-issued', issuedEvent([{ name: 'policyHolder', javaType: 'PolicyHolder' }])]]), BASE);
-  assert.match(p.content, /repository\.findById\(new PolicyListKey\(event\.aggregateId\(\)\)\)/);
+  assert.match(p.content, /repository\.findById\(new PolicyListKey\(evt\.aggregateId\(\)\)\)/);
   assert.match(p.content, /new PolicyListEntity\(new PolicyListKey\(projected\.policyKey\(\)\), projected\.policyHolder\(\)\)/);
 
   const keyClass = readModelKey(rm);

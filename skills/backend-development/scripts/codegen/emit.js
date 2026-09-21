@@ -1181,8 +1181,7 @@ function persistingProjector(rm, eventsById, base) {
       ? `repository.save(new ${rm.entityClassName}(new ${rm.idClassName}(${rm.keyFields.map(projectedKeyArg).join(', ')}), ${rm.fields.filter((f) => !keyNames.has(f.name)).map((f) => `projected.${f.name}()`).join(', ')}));`
       : `repository.save(new ${rm.entityClassName}(event.aggregateId(), ${rm.fields.map((f) => `projected.${f.name}()`).join(', ')}));`;
 
-    return `    @Override
-    public ${rm.className} apply(${rm.className} state, ${e.className} event) {
+    return `    public ${rm.className} apply(${rm.className} state, ${e.className} event) {
         var projected = new ${rm.className}(
 ${args.map((a) => `                ${a}`).join(',\n')});
         ${entitySave}
@@ -1190,43 +1189,38 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     }`;
   });
 
-  // For keyed read models, build the composite key from event fields for the
-  // state lookup in project(). Key fields must be passthrough from the event —
-  // except the identity, whose event-side value is the aggregate id itself.
-  //
-  // project(DomainEvent event) receives the GENERIC interface: only members of
-  // DomainEvent itself (aggregateId()) are callable on `event` there — dispatch
-  // to the concrete event class happens one level deeper, inside hydrate(). So
-  // a non-identity key field (e.g. a whole value-object field marked `:Key`)
-  // needs its own cast, keyed off the same eventType() switch StateProjector
-  // already uses to dispatch apply(). An identity-only key needs no cast at
-  // all and keeps the simple, aggregateId-only form.
-  const hasNonIdentityKeyField = rm.keyFields.some((f) => !f.identity);
-  const keyArgsFor = (eventClassName) =>
-    rm.keyFields.map((f) => {
-      if (f.identity) return 'event.aggregateId()';
-      // An unresolvable key has no event accessor to read — project(DomainEvent)
-      // only sees the generic interface, so it goes through the decider's
-      // DomainEvent overload (a throwing stub until hand-implemented).
-      if (f.unmappableKey) return `decider.${f.name}(event)`;
-      const cast = `((${eventClassName}) event)`;
-      // A derived field reads through the value-object field it was carved out
-      // of — the event has no accessor of its own named after the derived path.
-      return f.derivedFrom ? `${cast}.${f.derivedFrom.field}().${f.derivedFrom.attr}()` : `${cast}.${f.name}()`;
-    });
-  const projectKey = !keyed
-    ? 'event.aggregateId()'
-    : !hasNonIdentityKeyField
-      ? `new ${rm.idClassName}(${keyArgsFor().join(', ')})`
-      : `switch (event.eventType()) {\n` +
-        rm.subscribes
-          .map((eid) => {
-            const e = eventsById.get(eid);
-            return `            case ${e.typeEnum} -> new ${rm.idClassName}(${keyArgsFor(e.className).join(', ')});`;
-          })
-          .join('\n') +
-        `\n            default -> null;\n        }`;
-  const projectIdType = keyed ? rm.idClassName : 'UUID';
+  // project(DomainEvent event) receives the GENERIC interface — only members of
+  // DomainEvent itself (aggregateId()) are callable on `event` there. A
+  // persisting projector maps ONE event to ONE row and never rebuilds stream
+  // state, so dispatch pattern-matches the concrete event class instead of
+  // going through StateProjector.hydrate(). Each subscribed event gets its own
+  // case: build the composite key from the concrete event's fields (identity ->
+  // aggregate id, unresolvable -> decider, derived -> through the owning
+  // value-object field), look the row up, then hand it to the single-event
+  // mapper apply(state, event) — a missing row is a create, signalled by null.
+  const persistedKeyArg = (f) => {
+    if (f.identity) return 'evt.aggregateId()';
+    // An unresolvable key has no event accessor to read — it goes through the
+    // decider's DomainEvent overload (a throwing stub until hand-implemented).
+    if (f.unmappableKey) return `decider.${f.name}(evt)`;
+    // A derived field reads through the value-object field it was carved out
+    // of — the event has no accessor of its own named after the derived path.
+    return f.derivedFrom ? `evt.${f.derivedFrom.field}().${f.derivedFrom.attr}()` : `evt.${f.name}()`;
+  };
+  const projectCases = rm.subscribes
+    .map((eid) => {
+      const e = eventsById.get(eid);
+      const keyExpr = keyed
+        ? `new ${rm.idClassName}(${rm.keyFields.map(persistedKeyArg).join(', ')})`
+        : 'evt.aggregateId()';
+      return `            case ${e.className} evt -> {
+                var state = repository.findById(${keyExpr})
+                        .map(${rm.entityClassName}::toReadModel)
+                        .orElse(null);
+                apply(state, evt);
+            }`;
+    })
+    .join('\n');
 
   // A "??" search-only criterion needs the decider too (for its matches<Field>
   // stub), even when no [bracketed] field ever delegated a projected VALUE to it.
@@ -1257,7 +1251,6 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     'org.springframework.web.bind.annotation.RestController',
     `${base}.eventstream.DomainEvent`,
     `${base}.eventstream.PersistingProjector`,
-    `${base}.eventstream.StateProjector`,
     ...collaboratorImports(collaborators),
     ...extraImports,
   ]);
@@ -1275,8 +1268,7 @@ ${imports}
 @RestController
 @Component
 @RequiredArgsConstructor
-public class ${rm.projectorClassName}
-        implements StateProjector<${rm.className}>, PersistingProjector {
+public class ${rm.projectorClassName} implements PersistingProjector {
 
 ${fieldDeclarations(collaborators)}
 
@@ -1289,10 +1281,11 @@ ${searchOnlyFilters ? searchOnlyFilters + '\n' : ''}                .toList();
 
     @Override
     public void project(DomainEvent event) {
-        var state = repository.findById(${projectKey})
-                .map(${rm.entityClassName}::toReadModel)
-                .orElse(null);
-        hydrate(state, List.of(event));
+        switch (event) {
+${projectCases}
+            default -> {
+            }
+        }
     }
 
 ${applies.join('\n\n')}

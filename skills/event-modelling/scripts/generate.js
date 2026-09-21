@@ -329,6 +329,45 @@ function hasSameFieldShape(left, right) {
   );
 }
 
+// A "pure flattening" is a scalar field whose name is an upstream structured
+// field's name followed by a child path within it — e.g. event
+// `product (List)` {code, name, description} → read model `product code`.
+// The generator recognises this as a per-element/element-attribute passthrough
+// (dereferencing the list) and does NOT treat it as guessing: no renaming,
+// aggregation, filtering or reordering is involved — the flat name is the exact
+// concatenation of the root field name and child names. Deeper paths may
+// descend through plain (non-list) objects, but a target that is itself a
+// (List) or a structured object with children is not a pure flattening, and a
+// second (List) level cannot be descended through — both still require a
+// modelling decision.
+function isPureFlattening(field, upstreamTrees) {
+  if (field.list) return false; // a (List)/nested column isn't a scalar flattening
+  const tokens = normalizeField(field.name).split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return false;
+  return (upstreamTrees || []).some((trees) =>
+    (trees || []).some((root) => {
+      if (!root.children || !root.children.length) return false;
+      const rootTokens = normalizeField(root.name).split(/\s+/).filter(Boolean);
+      if (tokens.length <= rootTokens.length) return false;
+      for (let i = 0; i < rootTokens.length; i += 1) if (tokens[i] !== rootTokens[i]) return false;
+      let nodes = root.children;
+      const rest = tokens.slice(rootTokens.length);
+      for (let i = 0; i < rest.length; i += 1) {
+        const node = nodes.find((c) => normalizeField(c.name) === rest[i]);
+        if (!node) return false;
+        if (i === rest.length - 1) {
+          // the final token must be a leaf — a scalar projection column
+          return !node.list && (!node.children || !node.children.length);
+        }
+        // intermediate tokens descend only through a plain structured object
+        if (node.list || !node.children || !node.children.length) return false;
+        nodes = node.children;
+      }
+      return false;
+    }),
+  );
+}
+
 // Check if a field is a transformation of a special :Id/:Key attribute.
 // e.g., "policy id" is a transformation of "policy:Id"
 // e.g., "customer key" is a transformation of "customer:Key"
@@ -611,6 +650,7 @@ function buildModel(inputDir) {
     (e.fieldTrees || []).forEach((f) => {
       if (isBracketedField(f.name)) return;
       if (!hasMatchingStructuredField(f, [cmd.fieldTrees])) {
+        if (isPureFlattening(f, [cmd.fieldTrees])) return;
         const sourceWithSameName = (cmd.fieldTrees || []).some((source) => normalizeField(source.name) === normalizeField(f.name));
         if (sourceWithSameName) {
           throw new Error(
@@ -637,6 +677,11 @@ function buildModel(inputDir) {
       if (isDoubleQuestionField(f.name)) return;
       if (hasMatchingStructuredField(f, subEvents.map((e) => e.fieldTrees))) return;
       if (isTransformationOfSpecialAttribute(f.name, rm.aggregateId, rm.keys)) return;
+      // Pure flattening of an upstream nested/(List) field is a recognised
+      // passthrough (see isPureFlattening) — the generator does not guess
+      // renaming, filtering, aggregation or reordering, but a straight
+      // child-path flattening needs no guess.
+      if (isPureFlattening(f, subEvents.map((e) => e.fieldTrees))) return;
       const sourceWithSameName = subEvents.some((event) =>
         (event.fieldTrees || []).some((source) => normalizeField(source.name) === normalizeField(f.name)),
       );
@@ -647,8 +692,8 @@ function buildModel(inputDir) {
       );
       if (sourceWithSameName || sourceWithRelatedName) {
         throw new Error(
-          `Unsupported structured-field mapping for read model '${rm.id}' field "${f.name}": it does not directly match a nested "(List)"/"* *" field from a subscribed event. ` +
-            `Add a more detailed mapping prompt; the generator will not guess how to flatten, filter, or aggregate nested objects.`,
+          `Unsupported structured-field mapping for read model '${rm.id}' field "${f.name}": it is not a recognized pure flattening (direct child path) of any nested "(List)"/"* *" field from a subscribed event. ` +
+            `Add a more detailed mapping prompt; the generator will not guess how to rename, filter, aggregate, or reorder nested objects.`,
         );
       }
       throw new Error(
@@ -980,20 +1025,25 @@ function renderArrows(model, geo) {
     const midBottom = geo.midCenterY() + cmd._h / 2;
 
     if (!cmd.observes) {
-      const r = roleIndex(cmd.actor);
-      const roleBottom = geo.roleCenterY(r) + UI_H / 2;
-      // Fan-in: draw one arrow per triggering UI, each anchored under its
-      // own box's x position within the fanned-in row (mirrors the CSS
-      // layout in renderTable's .ui-fanin-row: boxes centered on cx, laid
-      // out left-to-right with a fixed gap).
-      const triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id }];
-      const K = triggerUis.length;
-      const GAP = 8;
-      const totalW = K * UI_W + (K - 1) * GAP;
-      triggerUis.forEach((ui, k) => {
-        const boxCx = K > 1 ? (cx - totalW / 2 + UI_W / 2 + k * (UI_W + GAP)) : cx;
-        arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: triggerUiElementId(ui.id, cmd.id), to: cmd.id, marker: 'arrow', kind: 'triggers' });
-      });
+      // A command with no matching uis.md entry (no id-match, no Triggers:)
+      // has no actor, hence no UI card and no swimlane row — and therefore
+      // no trigger arrow. Only commands with a real trigger UI get one.
+      if (cmd.actor !== undefined) {
+        const r = roleIndex(cmd.actor);
+        const roleBottom = geo.roleCenterY(r) + UI_H / 2;
+        // Fan-in: draw one arrow per triggering UI, each anchored under its
+        // own box's x position within the fanned-in row (mirrors the CSS
+        // layout in renderTable's .ui-fanin-row: boxes centered on cx, laid
+        // out left-to-right with a fixed gap).
+        const triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id }];
+        const K = triggerUis.length;
+        const GAP = 8;
+        const totalW = K * UI_W + (K - 1) * GAP;
+        triggerUis.forEach((ui, k) => {
+          const boxCx = K > 1 ? (cx - totalW / 2 + UI_W / 2 + k * (UI_W + GAP)) : cx;
+          arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: triggerUiElementId(ui.id, cmd.id), to: cmd.id, marker: 'arrow', kind: 'triggers' });
+        });
+      }
     } else {
       const obsIdx = colIndexForEvent(cmd.observes);
       const obsEv = events.find((e) => e.id === cmd.observes);

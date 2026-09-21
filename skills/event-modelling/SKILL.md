@@ -170,13 +170,22 @@ ConsistsOf: order-summary, stock-levels
   `* * description` generate `Product` and a `List<Product> productList`
   payload member. A nested field without `(List)` generates one object member.
   The notation is valid on commands, events, and read models. A
-  direct command→event or event→read-model mapping is valid only if the
+  direct command→event or event→read-model mapping is valid if the
   field name, list marker, child order, and every nested child match exactly.
-  If the same root field has a different structure, **diagram generation**
-  fails with `Unsupported structured-field mapping ... Add a more detailed
-  mapping prompt`; the diagram generator does not guess flattening,
-  aggregation, or renaming, so this stays a modelling decision to resolve here
-  before it's considered final. (Backend **codegen** is more lenient for the
+  **Pure flattening is also a recognised passthrough** — a scalar field whose
+  name equals a structured field's name followed by a child path within it is a
+  per-element dereference with no renaming/aggregation involved, e.g. event
+  `* product (List)` → `* * code, name, description` and read model
+  `* product code`, `* product name`, `* product description` passes (the
+  generator does not guess *how* to flatten, but a straight child-path flatten
+  needs no guess). The path may descend through plain (non-list) objects
+  (`* product details size`), but a target that is itself a `(List)`/nested
+  object is NOT a pure flattening. If the same root field has a different
+  structure, or a related-name field is not a recognized pure flattening,
+  **diagram generation** fails with `Unsupported structured-field mapping ...`
+  — the diagram generator does not guess renaming, aggregation, filtering or
+  reordering, so that stays a modelling decision to resolve here before it's
+  considered final. (Backend **codegen** is more lenient for the
   event→read-model case specifically: rather than aborting the whole run, it
   delegates the unmappable field to the read model's `*ProjectionDecider`,
   which throws `UnsupportedOperationException` explaining the mismatch —
@@ -653,7 +662,11 @@ found, the check is skipped silently.
 
 **This is enforced by the generator, not just a manual convention** — see
 "Diagram consistency" / "Field annotations: `?` vs `??`" above for the exact
-rules (`[...]` and `??` exempt from the passthrough check; `?` not exempt). On
+rules (`[...]` and `??` exempt from the passthrough check; `?` not exempt;
+pure flattenings of a nested `(List)`/`* *` field — a scalar column named as a
+direct child path of that field, e.g. `product code` from `product (List)` →
+`code` — are recognized passthroughs and render without `[...]` or any extra
+syntax). On
 a mismatch the script throws and exits non-zero, in the same style as the
 existing "no orphan events" check, e.g.:
 

@@ -433,28 +433,89 @@ policyHolderId:Key
 * * postal code
 `,
     });
+    assert.throws(() => buildModel(dir), /Unsupported structured-field mapping/);
+});
 
-    test('buildModel refuses flattening a nested list into read-model fields without mapping details', () => {
-      const dir = baseFixture({
-        commands: `## add-policy-holder
-    Produces: policy-holder-added
-    * product (List)
-    * * name
-    `,
-        events: `## policy-holder-added
-    policyHolder:Id
-    * product (List)
-    * * name
-    `,
-        readmodels: `## policy-holder-view
-    Subscribes: policy-holder-added
-    policyHolderId:Key
-    * product name
-    `,
-      });
-      assert.throws(() => buildModel(dir), /Unsupported structured-field mapping.*more detailed mapping prompt/);
-    });
-    assert.throws(() => buildModel(dir), /Unsupported structured-field mapping.*more detailed mapping prompt/);
+test('buildModel allows flattening a nested list into read-model fields (pure flattening is a recognized passthrough)', () => {
+  const dir = baseFixture({
+    commands: `## add-policy-holder
+Name: Add Policy Holder
+Produces: policy-holder-added
+* product (List)
+* * code
+* * name
+* * description
+`,
+    events: `## policy-holder-added
+policyHolder:Id
+* product (List)
+* * code
+* * name
+* * description
+`,
+    readmodels: `## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+productCode:Key
+* product code
+* product name
+* product description
+`,
+  });
+  assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('buildModel allows flattening through a deeper plain (non-list) child path of an upstream field', () => {
+  const dir = baseFixture({
+    commands: `## add-policy-holder
+Name: Add Policy Holder
+Produces: policy-holder-added
+* product (List)
+* * code
+* * details
+* * * size
+`,
+    events: `## policy-holder-added
+policyHolder:Id
+* product (List)
+* * code
+* * details
+* * * size
+`,
+    readmodels: `## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+productCode:Key
+* product code
+* product details size
+`,
+  });
+  assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('buildModel still refuses a read-model field that only shares a prefix with a nested field but renames/aggregates its child (not a pure flattening)', () => {
+  const dir = baseFixture({
+    commands: `## add-policy-holder
+Name: Add Policy Holder
+Produces: policy-holder-added
+* product (List)
+* * code
+* * name
+`,
+    events: `## policy-holder-added
+policyHolder:Id
+* product (List)
+* * code
+* * name
+`,
+    readmodels: `## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+productCode:Key
+* product title
+`,
+  });
+  assert.throws(() => buildModel(dir), /Unsupported structured-field mapping.*pure flattening/);
 });
 
 test('buildModel allows a "??"-suffixed read-model field that matches an upstream event field', () => {
@@ -512,6 +573,22 @@ test('renderArrows tags a human-triggered command edge as "triggers" and its pro
   const svg = renderArrows(model, geo);
   assert.match(svg, /data-kind="triggers"/);
   assert.match(svg, /data-kind="produces"/);
+});
+
+test('renderArrows draws no "triggers" edge for a command with no matching uis.md entry (no actor, no UI card, no trigger arrow)', () => {
+  const dir = baseFixture({
+    uis: `
+## policy-holder-view
+Name: Policy Holder View
+Actor: Clerk
+Type: html
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const svg = renderArrows(model, geo);
+  assert.doesNotMatch(svg, /data-kind="triggers"/);
+  assert.match(svg, /data-kind="produces"/); // the command→event edge is unaffected
 });
 
 test('renderArrows tags a read-model subscription edge as "observes"', () => {

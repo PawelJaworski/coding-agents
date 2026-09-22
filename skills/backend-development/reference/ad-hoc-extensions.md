@@ -96,8 +96,9 @@ method getPolicyList in class PolicyListProjector cannot be applied to given typ
 
 So when extending an existing route, keep the no-argument call site valid — give the
 parameter a default-friendly form the ability can still call, or add a new member
-instead of reshaping the old one. Never edit the ability to match; it is generated, and
-that edit will fail `--check`.
+instead of reshaping the old one. Editing an ability's `INSTANCE` creation is allowed —
+wire real collaborators, stamp `// PRESERVED-BY-HAND: <reason>` so `--check` stays up to
+date.
 
 ## Trap: stateful collaborators leak across specs
 
@@ -127,17 +128,17 @@ def setup() {
 
 A bracketed command decision starts as a private handler method. Keep its generated
 signature because the generated event construction calls it directly. Use collaborators
-the handler already owns. If correct behavior requires a new collaborator that generated
-test wiring cannot supply, report that wiring gap; do not edit a generated ability and
-do not move infrastructure into an aggregate. Aggregates are plain state hydrated only
-from their own event history.
+the handler already owns. A new collaborator arrives via its own ability — every Spring
+component has one; wire it into the handler ability's `INSTANCE` creation (stamp
+`// PRESERVED-BY-HAND: <reason>`). Do not move infrastructure into an aggregate —
+aggregates are plain state hydrated only from their own event history.
 
 ## Verify
 
 Same gates as any other backend change:
 
 ```
-mvn clean verify                                              # green
+./mvnw clean verify                                          # green
 node .opencode/skills/backend-development/scripts/codegen --check   # up to date
 ```
 

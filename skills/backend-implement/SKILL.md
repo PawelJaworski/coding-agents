@@ -17,15 +17,17 @@ description: >
   * parameters: <docs> is passed from outside. You have to know it before starting.
 ---
 
+# Rules
+1. You may change an ability's `INSTANCE` creation — wire real collaborators (their
+   ability's `INSTANCE`; no mocks, no anonymous overrides). Stamp the change
+   `// PRESERVED-BY-HAND: <reason>` so `codegen --check` stays up to date.
+2. Every Spring component has a corresponding ability. Tests use abilities only — never
+   `new` a component, handler, projector or repository in a test.
+
 # One test method per rule or scenario — verbatim, never merged
 Write exactly one Spock test method per rule/scenario, named after its text
-character-for-character. Never fold two rules/scenarios into a single
-`@Unroll`/`where:`-parameterized method, even when they look like natural table-test
-siblings (e.g. "must have a holder name" / "must have a holder surname") — `codegen
---next` matches a scenario/rule to "done" by an exact spec method name, not
-semantically, so a parameterized method whose literal name is something like `"...
-holder #field"` is never recognized as satisfying either rule and the item stays
-pending forever.
+character-for-character. Never fold rules/scenarios into a single `@Unroll`/`where:`
+method — `codegen --next` matches by exact spec method name, not semantically.
 
 # Context you need — and nothing more
 1. The single `<docs>/gwt-<read-model>.md` scenario — or the single business rule, quoted
@@ -47,10 +49,9 @@ context and risks contradicting the generator.
 | add a query/filter/sort/search over fields a read model ALREADY has | **ad-hoc extension** — same red/green discipline, but logic lands in the slice's projector/repository. See `.opencode/skills/backend-development/reference/ad-hoc-extensions.md` |
 
 An ad-hoc improvement has no GWT file, so its spec name is plainly descriptive instead
-of a scenario heading, and it needs no `[bracketed]` field. It
-is still test-first. Anything that would require a new *field* or a new *event* is a
-model change, not ad-hoc — stop and report it back to the caller; the model is frozen
-during development and must NOT be changed.
+of a scenario heading, and it needs no `[bracketed]` field. It is still test-first.
+Anything that would require a new *field* or a new *event* is a model change, not ad-hoc —
+stop and report it back to the caller.
 
 # Flow — red, then green, nothing else
 
@@ -60,33 +61,16 @@ the command's own slice instead: `src/test/groovy/<base>/<command-package>/<Comm
 
 - The test method name is the GWT scenario heading verbatim, or the rule's own words.
 - given/when/then map 1:1 onto the GWT lines. No extra steps, no invented happy paths.
-- Use ONLY the generated ability DSLs. Never construct a handler, projector, repository
-  or event yourself; never `new` a domain class in a test.
+- Use ONLY the generated ability DSLs (Rule 2). Never construct a handler, projector,
+  repository or event yourself; never `new` a domain class in a test.
   - command DSL: `issue_policy { it.policyHolder("Alice") }` -> returns the aggregate id
   - projector DSL: `expect_policy_document(id) { it.policyNumber() == "P-1" }`
   - `reset_event_stream()` in `setup()` — abilities share a static in-memory stream.
 - Groovy note: Lombok builders are fluent, so write `it.field("v")`, not `it.field = "v"`.
 
-### `reset_event_stream()` does NOT reset collaborator state
-It clears the event stream and the registered projections — nothing else. State used by
-a handler decision may live in a collaborator (a repository, a sequence) exposed
-as a static `*Ability.INSTANCE` and shared across every spec via the ability DSLs. A new
-spec that issues commands silently perturbs an already-green one and the failure surfaces
-as test *ordering*:
-
-```
-Condition not satisfied:
-expect_policy_details(firstId) { it.policyNumber() == "P-1" }   // got P-4
-```
-
-Reset the collaborator's ability in `setup()` in **every** spec exercising that slice:
-
-```groovy
-def setup() {
-    reset_event_stream()
-    PolicyOrdinalRepositoryAbility.reset()
-}
-```
+Mutable collaborators (sequences, repositories) also hold state across specs — reset
+them via their ability in `setup()`, e.g. `PolicyNumberSequenceAbility`'s
+`reset_policy_number_sequence()`.
 
 Run it. It MUST compile. A red-but-compiling test here is the expected state.
 
@@ -116,15 +100,16 @@ naming the GWT scenario that justifies it.
   service/repository when they need collaborators or reuse.
 - Keep it scenario-scoped: no validation, error handling, persistence or generality the
   scenario does not exercise. That is scope creep, not implementation.
-- Use collaborators the handler already owns. If correct behavior requires a new
-  collaborator that generated test wiring cannot supply, report the wiring gap instead
-  of putting infrastructure dependencies into an aggregate or editing an ability.
+- A new collaborator arrives via its own ability (Rule 2); wire it into the handler
+  ability's `INSTANCE` (Rule 1).
 
 ## 4. Verify
-Iterate quickly during red/green: `./mvnw test -Dtest=<Spec>` runs only that spec and
-keeps the loop under ten seconds. Finish with the full gate: `./mvnw clean verify` green —
-always build clean once generated/Lombok classes changed, stale `target/` classes produce
-phantom Lombok failures. Then `node .opencode/skills/backend-development/scripts/codegen --check` must still report `up to date`.
+Iterate quickly during red/green with the project's single-spec path — never
+`-Dtest=` (see `AGENTS.md` → Build / test). Finish with the full gate:
+`./mvnw clean verify` green — always build clean once generated/Lombok classes changed,
+stale `target/` classes produce phantom Lombok failures. Then
+`node .opencode/skills/backend-development/scripts/codegen --check` must report
+`up to date`.
 
 # Hard boundaries
 - **Never change the contract of a `// GENERATED ... DO NOT EDIT` file.** The contract is
@@ -142,9 +127,10 @@ phantom Lombok failures. Then `node .opencode/skills/backend-development/scripts
   implementation details.
 - **Never write scaffolding.** No new commands, events, read models, handlers, projectors,
   abilities or serde wrappers. A missing command/event/read model means the model is
-  missing it — stop and report it back to the caller. (A missing *query* over existing fields is ad-hoc, not missing
-  scaffolding.)
-- **Never edit a generated `*Ability`.** That fails `--check`.
+  missing it — stop and report it back to the caller. (A missing *query* over existing
+  fields is ad-hoc, not missing scaffolding.)
+- **Abilities: INSTANCE wiring only** (Rule 1). No mock logic — no anonymous overrides or
+  fakes standing in for production logic.
 - **Never edit the event-modelling docs or the GWT files.**
 - If the scenario cannot be satisfied in the handler/aggregate/projector — because it needs a field
   the model does not have, or the business intent is ambiguous — STOP, implement nothing for

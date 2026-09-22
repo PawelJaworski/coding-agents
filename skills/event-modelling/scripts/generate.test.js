@@ -94,8 +94,19 @@ Produces: policy-holder-added
   assert.equal(items.length, 1);
   assert.equal(items[0].id, 'add-policy-holder');
   assert.equal(items[0].name, 'Add Policy Holder');
-  assert.equal(items[0].produces, 'policy-holder-added');
+  assert.deepEqual(items[0].produces, ['policy-holder-added']);
   assert.deepEqual(items[0].fields, ['name', 'address']);
+});
+
+test('parseMdText splits a comma-separated Produces: line into an array of event ids', () => {
+  const items = parseMdText(`
+## issue-policy
+Name: Issue Policy
+Produces: policy-issued, premium-calculated
+* name
+`);
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].produces, ['policy-issued', 'premium-calculated']);
 });
 
 test('parseMdText retains (list) and nested-star structure while rendering indented fields', () => {
@@ -273,6 +284,121 @@ Actor: Clerk
     () => buildModel(dir),
     /Orphan event\(s\) with no Produces: link — policy-holder-added/
   );
+});
+
+test('buildModel throws when a command Produces: an unknown event id', () => {
+  const dir = baseFixture({
+    commands: `
+## add-policy-holder
+Name: Add Policy Holder
+Produces: policy-holder-added, no-such-event
+* name
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /Command "add-policy-holder" produces unknown event "no-such-event"/
+  );
+});
+
+// ---------------------------------------------------------------------------
+// buildModel / render — one command producing several events (comma-separated
+// Produces:). Exactly one command card is drawn, at the leftmost produced
+// event's column; later produced events keep their own columns and get routed
+// produces-edges, and trigger/UI stacks are never duplicated.
+// ---------------------------------------------------------------------------
+
+test('a command producing several events keeps every event column and renders a single card', () => {
+  const dir = baseFixture({
+    commands: `
+## issue-policy
+Name: Issue Policy
+Produces: policy-issued, premium-calculated
+* name
+`,
+    events: `
+## policy-issued
+Name: Policy Issued
+policy:Id
+* name
+
+## premium-calculated
+Name: Premium Calculated
+policy:Id
+* [premium amount]
+`,
+    readmodels: `
+## policy-view
+Name: Policy View
+Subscribes: policy-issued
+policyId:Key
+* name
+`,
+    uis: `
+## issue-policy
+Name: Issue Policy Form
+Actor: Clerk
+Type: html
+`,
+  });
+  const model = buildModel(dir);
+  // The read model (subscribed to the first event only) must splice a view
+  // column between the two events instead of overwriting the second one —
+  // both events survive placement.
+  const eventCols = model.columns.filter((c) => c.type === 'event').map((c) => c.eventId);
+  assert.deepEqual(eventCols, ['policy-issued', 'premium-calculated']);
+
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  // Exactly one command card, and exactly one trigger UI card (both at the
+  // primary produced event's column — no duplication for the second event).
+  assert.equal((html.match(/data-element="issue-policy"/g) || []).length, 1);
+  assert.equal((html.match(/data-element="ui-issue-policy--triggers-issue-policy"/g) || []).length, 1);
+  // Both event cards render.
+  assert.equal((html.match(/data-element="premium-calculated"/g) || []).length, 1);
+});
+
+test('a command producing several events draws one routed produces-edge per event', () => {
+  const dir = baseFixture({
+    commands: `
+## issue-policy
+Name: Issue Policy
+Produces: policy-issued, premium-calculated
+* name
+`,
+    events: `
+## policy-issued
+Name: Policy Issued
+policy:Id
+* name
+
+## premium-calculated
+Name: Premium Calculated
+policy:Id
+* [premium amount]
+`,
+    readmodels: `
+## policy-view
+Name: Policy View
+Subscribes: policy-issued
+policyId:Key
+* name
+`,
+    uis: `
+## issue-policy
+Name: Issue Policy Form
+Actor: Clerk
+Type: html
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const svg = renderArrows(model, geo);
+  // One vertical produces-edge for the primary event + one routed polyline
+  // edge for the second event — still exactly one trigger arrow.
+  assert.equal((svg.match(/data-kind="produces"/g) || []).length, 2);
+  assert.match(svg, /<polyline[^>]*data-kind="produces"/);
+  assert.equal((svg.match(/data-kind="triggers"/g) || []).length, 1);
 });
 
 // ---------------------------------------------------------------------------

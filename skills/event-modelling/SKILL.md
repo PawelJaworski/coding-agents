@@ -128,7 +128,14 @@ ConsistsOf: order-summary, stock-levels
 - `Name:` overrides the display name (fallback: the heading text).
 - `Subprocess:` groups events into process/subdomain swimlanes. Missing → the
   event shares the band of the first event with no subprocess.
-- `Produces:` (one id) links a command to the event it triggers.
+- `Produces:` (one or more comma-separated event ids, e.g.
+  `Produces: policy-issued, premium-calculated`) links a command to the
+  event(s) it triggers. A command producing several events is drawn as a
+  **single** command card, placed at its leftmost produced event's column
+  (events.md order = chronological); each later produced event keeps its own
+  column and is reached by a routed produces-edge from that same card (see
+  Edges). The script throws if any `Produces:` id doesn't match an event in
+  events.md (same tier as the orphan-event check).
 - `Actor:` (`uis.md` only) links a person/actor/role to a UI — and, through
   it, to whichever command or read model that UI is linked to (see `uis.md`
   linkage below). Commands **never** carry `Actor:` themselves — the script
@@ -401,7 +408,14 @@ meets a flat edge, not the rounded notch.
 ### Edges
 
 - **UI → command**, **command → event**: vertical arrows, bottom edge to
-  top edge, black, `marker-end`.
+  top edge, black, `marker-end`. When one command produces several events
+  (`Produces: a, b`), only the first (leftmost) produced event gets this
+  straight vertical command → event arrow; each later produced event is
+  reached by a routed edge that leaves the same command card's bottom edge,
+  runs sideways through the card-free band below the mid-row, then enters
+  the event's top edge — the same routing pattern used for read-model
+  subscription arrows. Trigger UI cards and trigger arrows always anchor at
+  the command's primary column, never duplicated per produced event.
 - **Read model(s) → output UI**: black, `marker-end`. The source read model
   in the UI's own placement column gets a straight vertical arrow, same
   shape as UI → command but reversed (its top edge up into the UI card's

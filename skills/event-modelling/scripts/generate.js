@@ -203,7 +203,13 @@ function parseMdText(text) {
         case 'name': cur.name = val; break;
         case 'actor': cur.actor = val; break;
         case 'type': cur.uiType = val; break;
-        case 'produces': cur.produces = val; break;
+        case 'produces':
+          // Comma-separated list of event ids this command triggers — one
+          // command may emit several events (e.g. `Produces: policy-issued,
+          // premium-calculated`), rendered as a single command card producing
+          // each event (see buildModel / renderArrows).
+          cur.produces = val.split(',').map((s) => s.trim()).filter(Boolean);
+          break;
         case 'observes': cur.observes = val; break;
         case 'triggers':
           // Comma-separated list of command ids this single UI card triggers.
@@ -596,7 +602,20 @@ function buildModel(inputDir) {
   });
 
   const eventProducer = {}; // eventId -> command
-  commands.forEach((c) => { if (c.produces) eventProducer[c.produces] = c; });
+  commands.forEach((c) => { (c.produces || []).forEach((pid) => { eventProducer[pid] = c; }); });
+
+  // Sanity: every id in a command's `Produces:` list must reference a real
+  // event in events.md (structural rule, same tier as the orphan-event check
+  // below — a typo would otherwise silently orphan the real events).
+  commands.forEach((c) => {
+    (c.produces || []).forEach((pid) => {
+      if (!events.some((e) => e.id === pid)) {
+        throw new Error(
+          `Command "${c.id}" produces unknown event "${pid}" — every id in "Produces:" must match an event in events.md.`
+        );
+      }
+    });
+  });
 
   // Sanity: every event must have a producing command (canonical rule).
   const orphanEvents = events.filter((e) => !eventProducer[e.id]);
@@ -707,10 +726,33 @@ function buildModel(inputDir) {
 
   // columns: one per event initially, in chronological (file) order.
   let columns = events.map((e) => ({ type: 'event', eventId: e.id }));
+
+  // A command that produces several events renders exactly ONE card, at the
+  // column of its leftmost produced event (events.md order = chronological),
+  // so the trigger UI and the first produces-edge stay a clean vertical
+  // stack; any later produced events get routed produces-edges from that
+  // same card (see renderArrows). The primary event is recorded by id (not
+  // column index) — read-model insertion splices view columns in between,
+  // so indices shift while event ids stay stable.
+  const commandPrimaryEvent = {};
+  commands.forEach((cmd) => {
+    const prods = cmd.produces || [];
+    if (!prods.length) return;
+    let best = prods[0];
+    let bestIdx = Infinity;
+    prods.forEach((pid) => {
+      const idx = columns.findIndex((c) => c.type === 'event' && c.eventId === pid);
+      if (idx !== -1 && idx < bestIdx) { best = pid; bestIdx = idx; }
+    });
+    commandPrimaryEvent[cmd.id] = best;
+  });
+
   // midRow[i]: null | {type:'cmd', id} | {type:'view', id} — mirrors columns.
-  let midRow = columns.map((c) => {
+  let midRow = columns.map((c, i) => {
+    if (c.type !== 'event') return null;
     const cmd = eventProducer[c.eventId];
-    return cmd ? { type: 'cmd', id: cmd.id } : null;
+    if (!cmd) return null;
+    return commandPrimaryEvent[cmd.id] === c.eventId ? { type: 'cmd', id: cmd.id } : null;
   });
 
   const colIndexForEvent = (eventId) => columns.findIndex((c) => c.type === 'event' && c.eventId === eventId);
@@ -738,7 +780,11 @@ function buildModel(inputDir) {
       columns.push({ type: 'view', viewId: null });
       midRow.push(null);
       naturalIdx = columns.length - 1;
-    } else if (midRow[naturalIdx] != null) {
+    } else if (columns[naturalIdx].type === 'event' || midRow[naturalIdx] != null) {
+      // Splice a new column in when the natural slot is already occupied — by
+      // a command card in the mid-row, or by an event column whose own
+      // command card sits elsewhere (a command producing several events). In
+      // both cases the view must go AFTER the occupant, never overwrite it.
       columns.splice(naturalIdx, 0, { type: 'view', viewId: null });
       midRow.splice(naturalIdx, 0, null);
     }
@@ -790,8 +836,8 @@ function buildModel(inputDir) {
 
   return {
     commands, events, readmodels, uis, uiById, triggerUiForCommand, uiSources, uiPlacementCol,
-    eventProducer, columns, midRow, colIndexForEvent, colIndexForView, roles, hasSystem, subprocesses,
-    standaloneUis,
+    eventProducer, commandPrimaryEvent, columns, midRow, colIndexForEvent, colIndexForView,
+    roles, hasSystem, subprocesses, standaloneUis,
   };
 }
 
@@ -894,7 +940,7 @@ function outputUiElementId(uiId) {
 }
 
 function renderTable(model, geo) {
-  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiPlacementCol, eventProducer, columns, midRow, roles, hasSystem, subprocesses, standaloneUis } = model;
+  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiPlacementCol, eventProducer, commandPrimaryEvent, columns, midRow, roles, hasSystem, subprocesses, standaloneUis } = model;
 
   const colgroup = `<col style="width:${GUT}px">` + columns.map(() => `<col style="width:${COL}px">`).join('');
 
@@ -931,7 +977,11 @@ function renderTable(model, geo) {
       let content = '';
       if (c.type === 'event') {
         const cmd = eventProducer[c.eventId];
-        if (cmd && cmd.actor === role) {
+        // The trigger UI cards for a command render only at its primary
+        // (leftmost) produced event's column — the command card lives there,
+        // so the UI stack stays above it even when the command produces
+        // several events.
+        if (cmd && cmd.actor === role && commandPrimaryEvent[cmd.id] === c.eventId) {
           // Fan-in: a command may be triggered by more than one UI (e.g. an
           // explicit Triggers: claim plus an id-match claim, or several
           // distinct entry-point scenarios) — render one box per triggering
@@ -1010,7 +1060,7 @@ function renderTable(model, geo) {
 // ---------------------------------------------------------------------------
 
 function renderArrows(model, geo) {
-  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiSources, uiPlacementCol, eventProducer, columns, roles, subprocesses, colIndexForEvent, colIndexForView } = model;
+  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiSources, uiPlacementCol, eventProducer, commandPrimaryEvent, columns, roles, subprocesses, colIndexForEvent, colIndexForView } = model;
   const arrows = [];
   const roleIndex = (actor) => roles.indexOf(actor);
 
@@ -1018,46 +1068,70 @@ function renderArrows(model, geo) {
     if (c.type !== 'event') return;
     const ev = events.find((e) => e.id === c.eventId);
     const cmd = eventProducer[ev.id];
-    const cx = geo.colCenterX(i);
+    if (!cmd) return; // orphan — already a hard error in buildModel
     const evGroup = subprocesses.indexOf(ev.subprocess);
     const evTop = geo.procCenterY(evGroup) - ev._h / 2;
+
+    // The single command card lives at the primary (leftmost) produced
+    // event's column; trigger and automation arrows originate there and are
+    // drawn exactly once. The first produces-edge is the plain vertical
+    // stack; each later produced event gets a routed edge from that card.
+    const isPrimary = commandPrimaryEvent[cmd.id] === ev.id;
+    const cmdIdx = colIndexForEvent(commandPrimaryEvent[cmd.id]);
+    const cx = geo.colCenterX(cmdIdx);
     const midTop = geo.midCenterY() - cmd._h / 2;
     const midBottom = geo.midCenterY() + cmd._h / 2;
 
-    if (!cmd.observes) {
-      // A command with no matching uis.md entry (no id-match, no Triggers:)
-      // has no actor, hence no UI card and no swimlane row — and therefore
-      // no trigger arrow. Only commands with a real trigger UI get one.
-      if (cmd.actor !== undefined) {
-        const r = roleIndex(cmd.actor);
-        const roleBottom = geo.roleCenterY(r) + UI_H / 2;
-        // Fan-in: draw one arrow per triggering UI, each anchored under its
-        // own box's x position within the fanned-in row (mirrors the CSS
-        // layout in renderTable's .ui-fanin-row: boxes centered on cx, laid
-        // out left-to-right with a fixed gap).
-        const triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id }];
-        const K = triggerUis.length;
-        const GAP = 8;
-        const totalW = K * UI_W + (K - 1) * GAP;
-        triggerUis.forEach((ui, k) => {
-          const boxCx = K > 1 ? (cx - totalW / 2 + UI_W / 2 + k * (UI_W + GAP)) : cx;
-          arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: triggerUiElementId(ui.id, cmd.id), to: cmd.id, marker: 'arrow', kind: 'triggers' });
+    if (isPrimary) {
+      if (!cmd.observes) {
+        // A command with no matching uis.md entry (no id-match, no Triggers:)
+        // has no actor, hence no UI card and no swimlane row — and therefore
+        // no trigger arrow. Only commands with a real trigger UI get one.
+        if (cmd.actor !== undefined) {
+          const r = roleIndex(cmd.actor);
+          const roleBottom = geo.roleCenterY(r) + UI_H / 2;
+          // Fan-in: draw one arrow per triggering UI, each anchored under its
+          // own box's x position within the fanned-in row (mirrors the CSS
+          // layout in renderTable's .ui-fanin-row: boxes centered on cx, laid
+          // out left-to-right with a fixed gap).
+          const triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id }];
+          const K = triggerUis.length;
+          const GAP = 8;
+          const totalW = K * UI_W + (K - 1) * GAP;
+          triggerUis.forEach((ui, k) => {
+            const boxCx = K > 1 ? (cx - totalW / 2 + UI_W / 2 + k * (UI_W + GAP)) : cx;
+            arrows.push({ x1: boxCx, y1: roleBottom, x2: cx, y2: midTop, from: triggerUiElementId(ui.id, cmd.id), to: cmd.id, marker: 'arrow', kind: 'triggers' });
+          });
+        }
+      } else {
+        const obsIdx = colIndexForEvent(cmd.observes);
+        const obsEv = events.find((e) => e.id === cmd.observes);
+        const obsGroup = subprocesses.indexOf(obsEv.subprocess);
+        const obsCx = geo.colCenterX(obsIdx);
+        const obsTopRightX = obsCx + EVT_W / 2 - RADIUS; // inset off the rounded corner
+        const obsTop = geo.procCenterY(obsGroup) - obsEv._h / 2;
+        const sysY = geo.sysCenterY();
+        arrows.push({
+          polyline: [[obsTopRightX, obsTop], [obsTopRightX, sysY], [cx, sysY], [cx, midTop]],
+          from: cmd.observes, to: cmd.id, dashed: true, marker: 'arrow-purple', kind: 'observes-cmd',
         });
       }
+    }
+
+    if (isPrimary) {
+      arrows.push({ x1: cx, y1: midBottom, x2: cx, y2: evTop, from: cmd.id, to: ev.id, marker: 'arrow', kind: 'produces' });
     } else {
-      const obsIdx = colIndexForEvent(cmd.observes);
-      const obsEv = events.find((e) => e.id === cmd.observes);
-      const obsGroup = subprocesses.indexOf(obsEv.subprocess);
-      const obsCx = geo.colCenterX(obsIdx);
-      const obsTopRightX = obsCx + EVT_W / 2 - RADIUS; // inset off the rounded corner
-      const obsTop = geo.procCenterY(obsGroup) - obsEv._h / 2;
-      const sysY = geo.sysCenterY();
+      // A later produced event shares its command card with an earlier
+      // column: route the produces-edge sideways through the card-free band
+      // below the mid-row (mirroring the read-model/UI sideways-routing
+      // pattern), then down into this event's top edge.
+      const evCx = geo.colCenterX(i);
+      const bandY = Math.min(geo.midCenterY() + geo.midRowH / 2 + 20, evTop - 15);
       arrows.push({
-        polyline: [[obsTopRightX, obsTop], [obsTopRightX, sysY], [cx, sysY], [cx, midTop]],
-        from: cmd.observes, to: cmd.id, dashed: true, marker: 'arrow-purple', kind: 'observes-cmd',
+        polyline: [[cx, midBottom], [cx, bandY], [evCx, bandY], [evCx, evTop]],
+        from: cmd.id, to: ev.id, marker: 'arrow', kind: 'produces',
       });
     }
-    arrows.push({ x1: cx, y1: midBottom, x2: cx, y2: evTop, from: cmd.id, to: ev.id, marker: 'arrow', kind: 'produces' });
   });
 
   readmodels.forEach((rm) => {

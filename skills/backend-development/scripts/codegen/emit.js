@@ -224,36 +224,40 @@ public record ${c.className}(${components(c.fields)}) {
   };
 }
 
-function commandHandler(c, e, base) {
-  const args = [];
-  const extraImports = [];
-  const decisions = [];
-
+function commandHandler(c, events, base) {
   const eventStream = collaborator({
     fieldName: 'eventStream',
     className: 'EventStream',
     testInstantiation: 'EventStreamAbility.INSTANCE',
     imports: [`${base}.eventstream.EventStream`],
   });
-  for (const f of e.fields) {
-    const r =
-      f.bracketed && !f.convention
-        ? { expr: `${f.name}()`, imports: f.imports, delegated: true }
-        : resolveArg(f, {
-            sourceFields: c.fields,
-            sourceExpr: 'command',
-            delegate: { fieldName: 'unused' },
-          });
-    if (!r) {
-      throw new Error(
-        `Model gap: event "${e.id}" field "${f.label}" is not supplied by command "${c.id}" ` +
-          `and is not [bracketed]. Either add it to the command or bracket it.`,
-      );
+
+  const extraImports = [];
+  const decisions = [];
+  const instantiations = events.map((e) => {
+    const args = [];
+    for (const f of e.fields) {
+      const r =
+        f.bracketed && !f.convention
+          ? { expr: `${f.name}()`, imports: f.imports, delegated: true }
+          : resolveArg(f, {
+              sourceFields: c.fields,
+              sourceExpr: 'command',
+              delegate: { fieldName: 'unused' },
+            });
+      if (!r) {
+        throw new Error(
+          `Model gap: event "${e.id}" field "${f.label}" is not supplied by command "${c.id}" ` +
+            `and is not [bracketed]. Either add it to the command or bracket it.`,
+        );
+      }
+      extraImports.push(...r.imports);
+      args.push(r.expr);
+      if (r.delegated) decisions.push({ field: f, eventId: e.id });
     }
-    extraImports.push(...r.imports);
-    args.push(r.expr);
-    if (r.delegated) decisions.push(f);
-  }
+    const inner = ['aggregateId', ...args].map((a) => `                ${a}`).join(',\n');
+    return `new ${e.className}(\n${inner})`;
+  });
 
   const collaborators = [eventStream];
 
@@ -267,20 +271,20 @@ function commandHandler(c, e, base) {
     'org.springframework.web.bind.annotation.RequestBody',
     'org.springframework.web.bind.annotation.RestController',
     `${base}.eventstream.CommandHandler`,
-    `${e.package}.${e.className}`,
+    ...events.map((e) => `${e.package}.${e.className}`),
     ...collaboratorImports(collaborators),
     ...extraImports,
-    ...decisions.flatMap((f) => f.imports),
+    ...decisions.flatMap((d) => d.field.imports),
   ]);
 
-  const argList = args.map((a) => `                ${a}`).join(',\n');
+  const eventList = instantiations.join(',\n');
   const decisionMethods = decisions
     .map(
-      (f) => `
+      ({ field: f, eventId }) => `
 
     private ${f.javaType} ${f.name}() {
         throw new UnsupportedOperationException(
-                "[${f.label}] on event '${e.id}' is a decision with no GWT scenario yet");
+                "[${f.label}] on event '${eventId}' is a decision with no GWT scenario yet");
     }`,
     )
     .join('');
@@ -306,9 +310,7 @@ ${fieldDeclarations(collaborators)}
     @Override
     public UUID handle(@RequestBody ${c.className} command) {
         var aggregateId = UUID.randomUUID();
-        eventStream.append(List.of(new ${e.className}(
-                aggregateId,
-${argList})));
+        eventStream.append(List.of(${eventList}));
         return aggregateId;
     }${decisionMethods}
 }
@@ -1371,9 +1373,9 @@ export function emit(model) {
   }
 
   for (const c of model.commands) {
-    const e = eventsById.get(c.producesId);
+    const events = c.produces.map((id) => eventsById.get(id));
     const cmd = files.into('commands');
-    const handler = commandHandler(c, e, base);
+    const handler = commandHandler(c, events, base);
     cmd.push(command(c), handler);
     cmd.push(commandAbility(c, base, handler.collaborators));
   }

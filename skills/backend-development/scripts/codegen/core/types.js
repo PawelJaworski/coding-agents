@@ -64,7 +64,7 @@
  * @typedef {Object} Command
  * @property {string} id
  * @property {string} name
- * @property {string} producesId
+ * @property {string[]} produces  event ids this command emits, in declaration order
  * @property {Field[]} fields
  * @property {string} className
  * @property {string} package

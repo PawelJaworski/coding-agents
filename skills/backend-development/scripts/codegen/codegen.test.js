@@ -571,7 +571,7 @@ test('a command with NO bracketed field injects only the event stream', () => {
   const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
   const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
 
-  const handler = commandHandler(c, e, BASE);
+  const handler = commandHandler(c, [e], BASE);
   assert.match(handler.content, /private final EventStream eventStream;/);
   assert.doesNotMatch(handler.content, /Aggregate|\.check\(command\)/);
 });
@@ -584,9 +584,34 @@ test('a bracketed non-aggregate decision is a private throwing method in the han
     fields: [cmdField('policy holder'), cmdField('[policy number]')],
   };
 
-  const handler = commandHandler(c, e, BASE);
+  const handler = commandHandler(c, [e], BASE);
   assert.match(handler.content, /policyNumber\(\)/);
   assert.match(handler.content, /private String policyNumber\(\)[\s\S]*UnsupportedOperationException/);
+});
+
+test('a multi-produce command appends every produced event in one List.of, with per-event decisions', () => {
+  const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
+  const issued = {
+    ...naming.event(BASE, 'policy-issued'),
+    id: 'policy-issued',
+    fields: [cmdField('policy holder'), cmdField('[policy number]')],
+  };
+  const premium = {
+    ...naming.event(BASE, 'premium-calculated'),
+    id: 'premium-calculated',
+    fields: [cmdField('[premium amount]', 'BigDecimal')],
+  };
+
+  const handler = commandHandler(c, [issued, premium], BASE);
+  assert.match(
+    handler.content,
+    /eventStream\.append\(List\.of\(new PolicyIssuedEvent\([\s\S]*new PremiumCalculatedEvent\([\s\S]*\)\)\);/,
+  );
+  assert.match(handler.content, /import .*\.domain\.events\.PolicyIssuedEvent;/);
+  assert.match(handler.content, /import .*\.domain\.events\.PremiumCalculatedEvent;/);
+  // each decision names ITS OWN event, not the command's first one
+  assert.match(handler.content, /\[policy number\] on event 'policy-issued'/);
+  assert.match(handler.content, /\[premium amount\] on event 'premium-calculated'/);
 });
 
 test('an aggregate is plain state hydrated only from events in its boundary', () => {
@@ -1304,7 +1329,7 @@ test('a GENERATED file carries no header — the patch answers that, and stays c
 
   const files = [
     command(c),
-    commandHandler(c, e, BASE),
+    commandHandler(c, [e], BASE),
     readModelEntity(rm),
     readModelRepository(rm),
     persistingProjector(rm, new Map([['policy-issued', e]]), BASE),
@@ -1347,6 +1372,49 @@ function withModelDir(files, run) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test('a comma-separated Produces: line parses to one event id per entry, in order', () => {
+  const model = withModelDir(
+    {
+      'business-definitions-raw.md': '',
+      'events.md': `## policy-issued
+policy:Id
+* policy holder
+## premium-calculated
+policy:Id
+* [premium amount]
+`,
+      'commands.md': `## issue-policy
+Produces: policy-issued, premium-calculated
+* policy holder
+`,
+      'readmodels.md': '',
+    },
+    (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+  );
+  const cmd = model.commands.find((c) => c.id === 'issue-policy');
+  assert.deepEqual(cmd.produces, ['policy-issued', 'premium-calculated']);
+  // an unknown production is still a MODEL ERROR
+  assert.throws(
+    () =>
+      withModelDir(
+        {
+          'business-definitions-raw.md': '',
+          'events.md': `## policy-issued
+policy:Id
+* policy holder
+`,
+          'commands.md': `## issue-policy
+Produces: policy-issued, does-not-exist
+* policy holder
+`,
+          'readmodels.md': '',
+        },
+        (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+      ),
+    /produces unknown event "does-not-exist"/,
+  );
+});
 
 const NAMED_KEY_MODEL_FILES = {
   'business-definitions-raw.md': `# name Policy Holder

@@ -560,10 +560,11 @@ export function parseModel({ modelDir, basePackage }) {
   const eventById = new Map(events.map((e) => [e.id, e]));
 
   const commands = parseSections(read('commands.md')).map((s) => {
-    const producesId = s.props.produces;
-    if (!producesId) throw new Error(`Command "${s.id}" has no "Produces:" line`);
-    const produces = eventById.get(producesId);
-    if (!produces) throw new Error(`Command "${s.id}" produces unknown event "${producesId}"`);
+    const producesIds = (s.props.produces || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (producesIds.length === 0) throw new Error(`Command "${s.id}" has no "Produces:" line`);
+    for (const id of producesIds) {
+      if (!eventById.has(id)) throw new Error(`Command "${s.id}" produces unknown event "${id}"`);
+    }
     if (s.searchOnlyFields.length) {
       throw new Error(
         `Command "${s.id}" has a "??" (search-only criterion) field — search endpoints only ` +
@@ -573,7 +574,7 @@ export function parseModel({ modelDir, basePackage }) {
     return {
       id: s.id,
       name: s.props.name || s.id,
-      producesId,
+      produces: producesIds,
       fields: decorate(s.fields),
       ...naming.command(basePackage, s.id),
     };

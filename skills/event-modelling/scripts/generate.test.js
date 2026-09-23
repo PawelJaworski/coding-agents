@@ -175,7 +175,7 @@ ConsistsOf: view-a, view-b
 `);
   assert.equal(items.length, 1);
   assert.equal(items[0].actor, 'Clerk');
-  assert.equal(items[0].uiType, 'html');
+  assert.equal(items[0].typeHint, 'html');
   assert.deepEqual(items[0].triggers, ['cmd-a', 'cmd-b']);
   assert.deepEqual(items[0].consistsOf, ['view-a', 'view-b']);
 });
@@ -1573,6 +1573,28 @@ Produces: add-policy-holder
   assert.equal(items[0].id, 'translate-application');
   assert.deepEqual(items[0].subscribes, ['application-received']);
   assert.deepEqual(items[0].produces, ['add-policy-holder']);
+  assert.equal(items[0].typeHint, undefined);
+});
+
+test('parseMdText parses an optional free-form Type: on a translator (value can be anything)', () => {
+  const items = parseMdText(`
+## translate-application
+Name: Translate Application
+Type: underwriter-sync-bot
+Subscribes: application-received
+Produces: add-policy-holder
+`);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].typeHint, 'underwriter-sync-bot');
+
+  // Value is unconstrained — no enum, any non-empty string is accepted as-is.
+  const arbitrary = parseMdText(`
+## t
+Type: anything at all / 42 — bespoke
+Subscribes: application-received
+Produces: add-policy-holder
+`);
+  assert.equal(arbitrary[0].typeHint, 'anything at all / 42 — bespoke');
 });
 
 test('buildModel accepts external events and translators and inserts ext columns left of the fed command', () => {
@@ -1782,6 +1804,45 @@ test('renderTable renders the Bots row, translator cards with sprocket badge, an
   assert.match(html, /data-element="ext-application-received"/);
   // External event card must NOT show a mandatory :Id line (none declared)
   assert.match(html, /data-element="ext-application-received"/);
+  // No Type: declared on the fixture translator -> no type label rendered
+  assert.doesNotMatch(html, /class="card tr-card"[^>]*>\s*<div class="tr-badge">⚙<\/div>\s*<div class="ui-label">/);
+});
+
+test('renderTable shows the translator free-form Type: as an uppercase label (and grows the card to fit)', () => {
+  const dir = translationFixture({
+    translators: `
+## translate-application
+Name: Translate Application
+Type: underwriter-sync-bot
+Subscribes: application-received
+Produces: add-policy-holder
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  // Rendered as the same small uppercase label UI cards use
+  assert.match(html, /class="ui-label">UNDERWRITER-SYNC-BOT</);
+  // Card height grows by TR_TYPE_H (12) to fit the label line
+  const withoutType = buildModel(translationFixture()).translators[0];
+  const withType = model.translators[0];
+  assert.equal(withType._h, withoutType._h + 12);
+});
+
+test('renderTable keeps the translator sprocket badge when a Type: label is also shown', () => {
+  const dir = translationFixture({
+    translators: `
+## translate-application
+Name: Translate Application
+Type: api
+Subscribes: application-received
+Produces: add-policy-holder
+`,
+  });
+  const model = buildModel(dir);
+  const html = renderTable(model, computeGeometry(model));
+  assert.match(html, /class="tr-badge">⚙</);
+  assert.match(html, /class="ui-label">API</);
 });
 
 test('renderArrows tags external-event → translator edges as "translates" and translator → command as "translates-cmd"', () => {

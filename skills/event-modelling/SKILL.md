@@ -149,13 +149,16 @@ System name: Underwriter Portal
 `translators.md` (optional — **Translation Pattern**): the "bots" that bridge
 the external world into the system. Each translator `Subscribes:` one or more
 external event ids (from `external-events.md`) and `Produces:` one or more
-internal command ids (from `commands.md`):
+internal command ids (from `commands.md`). An optional free-form `Type:`
+labels the kind of translator it is — the value can be **anything** (no
+enum); it is a display hint only:
 
 ```markdown
 # Translators
 
 ## translate-application
 Name: Translate Application
+Type: underwriter-sync-bot
 Subscribes: application-received
 Produces: submit-policy-application
 ```
@@ -210,8 +213,13 @@ Produces: submit-policy-application
   command id exactly, and/or fan out a single UI entry into multiple visual
   UI boxes, one per listed command. See `uis.md` linkage below.
 - `Subscribes:` (comma-separated ids) links a read model to its source events.
-- `Type:` (`uis.md` only) is a display hint (`html`, `pdf`, ...) shown as a
-  small uppercase label on the UI card; it does not affect linkage.
+- `Type:` (`uis.md` and `translators.md`) is a **free-form** display hint — the
+  value can be **anything** (no enum; `html`, `pdf`, `api`,
+  `underwriter-sync-bot`, ... are just examples) — shown as a small uppercase
+  label on the card; it does not affect linkage. On `uis.md` it labels the UI
+  card (and, for frontend codegen, `Type: html` is what selects a page — a
+  separate concern of that skill). On `translators.md` it labels the
+  translator card; it is optional and never affects generation or linkage.
 - `ConsistsOf:` (`uis.md` only, comma-separated read model ids) — for a UI
   that's projected from **more than one** read model (e.g. a dashboard
   combining several views). See `uis.md` linkage below.
@@ -421,7 +429,9 @@ When either file is present, the generator draws the full Translation slice
   command** (fan-out, mirroring the trigger-UI convention), each sitting
   directly above its produced command's column. Several translators producing
   the same command fan in side by side. Translator cards are teal with a `⚙`
-  sprocket badge; fields are optional.
+  sprocket badge; an optional free-form `Type:` (value can be anything) is
+  shown as a small uppercase label on the card (the card grows to fit it);
+  fields are optional.
 - **Edges**: a dashed teal `External Event → Translator` arrow (kind
   `translates`) rises from the external event's top-right corner, runs
   through a card-free band just below the Bots row, then drops into the

@@ -205,7 +205,12 @@ function parseMdText(text) {
       switch (key) {
         case 'name': cur.name = val; break;
         case 'actor': cur.actor = val; break;
-        case 'type': cur.uiType = val; break;
+        case 'type':
+          // Free-form display hint — value can be anything (no enum). Used by
+          // uis.md (html, pdf, ...) and translators.md (whatever the team calls
+          // that bot). Purely a card label; it never affects linkage.
+          cur.typeHint = val;
+          break;
         case 'produces':
           // Comma-separated list of event ids this command triggers — one
           // command may emit several events (e.g. `Produces: policy-issued,
@@ -496,7 +501,7 @@ function buildModel(inputDir) {
   //    pdf/html screen composed from several projections. Rendered in the
   //    row of `Actor:` — the person who receives/reads it — placed in the
   //    rightmost source read model's column, with one arrow per source.
-  // `Type:` (html, pdf, ...) is a display hint only; linkage is by id.
+  // `Type:` (html, pdf, ...) is a free-form display hint only; linkage is by id.
   const uiById = {};
   uis.forEach((u) => { uiById[u.id] = u; });
   const commandIds = new Set(commands.map((c) => c.id));
@@ -628,10 +633,11 @@ function buildModel(inputDir) {
   });
   // Translators: bots that subscribe to external events and produce internal
   // commands. They get a card each; no :Id (not an aggregate), fields are
-  // optional.
+  // optional. An optional free-form `Type:` grows the card to fit its label
+  // line (same display-hint treatment as a UI's Type:).
   translators.forEach((t) => {
     if (!t.name) t.name = t.id;
-    t._h = cardHeight(TR_H, t.fields);
+    t._h = cardHeight(TR_H + (t.typeHint ? TR_TYPE_H : 0), t.fields);
   });
   const hasBots = translators.length > 0;
 
@@ -1013,6 +1019,7 @@ const AGG_ID_H = 14; // extra height to fit an optional/mandatory "{aggregateNam
 const EVT_W = 220, EVT_H = 60 + AGG_ID_H; // events always carry the mandatory aggregate-id line
 const EXT_EVT_W = 220, EXT_EVT_BASE_H = 60; // external events: NO mandatory :Id line (external contract)
 const TR_W = 200, TR_H = 56; // translator card (sprocket icon, Bots row)
+const TR_TYPE_H = 12; // extra height to fit an optional free-form `Type:` label line
 const VIEW_W = 220, VIEW_H = 60;
 const RADIUS = 8; // card border-radius; inset corner-ish endpoints by this along the straight edge they touch
 const TRANS_LINE = '#00796B'; // teal — translation arrows (external event -> translator -> command)
@@ -1146,8 +1153,10 @@ function renderTable(model, geo) {
       let content = '';
       if (boxes.length) {
         const cards = boxes.map((b) => {
-          const isSystem = false; // translators are their own bot kind; sprocket badge below
-          return `<div class="card tr-card" style="height:${b.tr._h}px" data-element="${b.elementId}" data-ui-id="${b.tr.id}" data-type="tr" title="${b.tr.id} → ${b.cmdId} — click to focus, click again to clear"><div class="tr-badge">⚙</div><div class="title">${escapeHtml(b.tr.name || b.tr.id)}</div>${fieldsHtml(b.tr.fields)}</div>`;
+          // Optional free-form `Type:` label — same display-hint treatment as
+          // a UI card's Type:, just on the translator's teal background.
+          const typeLabel = b.tr.typeHint ? `<div class="ui-label">${escapeHtml(String(b.tr.typeHint).toUpperCase())}</div>` : '';
+          return `<div class="card tr-card" style="height:${b.tr._h}px" data-element="${b.elementId}" data-ui-id="${b.tr.id}" data-type="tr" title="${b.tr.id} → ${b.cmdId} — click to focus, click again to clear"><div class="tr-badge">⚙</div>${typeLabel}<div class="title">${escapeHtml(b.tr.name || b.tr.id)}</div>${fieldsHtml(b.tr.fields)}</div>`;
         }).join('');
         content = boxes.length > 1 ? `<div class="ui-fanin-row">${cards}</div>` : cards;
       }
@@ -1165,7 +1174,7 @@ function renderTable(model, geo) {
   let standaloneRow = '';
   if (standaloneUis.length) {
     const cards = standaloneUis.map((u) => {
-      const label = u.uiType ? u.uiType.toUpperCase() : 'UI';
+      const label = u.typeHint ? u.typeHint.toUpperCase() : 'UI';
       return `<div class="card ui-card standalone-ui" data-element="ui-${u.id}" data-type="ui" title="ui-${u.id} — standalone UI (no Triggers:, no view) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(u.name || u.id)}</div>${u.actor ? `<div class="caption">${escapeHtml(u.actor)}</div>` : ''}</div>`;
     }).join('');
     standaloneRow = `<tr style="height:${STANDALONE_H}px"><td class="gutter standalone-gutter">Unwired UIs</td><td class="lane-cell standalone-cell" colspan="${columns.length}"><div class="standalone-row">${cards}</div></td></tr>`;
@@ -1186,9 +1195,9 @@ function renderTable(model, geo) {
           // explicit Triggers: claim plus an id-match claim, or several
           // distinct entry-point scenarios) — render one box per triggering
           // UI, side by side, in this same cell.
-          const triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id, name: cmd.name, uiType: undefined }];
+          const triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id, name: cmd.name, typeHint: undefined }];
           const cards = triggerUis.map((ui) => {
-            const label = ui && ui.uiType ? ui.uiType.toUpperCase() : 'UI';
+            const label = ui && ui.typeHint ? ui.typeHint.toUpperCase() : 'UI';
             const uiId = ui.id;
             const elementId = triggerUiElementId(uiId, cmd.id);
             return `<div class="card ui-card" data-element="${elementId}" data-ui-id="${uiId}" data-type="ui" title="ui-${uiId} → ${cmd.id} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(ui.name || cmd.name)}</div></div>`;
@@ -1203,7 +1212,7 @@ function renderTable(model, geo) {
       if (!content) {
         const outUi = uis.find((u) => uiPlacementCol[u.id] === i && u.actor === role);
         if (outUi) {
-          const label = outUi.uiType ? outUi.uiType.toUpperCase() : 'UI';
+          const label = outUi.typeHint ? outUi.typeHint.toUpperCase() : 'UI';
           const elementId = outputUiElementId(outUi.id);
           content = `<div class="card ui-card" data-element="${elementId}" data-ui-id="${outUi.id}" data-type="ui" title="ui-${outUi.id} ← read model(s) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(outUi.name || outUi.id)}</div></div>`;
         }
@@ -1550,6 +1559,7 @@ svg [data-from].dim{opacity:.08}
 .view-card{width:${VIEW_W}px;background:var(--view);color:#35681f}
 .ext-card{width:${EXT_EVT_W}px;background:var(--ext-event);color:#37474f;border:2px dashed #90a4ae}
 .tr-card{width:${TR_W}px;background:var(--translator);color:#eafffb}
+.tr-card .ui-label{color:rgba(234,255,251,.75)}
 .title{font-size:13px;font-weight:700;padding:0 8px;text-align:center;flex-shrink:0}
 .caption{font-size:10px;opacity:.8;text-transform:uppercase;letter-spacing:.04em}
 .agg-id{font-size:10px;font-weight:700;text-align:center;flex-shrink:0}

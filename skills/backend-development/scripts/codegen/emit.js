@@ -1425,6 +1425,7 @@ export {
   resolveArg,
   commandHandler,
   command,
+  commandAbility,
   aggregate,
   valueObject,
   readModel,

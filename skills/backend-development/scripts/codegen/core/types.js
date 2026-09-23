@@ -8,6 +8,37 @@
  * @property {Event[]} events
  * @property {Command[]} commands
  * @property {ReadModel[]} readModels
+ * @property {ExternalEvent[]} [externalEvents]
+ * @property {Translator[]} [translators]
+ */
+
+/**
+ * Inbound contract of a system we don't own (external-events.md). Not a
+ * DomainEvent — never appended to the stream. Fields are optional and there is
+ * no field-consistency flow into commands: a Translator maps it by hand.
+ * @typedef {Object} ExternalEvent
+ * @property {string} id
+ * @property {string} name
+ * @property {string} systemName
+ * @property {Field[]} fields
+ * @property {string} className
+ * @property {string} package
+ */
+
+/**
+ * Translation Pattern bot (translators.md): turns an external-event payload
+ * into a command and hands it to CommandHandler. `typeHint` is the free-form
+ * `Type:` display/transport hint — `rest` and `kafka` select an ingress
+ * adapter, anything else generates a plain @Component.
+ * @typedef {Object} Translator
+ * @property {string} id
+ * @property {string} name
+ * @property {string|null} typeHint
+ * @property {string[]} subscribes  external event ids
+ * @property {string[]} produces    command ids
+ * @property {Field[]} fields
+ * @property {string} className
+ * @property {string} package
  */
 
 /**

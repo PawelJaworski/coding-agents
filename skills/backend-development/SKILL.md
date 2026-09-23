@@ -41,7 +41,8 @@ not live state) rather than bugs, and re-deriving that from scratch by trial and
 wastes far more context than reading the ~200-line module once.
 
 The plugin system (`scripts/codegen/plugins/`) defines all constructs:
-DomainPlugin, EventPlugin, AggregatePlugin, CommandPlugin, GWTPlugin. Steps are data, not code.
+DomainPlugin, EventPlugin, AggregatePlugin, CommandPlugin, TranslatorPlugin, ReadModelPlugin,
+TestDataPlugin, GWTPlugin. Steps are data, not code.
 Adding a new construct = adding a new plugin file.
 
 `codegen --test` prints the step machine.

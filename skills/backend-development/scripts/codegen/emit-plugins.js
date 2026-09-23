@@ -18,6 +18,8 @@ export function emitWithPlugins(model) {
   const eventsById = new Map(model.events.map(e => [e.id, e]));
   const commandsById = new Map(model.commands.map(c => [c.id, c]));
   const readModelsById = new Map(model.readModels.map(rm => [rm.id, rm]));
+  const externalEventsById = new Map((model.externalEvents || []).map(e => [e.id, e]));
+  const translatorsById = new Map((model.translators || []).map(t => [t.id, t]));
 
   const ctx = {
     basePackage: model.meta.basePackage,
@@ -25,6 +27,8 @@ export function emitWithPlugins(model) {
     eventsById,
     commandsById,
     readModelsById,
+    externalEventsById,
+    translatorsById,
     importBlock,
     components,
     collaborator,
@@ -61,6 +65,8 @@ export function scanWithPlugins(model, { projectRoot, modelDir, groovyTestRoot, 
       basePackage,
       commands: model.commands,
       readModels: model.readModels,
+      translators: model.translators || [],
+      externalEvents: model.externalEvents || [],
     };
     const entries = scanner.scan(model, ctx);
     allEntries.push(...entries);

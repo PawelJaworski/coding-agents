@@ -99,8 +99,10 @@ function parseSections(text) {
       current.keyed = aggregate[2] === 'Key';
       continue;
     }
-    const prop = line.match(/^([A-Za-z]+):\s*(.+)$/);
-    if (prop) current.props[prop[1].toLowerCase()] = prop[2].trim();
+    // Key names may contain spaces ("System name:", "Type:"). Single-word keys
+    // keep working; the value is everything after the first ": ".
+    const prop = line.match(/^([A-Za-z][A-Za-z0-9 ]*?):\s*(.+)$/);
+    if (prop) current.props[prop[1].trim().toLowerCase()] = prop[2].trim();
   }
   return sections;
 }
@@ -472,6 +474,12 @@ export function parseModel({ modelDir, basePackage }) {
     if (!fs.existsSync(p)) throw new Error(`Missing model file: ${p}`);
     return fs.readFileSync(p, 'utf8');
   };
+  // Translation Pattern files are optional — a project with no external world
+  // has none of them, and that is a valid model, not a missing-file error.
+  const optionalRead = (f) => {
+    const p = path.join(modelDir, f);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  };
 
   const { byKey, valueObjects } = resolveTypes(
     parseDefinitions(read('business-definitions-raw.md')),
@@ -579,6 +587,7 @@ export function parseModel({ modelDir, basePackage }) {
       ...naming.command(basePackage, s.id),
     };
   });
+  const commandById = new Map(commands.map((c) => [c.id, c]));
 
   const readModels = parseSections(read('readmodels.md')).map((s) => {
     const subscribes = (s.props.subscribes || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -728,6 +737,62 @@ export function parseModel({ modelDir, basePackage }) {
     };
   });
 
+  // --- Translation Pattern: external events + translators (both optional) ----
+  // An external event is an inbound contract from a system we don't own. Unlike
+  // an internal event it has no mandatory <aggregate>:Id and no field-consistency
+  // flow into commands — a translator maps it, by hand, onto a command. Fields
+  // are still decorated through business-definitions so a matching command field
+  // can be auto-mapped by name (see TranslatorPlugin).
+  const externalEvents = parseSections(optionalRead('external-events.md')).map((s) => {
+    if (s.searchOnlyFields.length) {
+      throw new Error(
+        `External event "${s.id}" has a "??" (search-only criterion) field — search endpoints ` +
+          `only exist on persisting read models, so "??" is meaningless on an external event.`,
+      );
+    }
+    return {
+      id: s.id,
+      name: s.props.name || s.id,
+      systemName: s.props['system name'] || 'External',
+      fields: decorate(s.fields),
+      ...naming.externalEvent(basePackage, s.id, s.props['system name'] || 'External'),
+    };
+  });
+  const externalEventById = new Map(externalEvents.map((e) => [e.id, e]));
+
+  const translators = parseSections(optionalRead('translators.md')).map((s) => {
+    const subscribes = (s.props.subscribes || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const produces = (s.props.produces || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (subscribes.length === 0) {
+      throw new Error(`Translator "${s.id}" has no "Subscribes:" line — a translator must subscribe at least one external event.`);
+    }
+    if (produces.length === 0) {
+      throw new Error(`Translator "${s.id}" has no "Produces:" line — a translator must produce at least one command.`);
+    }
+    for (const id of subscribes) {
+      if (!externalEventById.has(id)) {
+        throw new Error(`Translator "${s.id}" subscribes unknown external event "${id}"`);
+      }
+    }
+    for (const id of produces) {
+      if (!commandById.has(id)) {
+        throw new Error(`Translator "${s.id}" produces unknown command "${id}"`);
+      }
+    }
+    return {
+      id: s.id,
+      name: s.props.name || s.id,
+      // Free-form display/transport hint. `rest` and `kafka` are the values
+      // TranslatorPlugin gives an ingress adapter to; anything else (or none)
+      // still generates the translator, just with no transport.
+      typeHint: s.props.type || null,
+      subscribes,
+      produces,
+      fields: decorate(s.fields),
+      ...naming.translator(basePackage, s.id),
+    };
+  });
+
   const generatedValueObjects = [...nestedValueObjects.values()];
   for (const nested of generatedValueObjects) {
     const existing = valueObjects.find((valueObject) => valueObject.className === nested.className);
@@ -749,6 +814,8 @@ export function parseModel({ modelDir, basePackage }) {
     events,
     commands,
     readModels,
+    externalEvents,
+    translators,
   };
 }
 

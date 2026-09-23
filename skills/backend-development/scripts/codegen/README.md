@@ -58,6 +58,7 @@ one restricted to the minimal edit that turns a red build green.
 | `naming.js` | every naming/packaging rule as a pure function. Replaces any "code index" — class names and packages are *computed* from the model, never looked up. |
 | `parse.js` | model markdown -> normalised `model.json`, incl. value-object type resolution |
 | `emit.js` | `model.json` -> Java sources |
+| `plugins/TranslatorPlugin.js` | Translation Pattern ingress: `Type: rest`/`kafka`/plain adapters + `*External` payload records |
 | `runtime.js` | domain-independent event-sourcing runtime, scaffolded once per project |
 | `merge.js` | add-only reconciliation of an existing `GENERATED` file. The only module that rewrites existing files, so it masks comments/literals before any structural scan and refuses to emit anything it cannot re-parse. |
 | `advisory.js` | drift report for hand-owned logic files: what the model has that the file lacks, and what conflicts |
@@ -94,13 +95,16 @@ you need to see exactly what an agent was shown. Nested patch refreshes performe
 
 ## Model grammar
 
-Line-oriented, in `<modelDir>/{commands,events,readmodels}.md`:
+Line-oriented, in `<modelDir>/{commands,events,readmodels,external-events,translators}.md`:
 
 ```
 ## <kebab-id>            starts an element
 Name: <human name>
-Produces: <event-id>     (commands)
-Subscribes: <e1>, <e2>   (read models)
+Produces: <event-id>     (commands)  |  <command-id> (translators)
+Subscribes: <e1>, <e2>   (read models)  |  <ext-event-id>, ... (translators)
+System name: <system>    (external-events) — groups into external swimlanes
+Type: <anything>         (uis, translators) — free-form; `rest`/`kafka` on a
+                         translator select a backend ingress adapter
 <aggregate>:Id           on-demand projection: replayed from the stream per request
 <aggregate>:Key          persisting projection: JPA table advanced on append
 * field name             plain payload attribute (passthrough, wired by name)
@@ -112,6 +116,33 @@ Subscribes: <e1>, <e2>   (read models)
 
 Field types resolve from `<modelDir>/business-definitions-raw.md`: a concept with
 listed attributes becomes a value-object record; a concept without becomes `String`.
+
+`external-events.md` and `translators.md` are the optional **Translation
+Pattern** pair (a system we don't own, and the bot that bridges it in). An
+external event is an inbound contract — no mandatory `<aggregate>:Id`, fields
+optional, and **no field-consistency flow** into commands: a translator maps it
+by hand. `TranslatorPlugin` turns each translator into an ingress adapter:
+
+| translator `Type:` | generated ingress |
+|---|---|
+| `rest` | `@RestController` + one `@PostMapping("<external-event-id>")` per subscribed external event |
+| `kafka` | `@KafkaListener(topics = "<external-event-id>")` per subscribed external event |
+| anything else / omitted | plain `@Component`, no transport adapter |
+
+Each translator also emits one `<Name>External` payload record per subscribed
+external event — in a package **named after the external system** (`System
+name:`, lowercased and stripped to a legal Java package segment, e.g.
+`Underwriter Portal` → `<base>.underwriterportal`) — and a `<Name>Translator`
+class
+holding `CommandHandler<Foo> fooHandler`, one `to<Foo>Cmd(payload)` mapping per
+(external event, command) pair (overloaded on the payload type), and
+`fooHandler.handle(mappedCommand)`. The mapping auto-picks up fields whose name
+and shape match the command; every other command field becomes a private
+throwing stub — the external contract is not modelled, so "no match" is
+expected, not a model bug. When a translator produces more than one command, a
+hand-owned `dispatch(payload)` stub decides which command(s) a given external
+event triggers. Two `Type: rest` translators may not share one external event
+(they would claim the same POST path — a loud error; Kafka fan-in is fine).
 
 ### Lists and nested payloads
 
@@ -177,7 +208,8 @@ merged), and a `[bracketed]` duplicate is a model error.
 | `// SCAFFOLDED ONCE ... this file is YOURS` | project-owned, written only when absent |
 
 Generated per run: value objects, events, `DomainEventType`, `StateProjector`, serde
-wrappers + registry + `DomainEventSerde`, commands, handlers, read models, projectors,
+wrappers + registry + `DomainEventSerde`, commands, handlers, external-event payloads,
+translators (the Translation Pattern ingress layer), read models, projectors,
 and all test abilities.
 
 Scaffolded once: the runtime (`DomainEvent`, `EventStream`, `DomainEventEntity`,

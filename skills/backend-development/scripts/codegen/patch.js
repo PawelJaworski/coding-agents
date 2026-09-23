@@ -26,7 +26,7 @@ import { mergeGenerated } from './merge.js';
 import { preservedReason, parseScaffoldVersion } from './scaffold.js';
 import { isLogicFile } from './advisory.js';
 
-export const CATEGORIES = ['domain', 'commands', 'events', 'readmodels', 'testdata'];
+export const CATEGORIES = ['domain', 'commands', 'events', 'translators', 'readmodels', 'testdata'];
 
 /** Patch filename for a category (`commands` -> `commands-patch.json`). */
 export function patchFileName(category) {

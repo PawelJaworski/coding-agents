@@ -151,14 +151,15 @@ the external world into the system. Each translator `Subscribes:` one or more
 external event ids (from `external-events.md`) and `Produces:` one or more
 internal command ids (from `commands.md`). An optional free-form `Type:`
 labels the kind of translator it is — the value can be **anything** (no
-enum); it is a display hint only:
+enum); `rest` and `kafka` additionally select a backend ingress adapter, any
+other value is a display hint only:
 
 ```markdown
 # Translators
 
 ## translate-application
 Name: Translate Application
-Type: underwriter-sync-bot
+Type: rest
 Subscribes: application-received
 Produces: submit-policy-application
 ```
@@ -214,12 +215,15 @@ Produces: submit-policy-application
   UI boxes, one per listed command. See `uis.md` linkage below.
 - `Subscribes:` (comma-separated ids) links a read model to its source events.
 - `Type:` (`uis.md` and `translators.md`) is a **free-form** display hint — the
-  value can be **anything** (no enum; `html`, `pdf`, `api`,
+  value can be **anything** (no enum; `html`, `pdf`, `api`, `rest`, `kafka`,
   `underwriter-sync-bot`, ... are just examples) — shown as a small uppercase
   label on the card; it does not affect linkage. On `uis.md` it labels the UI
   card (and, for frontend codegen, `Type: html` is what selects a page — a
-  separate concern of that skill). On `translators.md` it labels the
-  translator card; it is optional and never affects generation or linkage.
+  separate concern of that skill). On `translators.md` it labels the translator
+  card and, for **backend** codegen, `rest` and `kafka` additionally select an
+  ingress adapter (`@RestController` POST endpoint / `@KafkaListener`); any
+  other value still generates a plain `@Component` translator. This diagram
+  itself only ever displays the value.
 - `ConsistsOf:` (`uis.md` only, comma-separated read model ids) — for a UI
   that's projected from **more than one** read model (e.g. a dashboard
   combining several views). See `uis.md` linkage below.

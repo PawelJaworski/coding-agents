@@ -24,6 +24,15 @@ const snake = (s) =>
     .toLowerCase();
 // slice package: kebab collapses to a single lowercase segment (issue-policy -> issuepolicy)
 const slicePackage = (s) => words(s).join('');
+// package segment from a FREE-FORM name (a System name: is human prose, not an
+// id): "Underwriter Portal" -> "underwriterportal", "ACME Corp." -> "acmecorp".
+// Anything that is not a-z0-9 is stripped so the result is always a legal
+// Java package segment.
+const systemPackage = (s) =>
+  words(s)
+    .map((w) => w.replace(/[^a-z0-9]/g, ''))
+    .filter(Boolean)
+    .join('');
 
 // Aggregate identity type. Every generated reference to an aggregate id —
 // event records, handlers, aggregates, read models, entities, test DSLs —
@@ -49,6 +58,7 @@ const naming = {
   screamingSnake,
   snake,
   slicePackage,
+  systemPackage,
 
   command: (base, id) => ({
     className: `${pascal(id)}Cmd`,
@@ -100,6 +110,25 @@ const naming = {
     package: `${base}.domain`,
   }),
 
+  // Inbound contract of a system we don't own (external-events.md). NOT a
+  // DomainEvent — never appended to the stream; a translator maps it to a
+  // command and stops there. Lives in its own package NAMED AFTER the
+  // external system (`System name:`), one slice per system, so contracts from
+  // different systems never share a type namespace.
+  externalEvent: (base, id, systemName = 'External') => ({
+    className: `${pascal(id)}External`,
+    package: `${base}.${systemPackage(systemName) || 'external'}`,
+  }),
+
+  // A translator is an ingress adapter (Translation Pattern): it turns an
+  // external-event payload into a command and hands it to CommandHandler.
+  // `Type:` on the translator selects the transport (`rest` | `kafka` | anything
+  // else -> no transport, plain @Component).
+  translator: (base, id) => ({
+    className: `${pascal(id)}Translator`,
+    package: `${base}.${slicePackage(id)}`,
+  }),
+
   // Shared test-data interface (TestDataPlugin): one per project, in the test
   // source set, extended by every command ability. One namespace on purpose —
   // a spec implementing abilities from several slices must never hit an
@@ -113,6 +142,16 @@ const naming = {
   // the per-command default-builder method a generated *Ability DSL calls:
   // IssuePolicyCmd -> defaultIssuePolicyCmd()
   defaultBuilderMethod: (commandClassName) => `default${commandClassName}`,
+
+  // Translator call-site names, derived only (never looked up):
+  //   handler field  IssuePolicyHandler -> issuePolicyHandler
+  //   map method     issue-policy       -> toIssuePolicyCmd
+  //   entry method   application-received -> onApplicationReceived
+  // `cap`'s inverse (NOT camel(), which re-splits words and would flatten an
+  // already-PascalCase class name into one lowercase token).
+  handlerField: (handlerClassName) => (handlerClassName ? handlerClassName[0].toLowerCase() + handlerClassName.slice(1) : handlerClassName),
+  mapMethod: (commandId) => `to${pascal(commandId)}Cmd`,
+  entryMethod: (externalEventId) => `on${pascal(externalEventId)}`,
 
   field: (name) => camel(name),
 

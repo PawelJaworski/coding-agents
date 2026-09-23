@@ -1478,3 +1478,379 @@ test('clicking one fan-out UI copy follows only that copy command slice', () => 
     'ui-shared--triggers-cmd-a',
   ].sort());
 });
+
+// ---------------------------------------------------------------------------
+// Translation Pattern (external-events.md + translators.md)
+// ---------------------------------------------------------------------------
+
+// A consistent fixture with one external event, one translator feeding the
+// existing add-policy-holder command, and the usual UI/read model.
+function translationFixture(overrides = {}) {
+  const commands = overrides.commands !== undefined ? overrides.commands : `
+## add-policy-holder
+Name: Add Policy Holder
+Produces: policy-holder-added
+* name
+* address
+`;
+  const events = overrides.events !== undefined ? overrides.events : `
+## policy-holder-added
+Name: Policy Holder Added
+policyHolder:Id
+* name
+* address
+`;
+  const readmodels = overrides.readmodels !== undefined ? overrides.readmodels : `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name
+* address
+`;
+  const uis = overrides.uis !== undefined ? overrides.uis : `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Clerk
+Type: html
+`;
+  const externalEvents = overrides.externalEvents !== undefined ? overrides.externalEvents : `
+## application-received
+Name: Application Received
+System name: Underwriter Portal
+* application id
+`;
+  const translators = overrides.translators !== undefined ? overrides.translators : `
+## translate-application
+Name: Translate Application
+Subscribes: application-received
+Produces: add-policy-holder
+`;
+  return makeFixtureDir({
+    'commands.md': commands,
+    'events.md': events,
+    'readmodels.md': readmodels,
+    'uis.md': uis,
+    'external-events.md': externalEvents,
+    'translators.md': translators,
+  });
+}
+
+test('parseMdText parses an external-events.md-shaped entry with "System name:" and optional :Id/fields', () => {
+  const items = parseMdText(`
+## application-received
+Name: Application Received
+System name: Underwriter Portal
+applicationId:Id
+* application id
+`);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, 'application-received');
+  assert.equal(items[0].name, 'Application Received');
+  assert.equal(items[0].systemName, 'Underwriter Portal');
+  assert.equal(items[0].aggregateId, 'applicationId');
+  assert.deepEqual(items[0].fields, ['application id']);
+});
+
+test('parseMdText parses an external event with NO :Id (external contract — not mandatory)', () => {
+  const items = parseMdText(`
+## application-received
+Name: Application Received
+System name: Underwriter Portal
+`);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].aggregateId, undefined);
+});
+
+test('parseMdText parses a translators.md-shaped entry (Subscribes external events, Produces commands)', () => {
+  const items = parseMdText(`
+## translate-application
+Name: Translate Application
+Subscribes: application-received
+Produces: add-policy-holder
+`);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, 'translate-application');
+  assert.deepEqual(items[0].subscribes, ['application-received']);
+  assert.deepEqual(items[0].produces, ['add-policy-holder']);
+});
+
+test('buildModel accepts external events and translators and inserts ext columns left of the fed command', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  assert.equal(model.externalEvents.length, 1);
+  assert.equal(model.translators.length, 1);
+  assert.equal(model.hasBots, true);
+  assert.deepEqual(model.externalSystems, ['Underwriter Portal']);
+  // The external event column is strictly left of the command it feeds
+  // (add-policy-holder lives at its primary produced event policy-holder-added).
+  const extIdx = model.columns.findIndex((c) => c.type === 'ext' && c.extId === 'application-received');
+  assert.notEqual(extIdx, -1);
+  const cmdIdx = model.columns.findIndex((c) => c.type === 'event' && c.eventId === 'policy-holder-added');
+  assert.ok(extIdx < cmdIdx, `ext column ${extIdx} should be left of command column ${cmdIdx}`);
+  assert.equal(model.translatorBoxes.length, 1);
+  assert.equal(model.translatorBoxes[0].cmdId, 'add-policy-holder');
+  assert.equal(model.translatorBoxes[0].colIdx, cmdIdx);
+});
+
+test('buildModel defaults the external system name to "External" when System name: is missing', () => {
+  const dir = translationFixture({
+    externalEvents: `
+## application-received
+Name: Application Received
+* application id
+`,
+  });
+  const model = buildModel(dir);
+  assert.deepEqual(model.externalSystems, ['External']);
+});
+
+test('buildModel throws when a translator subscribes an unknown external event', () => {
+  const dir = translationFixture({
+    translators: `
+## translate-application
+Name: Translate Application
+Subscribes: does-not-exist
+Produces: add-policy-holder
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /Translator "translate-application" subscribes to unknown external event "does-not-exist"/,
+  );
+});
+
+test('buildModel throws when a translator produces an unknown command', () => {
+  const dir = translationFixture({
+    translators: `
+## translate-application
+Name: Translate Application
+Subscribes: application-received
+Produces: does-not-exist
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /Translator "translate-application" produces unknown command "does-not-exist"/,
+  );
+});
+
+test('buildModel throws when a translator subscribes to nothing (no Subscribes:)', () => {
+  const dir = translationFixture({
+    translators: `
+## translate-application
+Name: Translate Application
+Produces: add-policy-holder
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /Translator "translate-application" subscribes to no external event/,
+  );
+});
+
+test('buildModel throws when a translator produces nothing (no Produces:)', () => {
+  const dir = translationFixture({
+    translators: `
+## translate-application
+Name: Translate Application
+Subscribes: application-received
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /Translator "translate-application" produces no command/,
+  );
+});
+
+test('buildModel throws when an external event has no translator subscribing it (orphan external event)', () => {
+  const dir = translationFixture({
+    externalEvents: `
+## application-received
+Name: Application Received
+System name: Underwriter Portal
+
+## another-external-event
+Name: Another External Event
+System name: Other System
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /External event\(s\) with no translator subscribing them — another-external-event/,
+  );
+});
+
+test('buildModel throws when an external event id collides with an internal event id', () => {
+  const dir = translationFixture({
+    externalEvents: `
+## policy-holder-added
+Name: Colliding
+System name: Underwriter Portal
+`,
+    translators: `
+## translate-application
+Name: Translate Application
+Subscribes: policy-holder-added
+Produces: add-policy-holder
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /External event id\(s\) collide with internal events — policy-holder-added/,
+  );
+});
+
+test('buildModel allows an external event with no :Id (mandatory-aggregate-id check does not apply to external events)', () => {
+  const dir = translationFixture(); // external fixture has no application-received :Id
+  const model = buildModel(dir);
+  assert.equal(model.externalEvents[0].aggregateId, undefined);
+});
+
+test('buildModel fan-out: one translator producing several commands gets one box per produced command', () => {
+  const dir = translationFixture({
+    commands: `
+## add-policy-holder
+Name: Add Policy Holder
+Produces: policy-holder-added
+* name
+
+## add-address
+Name: Add Address
+Produces: address-added
+* address
+`,
+    events: `
+## policy-holder-added
+Name: Policy Holder Added
+policyHolder:Id
+* name
+
+## address-added
+Name: Address Added
+policyHolder:Id
+* address
+`,
+    readmodels: `
+## policy-holder-view
+Name: Policy Holder View
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name
+`,
+    translators: `
+## sync-address
+Name: Sync Address
+Subscribes: application-received
+Produces: add-policy-holder, add-address
+`,
+  });
+  const model = buildModel(dir);
+  assert.equal(model.translatorBoxes.length, 2);
+  assert.deepEqual(model.translatorBoxes.map((b) => b.cmdId).sort(), ['add-address', 'add-policy-holder']);
+});
+
+test('buildModel fan-in: several translators subscribing the same external event both get a box', () => {
+  const dir = translationFixture({
+    translators: `
+## translate-application
+Name: Translate Application
+Subscribes: application-received
+Produces: add-policy-holder
+
+## second-translator
+Name: Second Translator
+Subscribes: application-received
+Produces: add-policy-holder
+`,
+  });
+  const model = buildModel(dir);
+  assert.equal(model.translatorBoxes.length, 2);
+});
+
+test('renderTable renders the Bots row, translator cards with sprocket badge, and external-system lanes', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  assert.match(html, /class="gutter bots-gutter">Bots</);
+  assert.match(html, /class="card tr-card"/);
+  assert.match(html, /class="tr-badge">⚙</);
+  assert.match(html, /data-element="tr-translate-application--cmd-add-policy-holder"/);
+  assert.match(html, /Underwriter Portal/);
+  assert.match(html, /class="card ext-card"/);
+  assert.match(html, /data-element="ext-application-received"/);
+  // External event card must NOT show a mandatory :Id line (none declared)
+  assert.match(html, /data-element="ext-application-received"/);
+});
+
+test('renderArrows tags external-event → translator edges as "translates" and translator → command as "translates-cmd"', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const svg = renderArrows(model, geo);
+  assert.match(svg, /data-kind="translates"/);
+  assert.match(svg, /data-kind="translates-cmd"/);
+  assert.match(svg, /data-from="ext-application-received"/);
+  assert.match(svg, /data-to="tr-translate-application--cmd-add-policy-holder"/);
+});
+
+test('computeGeometry reserves a Bots row and external-system lanes (height grows with both)', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  assert.ok(geo.botsH > 0);
+  assert.equal(geo.extSysHeights.length, 1);
+  assert.ok(geo.height > geo.extTop); // external lanes add height at the bottom
+});
+
+test('interactivity: clicking an external event walks forward through translator → command → event (kind "translates" acts as a start)', () => {
+  const fixture = {
+    cards: [
+      'ext-application-received',
+      'tr-translate-application--cmd-add-policy-holder',
+      'add-policy-holder',
+      'policy-holder-added',
+      'policy-holder-view',
+    ],
+    arrows: [
+      ['ext-application-received', 'tr-translate-application--cmd-add-policy-holder', 'translates'],
+      ['tr-translate-application--cmd-add-policy-holder', 'add-policy-holder', 'translates-cmd'],
+      ['add-policy-holder', 'policy-holder-added', 'produces'],
+      ['policy-holder-added', 'policy-holder-view', 'observes'],
+    ],
+  };
+  const dom = loadInteractivity(fixture);
+  assert.deepEqual(dom.clickCard('ext-application-received').highlighted.sort(), [
+    'add-policy-holder',
+    'ext-application-received',
+    'policy-holder-added',
+    'policy-holder-view',
+    'tr-translate-application--cmd-add-policy-holder',
+  ].sort());
+});
+
+test('interactivity: clicking a translator walks forward through the command/event/view it starts (kind "translates-cmd" acts as a start)', () => {
+  const fixture = {
+    cards: [
+      'ext-application-received',
+      'tr-translate-application--cmd-add-policy-holder',
+      'add-policy-holder',
+      'policy-holder-added',
+      'policy-holder-view',
+    ],
+    arrows: [
+      ['ext-application-received', 'tr-translate-application--cmd-add-policy-holder', 'translates'],
+      ['tr-translate-application--cmd-add-policy-holder', 'add-policy-holder', 'translates-cmd'],
+      ['add-policy-holder', 'policy-holder-added', 'produces'],
+      ['policy-holder-added', 'policy-holder-view', 'observes'],
+    ],
+  };
+  const dom = loadInteractivity(fixture);
+  assert.deepEqual(dom.clickCard('tr-translate-application--cmd-add-policy-holder').highlighted.sort(), [
+    'add-policy-holder',
+    'policy-holder-added',
+    'policy-holder-view',
+    'tr-translate-application--cmd-add-policy-holder',
+  ].sort());
+});

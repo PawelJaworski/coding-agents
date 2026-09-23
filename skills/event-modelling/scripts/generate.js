@@ -175,9 +175,12 @@ function parseMdText(text) {
       continue;
     }
     if (!cur) continue;
-    const kv = line.match(/^\s*(?:-\s*)?([A-Za-z][A-Za-z0-9]*):\s*(.+)/);
+    // Key names may contain spaces (e.g. "System name:") — the key is
+    // lowercased for the switch below. Bare field bullets (no colon) are
+    // handled separately after this.
+    const kv = line.match(/^\s*(?:-\s*)?([A-Za-z][A-Za-z0-9 -]*?)\s*:\s*(.+)/);
     if (kv) {
-      const rawKey = kv[1];
+      const rawKey = kv[1].trim();
       const val = kv[2].trim();
       // Aggregate-id attribute: "aggregateName:Id", e.g. "policy:Id" — the
       // LHS (in camelCase) is the aggregate name, the RHS is the literal
@@ -219,6 +222,7 @@ function parseMdText(text) {
           cur.triggers = val.split(',').map((s) => s.trim()).filter(Boolean);
           break;
         case 'subprocess': cur.subprocess = val; break;
+        case 'system name': cur.systemName = val; break;
         case 'subscribes':
           cur.subscribes = val.split(',').map((s) => s.trim()).filter(Boolean);
           break;
@@ -473,6 +477,15 @@ function buildModel(inputDir) {
   const readmodels = parseMd(path.join(inputDir, 'readmodels.md'));
   const uisFile = path.join(inputDir, 'uis.md');
   const uis = fs.existsSync(uisFile) ? parseMd(uisFile) : [];
+  // Translation Pattern inputs (both optional — a model may have no external
+  // integration): external-events.md describes facts that happen in systems
+  // we don't own (no mandatory {aggregate}:Id, no producing command — they
+  // arrive from outside); translators.md declares the "bots" that subscribe
+  // to those external events and issue internal commands in response.
+  const externalEventsFile = path.join(inputDir, 'external-events.md');
+  const externalEvents = fs.existsSync(externalEventsFile) ? parseMd(externalEventsFile) : [];
+  const translatorsFile = path.join(inputDir, 'translators.md');
+  const translators = fs.existsSync(translatorsFile) ? parseMd(translatorsFile) : [];
 
   // uis.md links to a command or a read model(s) by sharing its id, or via
   // an explicit `ConsistsOf:` list:
@@ -601,6 +614,27 @@ function buildModel(inputDir) {
     r._h = cardHeight(VIEW_H + idKeyLines * AGG_ID_H, r.fields);
   });
 
+  // External events: an external contract, NOT modelled by the team — so
+  // {aggregateName}:Id is optional (a foreign system has no local aggregate),
+  // no producing command is required (they arrive from outside), and no
+  // field-consistency check runs against any command (there is none). The
+  // only thing that must exist is a `System name:` grouping, mirroring how
+  // internal events use `Subprocess:`.
+  const defaultExternalSystem = (externalEvents[0] && externalEvents[0].systemName) || 'External';
+  externalEvents.forEach((e) => {
+    if (!e.name) e.name = e.id;
+    if (!e.systemName) e.systemName = defaultExternalSystem;
+    e._h = cardHeight(EXT_EVT_BASE_H + (e.aggregateId ? AGG_ID_H : 0), e.fields);
+  });
+  // Translators: bots that subscribe to external events and produce internal
+  // commands. They get a card each; no :Id (not an aggregate), fields are
+  // optional.
+  translators.forEach((t) => {
+    if (!t.name) t.name = t.id;
+    t._h = cardHeight(TR_H, t.fields);
+  });
+  const hasBots = translators.length > 0;
+
   const eventProducer = {}; // eventId -> command
   commands.forEach((c) => { (c.produces || []).forEach((pid) => { eventProducer[pid] = c; }); });
 
@@ -646,6 +680,67 @@ function buildModel(inputDir) {
     throw new Error(
       `Read model(s) missing mandatory "{aggregateName}:Id" and/or "{keyName}:Key" — ${readmodelsMissingIdOrKey.map((r) => r.id).join(', ')}. ` +
       `Add e.g. "policy:Id" and/or one or more "{keyName}:Key" lines to declare how the read model is identified.`
+    );
+  }
+
+  // Sanity: translators (Translation Pattern) wire external events to
+  // internal commands. Every `Subscribes:` id must be a real external event,
+  // and every `Produces:` id must be a real command — a typo would silently
+  // orphan the external event or leave a translator dangling. Also, only
+  // translators may reference external event ids: internal events, read
+  // models, and UIs must never subscribe to an external event (the bridge
+  // into the external world is exactly what translators are for).
+  const externalEventIds = new Set(externalEvents.map((e) => e.id));
+  const translatorSubscribedExternal = new Set();
+  translators.forEach((t) => {
+    (t.subscribes || []).forEach((eid) => {
+      if (!externalEventIds.has(eid)) {
+        throw new Error(
+          `Translator "${t.id}" subscribes to unknown external event "${eid}" — every id in "Subscribes:" in translators.md must match an external event in external-events.md.`
+        );
+      }
+      translatorSubscribedExternal.add(eid);
+    });
+    (t.produces || []).forEach((cid) => {
+      if (!commandIds.has(cid)) {
+        throw new Error(
+          `Translator "${t.id}" produces unknown command "${cid}" — every id in "Produces:" in translators.md must match a command in commands.md.`
+        );
+      }
+    });
+  });
+  // A translator that produces nothing (or is never triggered by anything)
+  // would be an empty card; require at least one Subscribes and one Produces.
+  translators.forEach((t) => {
+    if (!(t.subscribes || []).length) {
+      throw new Error(
+        `Translator "${t.id}" subscribes to no external event — a translator must declare at least one "Subscribes:" external event.`
+      );
+    }
+    if (!(t.produces || []).length) {
+      throw new Error(
+        `Translator "${t.id}" produces no command — a translator must declare at least one "Produces:" command.`
+      );
+    }
+  });
+  // Every external event must be consumed by at least one translator (same
+  // tier as the orphan-event check — an external event nobody listens to is
+  // just noise in the diagram).
+  const unconsumedExternal = externalEvents.filter((e) => !translatorSubscribedExternal.has(e.id));
+  if (unconsumedExternal.length) {
+    throw new Error(
+      `External event(s) with no translator subscribing them — ${unconsumedExternal.map((e) => e.id).join(', ')}. ` +
+      `Every external event must be listed in a translator's "Subscribes:" in translators.md.`
+    );
+  }
+  // An external event id must not collide with an internal event id (they
+  // render in the same column timeline).
+  const internalEventIds = new Set(events.map((e) => e.id));
+  const collidingExt = externalEvents.filter((e) => internalEventIds.has(e.id));
+  if (collidingExt.length) {
+    throw new Error(
+      `External event id(s) collide with internal events — ${collidingExt.map((e) => e.id).join(', ')}. ` +
+      `External and internal event ids must be globally unique.`
     );
   }
 
@@ -792,6 +887,59 @@ function buildModel(inputDir) {
     midRow[naturalIdx] = { type: 'view', id: rm.id };
   });
 
+  // External events (Translation Pattern) get one column each, inserted
+  // immediately LEFT of the command column they (transitively, via the
+  // translators that subscribe to them) feed — never left of the command, per
+  // the "never-left-of" convention. Multiple external events feeding the same
+  // command land left-to-right in external-events.md order. External event
+  // columns are empty in the mid-row and time row (they're not internal
+  // events — the external-system lanes at the bottom render the actual cards).
+  const extFeedsCommand = {}; // extId -> [cmdId, ...] (dedup)
+  const addExtFeed = (eid, cid) => {
+    (extFeedsCommand[eid] || (extFeedsCommand[eid] = [])).push(cid);
+  };
+  translators.forEach((t) => {
+    (t.subscribes || []).forEach((eid) => {
+      (t.produces || []).forEach((cid) => addExtFeed(eid, cid));
+    });
+  });
+  const extColFor = {}; // extId -> column index
+  externalEvents.forEach((e) => {
+    const cmds = [...new Set(extFeedsCommand[e.id] || [])];
+    let anchor = Infinity;
+    cmds.forEach((cid) => {
+      const pe = commandPrimaryEvent[cid];
+      if (!pe) return;
+      const idx = colIndexForEvent(pe);
+      if (idx !== -1 && idx < anchor) anchor = idx;
+    });
+    if (anchor === Infinity) {
+      throw new Error(
+        `External event "${e.id}" cannot be placed — it feeds no command that has a column. ` +
+        `Every translator subscribing it must produce a command that itself produces an event in events.md.`
+      );
+    }
+    columns.splice(anchor, 0, { type: 'ext', extId: e.id });
+    midRow.splice(anchor, 0, null);
+    extColFor[e.id] = anchor;
+  });
+  const colIndexForExt = (extId) => columns.findIndex((c) => c.type === 'ext' && c.extId === extId);
+
+  // Translator boxes: one visual card per (translator, produced command) pair,
+  // each sitting in the Bots row directly above its produced command's column
+  // (mirrors the trigger-UI fan-out convention).
+  const translatorElementId = (trId, cmdId) => `tr-${trId}--cmd-${cmdId}`;
+  const translatorBoxes = [];
+  translators.forEach((t) => {
+    (t.produces || []).forEach((cid) => {
+      const pe = commandPrimaryEvent[cid];
+      if (!pe) return;
+      const colIdx = colIndexForEvent(pe);
+      if (colIdx === -1) return;
+      translatorBoxes.push({ tr: t, cmdId: cid, colIdx, elementId: translatorElementId(t.id, cid) });
+    });
+  });
+
   const colIndexForView = (viewId) => columns.findIndex((c) => c.type === 'view' && c.viewId === viewId);
   // Placement column for an output UI: the rightmost column among its source
   // read models (a UI can only be drawn in one column, so composite/multi-
@@ -834,10 +982,19 @@ function buildModel(inputDir) {
   const subprocesses = [];
   events.forEach((e) => { if (!subprocesses.includes(e.subprocess)) subprocesses.push(e.subprocess); });
 
+  // External-system swimlanes: one per distinct `System name:` in
+  // external-events.md order (mirrors how `Subprocess:` builds internal lanes).
+  const externalSystems = [];
+  externalEvents.forEach((e) => {
+    if (!externalSystems.includes(e.systemName)) externalSystems.push(e.systemName);
+  });
+
   return {
     commands, events, readmodels, uis, uiById, triggerUiForCommand, uiSources, uiPlacementCol,
     eventProducer, commandPrimaryEvent, columns, midRow, colIndexForEvent, colIndexForView,
     roles, hasSystem, subprocesses, standaloneUis,
+    externalEvents, translators, hasBots, externalSystems, extColFor, colIndexForExt,
+    translatorBoxes, translatorElementId,
   };
 }
 
@@ -847,13 +1004,18 @@ function buildModel(inputDir) {
 
 const GUT = 180, COL = 360;
 const TIME_H = 40, ROLE_H = 130, SYS_H = 130, MID_H = 120, PROC_H = 150;
+const BOTS_H = 130; // top "Bots" swimlane holding all translator cards
+const EXT_SYS_H = 150; // bottom swimlanes, one per external System name:
 const UI_W = 210, UI_H = 76;
 const STANDALONE_H = 130; // dedicated row for UI cards with no Triggers: and no read-model view wiring
 const CMD_W = 200, CMD_H = 56;
 const AGG_ID_H = 14; // extra height to fit an optional/mandatory "{aggregateName}:Id" line
 const EVT_W = 220, EVT_H = 60 + AGG_ID_H; // events always carry the mandatory aggregate-id line
+const EXT_EVT_W = 220, EXT_EVT_BASE_H = 60; // external events: NO mandatory :Id line (external contract)
+const TR_W = 200, TR_H = 56; // translator card (sprocket icon, Bots row)
 const VIEW_W = 220, VIEW_H = 60;
 const RADIUS = 8; // card border-radius; inset corner-ish endpoints by this along the straight edge they touch
+const TRANS_LINE = '#00796B'; // teal — translation arrows (external event -> translator -> command)
 
 // Fields (parameters) block: cards grow to fit their bullet list, capped so
 // one very long list doesn't blow up the whole row — beyond MAX_FIELDS the
@@ -888,25 +1050,37 @@ function computeGeometry(model) {
   });
 
   const standaloneH = model.standaloneUis.length ? STANDALONE_H : 0;
-  const midRowTop = TIME_H + standaloneH + R * ROLE_H + (model.hasSystem ? SYS_H : 0);
+  const botsH = model.hasBots ? BOTS_H : 0;
+  const midRowTop = TIME_H + botsH + standaloneH + R * ROLE_H + (model.hasSystem ? SYS_H : 0);
   const processTop = midRowTop + midRowH;
   const procGroupTop = (g) => processTop + procHeights.slice(0, g).reduce((a, b) => a + b, 0);
-  const height = processTop + procHeights.reduce((a, b) => a + b, 0);
+  const extTop = processTop + procHeights.reduce((a, b) => a + b, 0);
+  const extSysHeights = model.externalSystems.map((sys) => {
+    const extHeights = model.externalEvents.filter((e) => e.systemName === sys).map((e) => e._h);
+    return rowHeightFor(Math.max(0, ...extHeights), EXT_SYS_H);
+  });
+  const extGroupTop = (g) => extTop + extSysHeights.slice(0, g).reduce((a, b) => a + b, 0);
+  const height = extTop + extSysHeights.reduce((a, b) => a + b, 0);
   return {
-    T, R, P, width, height, midRowTop, processTop, midRowH, procHeights, standaloneH,
+    T, R, P, width, height, midRowTop, processTop, midRowH, procHeights, standaloneH, botsH,
+    extTop, extSysHeights, extGroupTop,
     colCenterX: (i) => COL * (i + 1),
-    roleCenterY: (r) => TIME_H + standaloneH + r * ROLE_H + ROLE_H / 2,
-    sysCenterY: () => TIME_H + standaloneH + R * ROLE_H + SYS_H / 2,
+    botsCenterY: () => TIME_H + BOTS_H / 2,
+    roleCenterY: (r) => TIME_H + botsH + standaloneH + r * ROLE_H + ROLE_H / 2,
+    sysCenterY: () => TIME_H + botsH + standaloneH + R * ROLE_H + SYS_H / 2,
     midCenterY: () => midRowTop + midRowH / 2,
     procGroupTop,
     procCenterY: (g) => procGroupTop(g) + procHeights[g] / 2,
+    extCenterY: (g) => extGroupTop(g) + extSysHeights[g] / 2,
   };
 }
 
 const ROLE_TINTS = ['#ffe0ec', '#e2e9f5', '#fde7d0', '#e0f0ff', '#f0e0ff'];
 const PROC_TINTS = ['#fdf3d3', '#e4f4dc', '#e0e8f7', '#f7e0ec', '#e8f0e0'];
+const EXT_SYS_TINTS = ['#efe7f8', '#e4f0e6', '#f8e7e4', '#e4e8f0', '#f0f0e4'];
 const roleColor = (r) => ROLE_TINTS[r % ROLE_TINTS.length];
 const procColor = (g) => PROC_TINTS[g % PROC_TINTS.length];
+const extSysColor = (g) => EXT_SYS_TINTS[g % EXT_SYS_TINTS.length];
 
 // ---------------------------------------------------------------------------
 // 4. Render table rows
@@ -940,7 +1114,7 @@ function outputUiElementId(uiId) {
 }
 
 function renderTable(model, geo) {
-  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiPlacementCol, eventProducer, commandPrimaryEvent, columns, midRow, roles, hasSystem, subprocesses, standaloneUis } = model;
+  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiPlacementCol, eventProducer, commandPrimaryEvent, columns, midRow, roles, hasSystem, subprocesses, standaloneUis, hasBots, translatorBoxes, externalSystems, externalEvents, translatorElementId } = model;
 
   const colgroup = `<col style="width:${GUT}px">` + columns.map(() => `<col style="width:${COL}px">`).join('');
 
@@ -955,6 +1129,32 @@ function renderTable(model, geo) {
     }
   });
   const timeRow = `<tr style="height:${TIME_H}px">${timeCells}</tr>`;
+
+  // Bots swimlane (very top): all translators live here. One card per
+  // (translator, produced command) pair, sitting directly above the produced
+  // command's column; multiple translators producing the same command fan in
+  // side by side, mirroring the trigger-UI fan-in convention.
+  let botsRow = '';
+  if (hasBots) {
+    const boxesByCol = {};
+    translatorBoxes.forEach((b) => {
+      (boxesByCol[b.colIdx] || (boxesByCol[b.colIdx] = [])).push(b);
+    });
+    let cells = `<td class="gutter bots-gutter">Bots</td>`;
+    columns.forEach((c, i) => {
+      const boxes = boxesByCol[i] || [];
+      let content = '';
+      if (boxes.length) {
+        const cards = boxes.map((b) => {
+          const isSystem = false; // translators are their own bot kind; sprocket badge below
+          return `<div class="card tr-card" style="height:${b.tr._h}px" data-element="${b.elementId}" data-ui-id="${b.tr.id}" data-type="tr" title="${b.tr.id} → ${b.cmdId} — click to focus, click again to clear"><div class="tr-badge">⚙</div><div class="title">${escapeHtml(b.tr.name || b.tr.id)}</div>${fieldsHtml(b.tr.fields)}</div>`;
+        }).join('');
+        content = boxes.length > 1 ? `<div class="ui-fanin-row">${cards}</div>` : cards;
+      }
+      cells += `<td class="lane-cell bots-cell">${content}</td>`;
+    });
+    botsRow = `<tr style="height:${geo.botsH}px">${cells}</tr>`;
+  }
 
   // Standalone UIs row: cards defined in uis.md with no `Triggers:` wiring
   // (or whose trigger slot was already claimed by another UI) and no
@@ -1052,7 +1252,26 @@ function renderTable(model, geo) {
     return `<tr style="height:${geo.procHeights[g]}px">${cells}</tr>`;
   }).join('\n');
 
-  return `<table>\n<colgroup>${colgroup}</colgroup>\n${timeRow}\n${standaloneRow}\n${roleRows}\n${systemRow}\n${midRowHtml}\n${processRows}\n</table>`;
+  // External-system swimlanes (bottom): one row per `System name:` from
+  // external-events.md. External events are NOT required to carry :Id, so the
+  // card only renders it when the model actually declared one.
+  const externalRows = externalSystems.map((sys, g) => {
+    let cells = `<td class="gutter ext-gutter" style="background:${extSysColor(g)}">${escapeHtml(sys)}</td>`;
+    columns.forEach((c) => {
+      let content = '';
+      if (c.type === 'ext') {
+        const ev = externalEvents.find((e) => e.id === c.extId);
+        if (ev && ev.systemName === sys) {
+          const idLine = ev.aggregateId ? `<div class="agg-id">${escapeHtml(ev.aggregateId)}:Id</div>` : '';
+          content = `<div class="card ext-card" style="height:${ev._h}px" data-element="ext-${ev.id}" data-type="ext" title="${ev.id} — external event from ${sys} — click to focus, click again to clear"><div class="title">${escapeHtml(ev.name)}</div>${idLine}${fieldsHtml(ev.fields)}</div>`;
+        }
+      }
+      cells += `<td class="lane-cell" style="background:${extSysColor(g)}">${content}</td>`;
+    });
+    return `<tr style="height:${geo.extSysHeights[g]}px">${cells}</tr>`;
+  }).join('\n');
+
+  return `<table>\n<colgroup>${colgroup}</colgroup>\n${timeRow}\n${botsRow}\n${standaloneRow}\n${roleRows}\n${systemRow}\n${midRowHtml}\n${processRows}\n${externalRows}\n</table>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,7 +1279,7 @@ function renderTable(model, geo) {
 // ---------------------------------------------------------------------------
 
 function renderArrows(model, geo) {
-  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiSources, uiPlacementCol, eventProducer, commandPrimaryEvent, columns, roles, subprocesses, colIndexForEvent, colIndexForView } = model;
+  const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiSources, uiPlacementCol, eventProducer, commandPrimaryEvent, columns, roles, subprocesses, colIndexForEvent, colIndexForView, externalEvents, externalSystems, colIndexForExt, translatorBoxes, translatorElementId } = model;
   const arrows = [];
   const roleIndex = (actor) => roles.indexOf(actor);
 
@@ -1206,9 +1425,58 @@ function renderArrows(model, geo) {
     });
   });
 
+  // Translation Pattern (external events -> translators -> commands).
+  // Translator cards sit in the Bots row at the very top, directly above the
+  // command they produce; external events live in the bottom external-system
+  // lanes, in columns inserted left of the command they feed.
+  translatorBoxes.forEach((box) => {
+    const trCx = geo.colCenterX(box.colIdx);
+    const trBottom = geo.botsCenterY() + box.tr._h / 2;
+    const cmd = commands.find((c) => c.id === box.cmdId);
+    if (!cmd) return;
+    const midTop = geo.midCenterY() - cmd._h / 2;
+    // Translator -> command: route down the column's right edge to a card-free
+    // band (the System row when present, else just above the mid-row), across,
+    // then down into the command's top edge — mirrors the automation routing
+    // and keeps the column center line free for any human trigger UI.
+    const cmdBandY = model.hasSystem ? geo.sysCenterY() : geo.midRowTop - 15;
+    // Exit the translator card's bottom edge, run sideways into the column's
+    // RIGHT GUTTER (x = center + COL/2 - 20), then down the gutter to the
+    // card-free System-row band, across, and a short drop into the command top
+    // — mirrors the automation arrow and never slices through a human trigger
+    // UI card at that column (UI cards span ±UI_W/2 around the column center).
+    const trExitX = trCx + TR_W / 2 - RADIUS;
+    const trGutterX = trCx + COL / 2 - 20;
+    arrows.push({
+      polyline: [[trExitX, trBottom], [trGutterX, trBottom], [trGutterX, cmdBandY], [trCx, cmdBandY], [trCx, midTop]],
+      from: box.elementId, to: cmd.id, color: TRANS_LINE, marker: 'arrow-teal', kind: 'translates-cmd',
+    });
+    // External event -> translator: rise from the external event's top edge to
+    // a card-free band just below the Bots row, across to the translator
+    // column, then up into the translator card's bottom edge. A fan-out
+    // (translator producing several commands) draws one arrow per command box;
+    // a fan-in (several translators subscribing the same external event) draws
+    // one arrow per subscribing translator box.
+    (box.tr.subscribes || []).forEach((extId) => {
+      const extIdx = colIndexForExt(extId);
+      if (extIdx === -1) return;
+      const ext = externalEvents.find((e) => e.id === extId);
+      if (!ext) return;
+      const extGroup = externalSystems.indexOf(ext.systemName);
+      const extCx = geo.colCenterX(extIdx);
+      const extTop = geo.extCenterY(extGroup) - ext._h / 2;
+      const extExitX = extCx + EXT_EVT_W / 2 - RADIUS; // top-right corner, inset
+      const transBandY = TIME_H + BOTS_H + 10; // card-free band just below the Bots row
+      arrows.push({
+        polyline: [[extExitX, extTop], [extExitX, transBandY], [trCx, transBandY], [trCx, trBottom]],
+        from: `ext-${ext.id}`, to: box.elementId, dashed: true, color: TRANS_LINE, marker: 'arrow-teal', kind: 'translates',
+      });
+    });
+  });
+
   return arrows.map((a) => {
     const dashAttr = a.dashed ? ' stroke-dasharray="6,4"' : '';
-    const color = a.dashed || a.purpleNoMarker ? '#5E35B1' : '#333333';
+    const color = a.color || (a.dashed || a.purpleNoMarker ? '#5E35B1' : '#333333');
     const markerAttr = a.marker ? ` marker-end="url(#${a.marker})"` : '';
     const kindAttr = a.kind ? ` data-kind="${a.kind}"` : '';
     if (a.polyline) {
@@ -1248,6 +1516,8 @@ function renderPage(model, geo, tableHtml, arrowsHtml) {
   --ink:#0a0a0a;
   --arrow:#333333;
   --read-line:#5E35B1;
+  --ext-event:#cfd8dc;
+  --translator:#26a69a;
 }
 *{box-sizing:border-box}
 body{margin:0;padding:40px;background:#fafafa;font-family:'OpenSans','Noto Sans',Arial,sans-serif;color:var(--ink)}
@@ -1259,8 +1529,11 @@ td{padding:0;vertical-align:middle;text-align:center;border:none}
 .time-cell{vertical-align:middle}
 .time-badge{width:26px;height:26px;border-radius:50%;background:#fff;border:2px solid #333;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin:0 auto}
 .sys-gutter{background:#e2e9f5}
+.bots-gutter{background:#b2dfdb;color:#004d40}
+.bots-cell{background:#e0f2f1}
 .mid-gutter{background:#f7f8f9}
 .mid-cell{background:#f7f8f9}tr.mid-row td.mid-cell{border-top:2px dashed #bbb;border-bottom:2px dashed #bbb}
+.ext-gutter{background:#eceff1;color:#37474f;font-style:italic}
 .standalone-gutter{background:#f2f2f2;font-style:italic}
 .standalone-cell{background:#fbfbfb;border-bottom:2px dotted #ccc;text-align:left;vertical-align:middle}
 .standalone-row{display:flex;flex-wrap:wrap;gap:16px;padding:12px 20px}
@@ -1275,6 +1548,8 @@ svg [data-from].dim{opacity:.08}
 .cmd-card{width:${CMD_W}px;background:var(--command);color:#eafffb}
 .evt-card{width:${EVT_W}px;background:var(--event);color:#8a6408}
 .view-card{width:${VIEW_W}px;background:var(--view);color:#35681f}
+.ext-card{width:${EXT_EVT_W}px;background:var(--ext-event);color:#37474f;border:2px dashed #90a4ae}
+.tr-card{width:${TR_W}px;background:var(--translator);color:#eafffb}
 .title{font-size:13px;font-weight:700;padding:0 8px;text-align:center;flex-shrink:0}
 .caption{font-size:10px;opacity:.8;text-transform:uppercase;letter-spacing:.04em}
 .agg-id{font-size:10px;font-weight:700;text-align:center;flex-shrink:0}
@@ -1283,6 +1558,7 @@ svg [data-from].dim{opacity:.08}
 .fields li{font-size:10px;line-height:14px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fields li::before{content:'•';margin-right:5px;opacity:.6}
 .sys-badge{position:absolute;top:-10px;font-size:9px;background:#5E35B1;color:#fff;padding:2px 6px;border-radius:10px}
+.tr-badge{position:absolute;top:-10px;font-size:9px;background:#004d40;color:#fff;padding:2px 6px;border-radius:10px}
 .gwt-badge{position:absolute;bottom:-10px;font-size:9px;background:#2196F3;color:#fff;padding:2px 6px;border-radius:10px;cursor:pointer;z-index:10}
 .gwt-badge:hover{background:#1976D2}
 svg{position:absolute;top:0;left:0;pointer-events:none}
@@ -1311,6 +1587,7 @@ ${tableHtml}
 <defs>
 <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#333333"/></marker>
 <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#5E35B1"/></marker>
+<marker id="arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#00796B"/></marker>
 </defs>
 ${arrowsHtml}
 </svg>
@@ -1355,9 +1632,19 @@ function main() {
   console.log(`Written ${outputFile}`);
   console.log(
     'Columns:',
-    model.columns.map((c) => (c.type === 'event' ? c.eventId : `[view:${c.viewId}]`)).join(' | ')
+    model.columns.map((c) => (
+      c.type === 'event' ? c.eventId
+      : c.type === 'ext' ? `[ext:${c.extId}]`
+      : `[view:${c.viewId}]`
+    )).join(' | ')
   );
   console.log(`T=${geo.T} R=${geo.R} P=${geo.P} width=${geo.width} height=${geo.height}`);
+  if (model.hasBots) {
+    console.log(`Translators (Bots): ${model.translators.map((t) => t.id).join(', ')}`);
+  }
+  if (model.externalSystems.length) {
+    console.log(`External systems: ${model.externalSystems.join(', ')}`);
+  }
   if (model.standaloneUis.length) {
     console.log(`Standalone UI(s) (no Triggers:, no view wiring): ${model.standaloneUis.map((u) => u.id).join(', ')}`);
   }

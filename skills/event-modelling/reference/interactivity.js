@@ -8,8 +8,8 @@
  * - every card element has class "card" and attribute data-element="<id>"
  * - every arrow element (line/polyline) has data-from="<id>" data-to="<id>",
  *   and optionally data-kind="<kind>" (one of "triggers", "produces",
- *   "observes", "observes-cmd", "displays") identifying the semantic edge
- *   type — see kind meanings below.
+ *   "observes", "observes-cmd", "displays", "translates", "translates-cmd")
+ *   identifying the semantic edge type — see kind meanings below.
  * - the outer container has class "wrap"
  * - CSS defines .card.dim (dimmed) and .card.active (focused) states,
  *   a dim rule for arrows, and grab/grabbing cursors for .wrap, e.g.:
@@ -19,12 +19,24 @@
  *     .wrap{cursor:grab}
  *     .wrap.is-panning{cursor:grabbing}
  *
+ * Edge kinds:
+ *   triggers        UI card -> command (human trigger)
+ *   produces        command -> event(s)
+ *   observes        event -> read model (purple, no arrowhead)
+ *   observes-cmd    event -> automated command (automation/robot step)
+ *   displays        read model -> output UI
+ *   translates      external event -> translator (Translation Pattern)
+ *   translates-cmd  translator -> command (Translation Pattern)
+ *
  * Click-to-focus normally highlights the clicked card plus everything that
  * causally led to it (walking data-from backwards from data-to), i.e. its
  * upstream ancestors. Trigger UI copies are the deliberate exception: because
  * they are the first element in a slice and therefore have no ancestors,
  * clicking one walks forward from its own "triggers" edge through the command,
  * event, read models, automations, and output UIs in that represented slice.
+ * The same forward rule applies to External Events ("translates") and to
+ * Translators ("translates-cmd"): they are start-of-slice nodes, so clicking
+ * one lights up the whole translated slice instead of dimming everything.
  *
  * UI cards are treated as TERMINAL ancestors: a UI reached as an ancestor
  * of some other card is included in the upstream set (via the "triggers"
@@ -53,7 +65,9 @@ var wrap=document.querySelector('.wrap');
 var pan=null;
 var suppressBackgroundClick=false;
 function connectedSet(startId){
-  var isTriggerUi=EDGES.some(function(e){return e[0]===startId && e[2]==='triggers';});
+  var isTriggerUi=EDGES.some(function(e){
+    return e[0]===startId && (e[2]==='triggers' || e[2]==='translates' || e[2]==='translates-cmd');
+  });
   if(isTriggerUi){
     var downstream={};downstream[startId]=true;
     var forwardQueue=[startId];

@@ -2,7 +2,7 @@
 name: event-modelling
 description: >
   # Description
-  Generate or update an Event Modeling diagram (Dymitruk style) as a single self-contained, clickable HTML document from four markdown inputs (commands.md, events.md, readmodels.md, uis.md). Use when the user asks to draw, create, regenerate, or update an event modelling / event model / event storming diagram, or references commands.md/events.md/readmodels.md/uis.md and wants an editable, interactive diagram.
+  Generate or update an Event Modeling diagram (Dymitruk style) as a single self-contained, clickable HTML document from six markdown inputs (commands.md, events.md, readmodels.md, uis.md, external-events.md, translators.md). Use when the user asks to draw, create, regenerate, or update an event modelling / event model / event storming diagram, or references commands.md/events.md/readmodels.md/uis.md and wants an editable, interactive diagram.
   
   # Flow
   Event modeling diagram is updated with other docs before implementation. Implementation is done based on it.
@@ -21,7 +21,7 @@ description: >
 # Event Modeling Diagram (HTML, interactive)
 
 Produce a **single self-contained HTML document** rendering an Event Modeling
-diagram from four markdown files (a swimlane `<table>` with an absolutely
+diagram from markdown files (a swimlane `<table>` with an absolutely
 positioned `<svg>` arrow overlay, no external assets).
 
 **This is a generator, not a hand-drawing task.** All layout math (column
@@ -34,10 +34,13 @@ teaching to the generator.
 
 ## Workflow
 
-1. Locate the four input files. Paths are given by the user per use; if not,
+1. Locate the input files. Paths are given by the user per use; if not,
    look in the current/target directory for `commands.md`, `events.md`,
-   `readmodels.md`, `uis.md`. `uis.md` is the only source of `Actor:` — a
-   command never carries `Actor:` itself (see Parsing rules). Ready-to-edit
+   `readmodels.md`, `uis.md`, `external-events.md`, `translators.md`.
+   `uis.md` is the only source of `Actor:` — a command never carries
+   `Actor:` itself (see Parsing rules). `external-events.md` and
+   `translators.md` are optional (Translation Pattern); the other four are
+   required. Ready-to-edit
    templates live in `templates/` if the user is starting from scratch —
    they demonstrate every option documented in this file.
 2. Run the generator:
@@ -122,12 +125,68 @@ Actor: Ops Manager
 ConsistsOf: order-summary, stock-levels
 ```
 
+`external-events.md` (optional — **Translation Pattern**): facts that happen
+in systems **we don't own**. Unlike `events.md`, this is an external contract
+not modelled by the team, so **`{aggregateName}:Id` is NOT mandatory**, a
+`System name:` replaces `Subprocess:` to group external events into
+external-system swimlanes, and attributes are optional:
+
+```markdown
+# External Events
+
+## application-received
+Name: Application Received
+System name: Underwriter Portal
+* application id
+* policy holder
+* coverage request
+
+## policy-issued-externally
+Name: Policy Issued Externally
+System name: Underwriter Portal
+```
+
+`translators.md` (optional — **Translation Pattern**): the "bots" that bridge
+the external world into the system. Each translator `Subscribes:` one or more
+external event ids (from `external-events.md`) and `Produces:` one or more
+internal command ids (from `commands.md`):
+
+```markdown
+# Translators
+
+## translate-application
+Name: Translate Application
+Subscribes: application-received
+Produces: submit-policy-application
+```
+
 ### Parsing rules (implemented in `scripts/generate.js`)
 
 - An `## heading` starts a new element; the heading is its id.
 - `Name:` overrides the display name (fallback: the heading text).
 - `Subprocess:` groups events into process/subdomain swimlanes. Missing → the
   event shares the band of the first event with no subprocess.
+- `System name:` (external-events.md only) groups external events into
+  external-system swimlanes, rendered at the very bottom of the diagram.
+  Missing → the external event shares the band of the first external event
+  with no system name (default `External`). External events are the only
+  elements that carry this key.
+- `Subscribes:` (comma-separated ids) links a read model to its source
+  events (readmodels.md) **or** a translator to its source external events
+  (translators.md). Internal read models/events/UIs may never reference an
+  external event id — only translators bridge the external world, so the
+  script throws if any internal element does.
+- `Produces:` on a **translator** (translators.md) is a comma-separated list
+  of **command** ids it triggers (unlike on a command, where it lists event
+  ids). Every id must be a real command in commands.md.
+- **No orphan external events**: the script throws if an external event has
+  no translator subscribing it (same tier as the orphan-event check).
+- **Translators must have both** at least one `Subscribes:` external event
+  and at least one `Produces:` command — a translator with neither side wired
+  would be an empty card.
+- **External event ids are globally unique**: an external event id must not
+  collide with an internal event id (both render in the shared column
+  timeline).
 - `Produces:` (one or more comma-separated event ids, e.g.
   `Produces: policy-issued, premium-calculated`) links a command to the
   event(s) it triggers. A command producing several events is drawn as a
@@ -321,14 +380,21 @@ Every diagram is built from slices of the four canonical patterns:
 - **Automation Pattern** `Event(s) → View → Automated Trigger → Command → Event(s)` —
   a **robot/system** replaces the human trigger. A robot holds no business
   logic; it only watches a view and calls one use case per row.
-- **Translation Pattern** — same shape as Automation, used to tell *another
-  system* something happened.
+- **Translation Pattern** `External Event → Translator → Command → Event(s)` —
+  an external system (bottom swimlane) emits an event; a **translator** bot
+  (top `Bots` swimlane) subscribes to it and issues an internal command. This
+  is a first-class pattern in this generator, driven by the optional
+  `external-events.md` + `translators.md` files — see below.
 
 ## Simplifications (important, enforced by the generator)
 
 - **No separate todo-view / robot-trigger cards.** An automated command is
   just a command card with a `⚙ SYSTEM` badge plus ONE dashed purple arrow
   from its observed event straight to the command.
+- **Translators are real cards, not badges** (unlike automation). Because the
+  external event comes from outside the model, the translation step is a
+  first-class card: each translator renders in the `Bots` swimlane with a
+  `⚙` sprocket badge, one card per produced command.
 - **No absolute-positioned nodes.** Everything is a table cell or a centered
   card in a cell; the SVG overlay is the only absolutely-positioned layer.
 - **No dashed actor → command lines.** The swimlane row already communicates
@@ -337,6 +403,43 @@ Every diagram is built from slices of the four canonical patterns:
   share a cell with a command (see Layout — read-model placement). A read
   model *can* share its column with an output UI card, but that card lives
   in a different row (the actor's swimlane), never the mid-row.
+
+## Translation Pattern (external-events.md + translators.md)
+
+When either file is present, the generator draws the full Translation slice
+`External System → External Event → Translator → Command → Event(s)`:
+
+- **External events** live in **bottom swimlanes**, one lane per distinct
+  `System name:` (external-events.md order). A card is an external contract:
+  no mandatory `{aggregate}:Id` line, attributes optional. It gets **one
+  column**, inserted immediately LEFT of the command column it feeds
+  (dependency-based — the slice never reads right-to-left). External event
+  columns are empty in the time row / mid-row / role rows / subprocess rows;
+  the card renders only in its external-system lane.
+- **Translators** live in a **`Bots` swimlane at the very top** (above all
+  human roles). Each `translators.md` entry renders **one card per produced
+  command** (fan-out, mirroring the trigger-UI convention), each sitting
+  directly above its produced command's column. Several translators producing
+  the same command fan in side by side. Translator cards are teal with a `⚙`
+  sprocket badge; fields are optional.
+- **Edges**: a dashed teal `External Event → Translator` arrow (kind
+  `translates`) rises from the external event's top-right corner, runs
+  through a card-free band just below the Bots row, then drops into the
+  translator's bottom edge. A solid teal `Translator → Command` arrow (kind
+  `translates-cmd`) exits the translator's bottom, runs down the column's
+  right gutter to the System-row band (or just above the mid-row), then drops
+  into the command's top edge — never slicing through a human trigger UI card.
+- **Consistency rules enforced**: every external event must be subscribed by
+  at least one translator (orphan check); every translator must subscribe ≥ 1
+  external event and produce ≥ 1 command; translator `Subscribes:` ids must
+  exist in external-events.md and `Produces:` ids in commands.md; external
+  event ids must not collide with internal event ids; only translators may
+  reference external events (internal read models/events/UIs can't).
+- **No field-consistency check on external events or translators** — the
+  external contract is explicitly not modelled by the team, so there is no
+  backward flow to trace. The command a translator produces is an internal
+  command and still gets its own fields checked against its produced events
+  as usual.
 
 ## Field lists / card sizing is responsive
 
@@ -355,13 +458,17 @@ fields a card has.
 
 ### Structure
 
-Rows top→bottom: time badges → one swimlane per human actor (from `uis.md`
+Rows top→bottom: time badges → **Bots swimlane (only if translators exist)** →
+one swimlane per human actor (from `uis.md`
 `Actor:` on command- or read-model-linked entries) → System swimlane (only
 if any command has `Observes:`) → a single free-space **mid-row** holding
-every command *and* every read-model card → one swimlane per `Subprocess`.
+every command *and* every read-model card → one swimlane per `Subprocess` →
+**one swimlane per external `System name:` (only if external events exist)**.
 
 Columns left→right: one per event in `events.md` order, plus one **inserted**
-column per read model that couldn't get its natural column (see below).
+column per read model that couldn't get its natural column (see below), plus
+one **inserted** column per external event, placed immediately left of the
+command column it feeds.
 
 ### Read-model placement algorithm
 
@@ -428,6 +535,15 @@ meets a flat edge, not the rounded notch.
   top-right corner, up the column's right edge to the System row, across,
   then down into the automated command's top edge. Never routed up the
   source column's own center (would overlap its UI→Command→Event stack).
+- **Translation**: teal arrows. **External event → translator** (dashed,
+  kind `translates`): rises from the external event's inset top-right corner
+  to a card-free band just below the Bots row, runs across, then up into the
+  translator card's bottom edge. **Translator → command** (solid, kind
+  `translates-cmd`): exits the translator card's bottom edge, runs sideways
+  into the column's right gutter (card-free), down to the System-row band
+  (or just above the mid-row), across, then drops into the command's top
+  edge. The gutter routing keeps the arrow clear of any human trigger UI card
+  at the command's column.
 - **Event → read model**: purple, no arrowhead. Leaves the event's inset
   top corner nearest the read model's column, rises to a card-free band
   above the event row and below the mid-row, runs across, then enters the
@@ -449,7 +565,8 @@ while a clicked output UI follows its own `displays` edge backwards. The full
 rationale is in the comments at the top of that file — read them there if you
 need to change the behavior, don't re-derive it here.
 Each arrow's `data-kind` (`triggers`/`produces`/`observes`/`observes-cmd`/
-`displays`) is what lets the traversal distinguish edge semantics.
+`displays`/`translates`/`translates-cmd`) is what lets the traversal
+distinguish edge semantics.
 When one logical UI is rendered more than once, each visual trigger copy and
 its output/view copy use distinct `data-element` graph ids; the original
 markdown UI id remains available as `data-ui-id`.
@@ -463,11 +580,15 @@ click so panning does not unexpectedly reset the current focus.
 ## Colors
 
 CSS custom properties (`--command`, `--event`, `--view`, `--ink`, `--arrow`,
-`--read-line`) are defined once in the `:root` block emitted by
+`--read-line`, `--ext-event`, `--translator`) are defined once in the
+`:root` block emitted by
 `scripts/generate.js` — read them there rather than duplicating hex values
-here. Swimlanes cycle through a pastel palette per role/subprocess; the
-mid-row is `#f7f8f9`. Fonts: `'OpenSans','Noto Sans',Arial,sans-serif`; card
-titles 13px, captions 10px.
+here. Swimlanes cycle through a pastel palette per role/subprocess; external
+system lanes cycle through their own pastel palette; the
+mid-row is `#f7f8f9`. External events render as **light steel-blue cards with
+a dashed border** (signalling "not ours"); translator cards are **teal with a
+`⚙` sprocket badge**; translation arrows are teal (`#00796B`). Fonts:
+`'OpenSans','Noto Sans',Arial,sans-serif`; card titles 13px, captions 10px.
 
 ## Verification
 
@@ -490,6 +611,10 @@ After running the generator:
   (unless it has a valid `ConsistsOf:`), and no `ConsistsOf:` referencing an
   unknown read model id (the generator throws on both — if it ran without
   error, this is satisfied).
+- No external-event / translator violation (orphan external event, unknown
+  `Subscribes:`/`Produces:` id, id collision, internal element subscribing an
+  external event — the generator throws on all — if it ran without error,
+  this is satisfied).
 - No field-consistency violation (the generator already throws on this too —
   see "Diagram consistency" below; if it ran without error, this is
   satisfied). If it does throw, the fix is either to add the missing field to
@@ -550,6 +675,9 @@ For events the aggregate-id attribute is mandatory:
 {aggregateName}:Id, eg. 'shipment:Id'. It means that it belongs to 'shipment' aggregate.
 **This is enforced as a hard blocker**: the generator throws (like the
 orphan-event check) if any event is missing `:Id`.
+**External events (external-events.md) are exempt** — they're an external
+contract not modelled by the team, so `:Id` is optional there; if present it
+renders the same way (a bold `{aggregateName}:Id` line).
 
 `{aggregateName}:Id` is **optional on commands and read models**, but if present
 it's rendered the same way as on events: a bold `{aggregateName}:Id` line

@@ -168,27 +168,56 @@ function translator(t, model, ctx) {
     }
 
     const entryName = ctx.naming.entryMethod(ext.id);
-    let annotations = '';
-    let returnType = 'Long';
-    let params = `@RequestBody ${ext.className} payload`;
-    let callBody = body;
+    const voidBody = body
+      .replace('        return dispatch(payload);', '        dispatch(payload);')
+      .replace(
+        /        var mappedCommand = (.*);\n        return (.*)\.handle\(mappedCommand\);/,
+        '        var mappedCommand = $1;\n        $2.handle(mappedCommand);',
+      );
+
     if (kind === KIND_REST) {
-      annotations = `    @PostMapping("${ext.id}")\n`;
+      entryMethods.push(
+        `\n\n    @PostMapping("${ext.id}")\n` +
+          `    public Long ${entryName}(@RequestBody ${ext.className} payload) {\n${body}\n    }`,
+      );
     } else if (kind === KIND_KAFKA) {
-      annotations = `    @KafkaListener(topics = "${ext.id}")\n`;
-      returnType = 'void';
-      params = `${ext.className} payload`;
-      // handle() returns the aggregate id; a listener has nowhere to put it.
-      callBody = body
-        .replace('        return dispatch(payload);', '        dispatch(payload);')
-        .replace(
-          /        var mappedCommand = (.*);\n        return (.*)\.handle\(mappedCommand\);/,
-          '        var mappedCommand = $1;\n        $2.handle(mappedCommand);',
-        );
+      // Two layers on purpose:
+      //   String  -> the @KafkaListener entry. The default consumer deserializer
+      //              is String/byte[], NOT a custom record, so the wire type is
+      //              a String and this layer owns the parse.
+      //   typed   -> the ingress logic. Tests call this overload directly with a
+      //              payload record — no broker, no container factory, no Kafka
+      //              at all. `@KafkaListener` is just the transport bolt-on.
+      //
+      // The wire format (JSON/Avro/Protobuf/...) is infrastructure, not model —
+      // exactly like the external contract itself, the generator does not guess
+      // it. The parse is therefore a hand-owned throwing stub, same convention as
+      // an unmapped command field. Guessing "JSON via Jackson" would also pin a
+      // Jackson major version (Boot 3 auto-configures com.fasterxml...ObjectMapper,
+      // Boot 4 auto-configures tools.jackson...), so it is not a safe default.
+      const parseName = ctx.naming.parseMethod(ext.id);
+      entryMethods.push(
+        `\n\n    @KafkaListener(topics = "${ext.id}")\n` +
+          `    public void ${entryName}(String raw) {\n` +
+          `        ${entryName}(${parseName}(raw));\n` +
+          `    }\n` +
+          `\n    /**\n` +
+          `     * Ingress logic — call this directly in tests (no Kafka needed).\n` +
+          `     */\n` +
+          `    public void ${entryName}(${ext.className} payload) {\n${voidBody}\n    }`,
+      );
+      stubMethods.push(
+        `\n\n    private ${ext.className} ${parseName}(String raw) {\n` +
+          `        throw new UnsupportedOperationException(\n` +
+          `                "parsing of external event '${ext.id}' wire format is not implemented — " +\n` +
+          `                        "map the raw Kafka payload (JSON/Avro/Protobuf/...) onto ${ext.className}");\n` +
+          `    }`,
+      );
+    } else {
+      entryMethods.push(
+        `\n\n    public Long ${entryName}(${ext.className} payload) {\n${body}\n    }`,
+      );
     }
-    entryMethods.push(
-      `\n\n${annotations}    public ${returnType} ${entryName}(${params}) {\n${callBody}\n    }`,
-    );
   }
 
   const handlerFields = handlers

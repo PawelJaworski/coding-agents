@@ -147,11 +147,13 @@ const naming = {
   //   handler field  IssuePolicyHandler -> issuePolicyHandler
   //   map method     issue-policy       -> toIssuePolicyCmd
   //   entry method   application-received -> onApplicationReceived
+  //   parse method   application-received -> parseApplicationReceived
   // `cap`'s inverse (NOT camel(), which re-splits words and would flatten an
   // already-PascalCase class name into one lowercase token).
   handlerField: (handlerClassName) => (handlerClassName ? handlerClassName[0].toLowerCase() + handlerClassName.slice(1) : handlerClassName),
   mapMethod: (commandId) => `to${pascal(commandId)}Cmd`,
   entryMethod: (externalEventId) => `on${pascal(externalEventId)}`,
+  parseMethod: (externalEventId) => `parse${pascal(externalEventId)}`,
 
   field: (name) => camel(name),
 

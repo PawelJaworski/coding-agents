@@ -126,7 +126,7 @@ by hand. `TranslatorPlugin` turns each translator into an ingress adapter:
 | translator `Type:` | generated ingress |
 |---|---|
 | `rest` | `@RestController` + one `@PostMapping("<external-event-id>")` per subscribed external event |
-| `kafka` | `@KafkaListener(topics = "<external-event-id>")` per subscribed external event |
+| `kafka` | `@KafkaListener(topics = "<external-event-id>")` per subscribed external event — a **String** ingress (the default consumer deserializer is String/byte[], never a custom record) that delegates to a **typed overload**; the String → payload parse is a hand-owned stub (the wire format is infrastructure, not model) |
 | anything else / omitted | plain `@Component`, no transport adapter |
 
 Each translator also emits one `<Name>External` payload record per subscribed
@@ -143,6 +143,27 @@ expected, not a model bug. When a translator produces more than one command, a
 hand-owned `dispatch(payload)` stub decides which command(s) a given external
 event triggers. Two `Type: rest` translators may not share one external event
 (they would claim the same POST path — a loud error; Kafka fan-in is fine).
+
+### Running without Kafka (local app + tests)
+
+`ConcurrentKafkaListenerContainerFactory` is **auto-configured** by Spring Boot
+(`KafkaAutoConfiguration` + `@EnableKafka`); nothing in this project declares
+one and nothing needs to. What a listener DOES need is (a) a reachable broker
+and (b) a deserializer that produces the method's parameter type — which is why
+the generated Kafka ingress takes a `String` and hands the parse to a
+hand-owned stub (the wire format — JSON/Avro/Protobuf — is infrastructure, not
+model, and pinning a Jackson major version is not a safe default: Boot 3
+auto-configures `com.fasterxml...ObjectMapper`, Boot 4 `tools.jackson...`).
+
+To start the app or run the test suite with **no broker at all**, keep
+`spring.kafka.listener.auto-startup: false` (the default in
+`src/main/resources/application.properties`). The container is then created but never
+started. Exercise the translator's business behaviour by calling its typed
+`on<ExternalEvent>(payload)` overload directly in a Spock spec — no Kafka, no
+container factory, no mock broker. Flip `KAFKA_LISTENER_AUTO_STARTUP=true` (and
+point `KAFKA_BOOTSTRAP_SERVERS` at a broker) when you actually want to consume;
+for an in-JVM broker in an integration test, add `spring-kafka-test` and
+`@EmbeddedKafka`.
 
 ### Lists and nested payloads
 

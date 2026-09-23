@@ -398,14 +398,36 @@ test('emit rest: entry method is named on<ExternalEvent> and returns the aggrega
 
 // --- emit: kafka -------------------------------------------------------------
 
-test('emit kafka: @KafkaListener(topics = external event id), void entry, no @PostMapping', () => {
+test('emit kafka: @KafkaListener over a String ingress + typed overload, no @PostMapping', () => {
   withModel({ 'translators.md': TRANSLATORS_KAFKA }, (model, ctx, files) => {
     const tr = files.find((f) => f.className === 'TranslateApplicationTranslator');
+    // The wire type is String — the default consumer deserializer is String/byte[],
+    // never a custom record. Parsing to the payload is a hand-owned stub (the
+    // wire format is infrastructure, not model — the generator does not guess it).
     assert.match(tr.content, /@KafkaListener\(topics = "application-received"\)/);
+    assert.match(tr.content, /public void onApplicationReceived\(String raw\)/);
+    assert.match(tr.content, /onApplicationReceived\(parseApplicationReceived\(raw\)\)/);
+    // Typed overload is the test seam: tests call it with a record, no broker.
     assert.match(tr.content, /public void onApplicationReceived\(ApplicationReceivedExternal payload\)/);
+    assert.match(tr.content, /private ApplicationReceivedExternal parseApplicationReceived\(String raw\)/);
+    assert.match(tr.content, /"parsing of external event 'application-received' wire format is not implemented/);
+    // No JSON library is pinned — no ObjectMapper field, no Jackson import.
+    assert.doesNotMatch(tr.content, /ObjectMapper/);
+    assert.doesNotMatch(tr.content, /jackson/);
+    assert.match(tr.content, /issuePolicyHandler\.handle\(mappedCommand\)/);
     assert.doesNotMatch(tr.content, /@PostMapping/);
     assert.doesNotMatch(tr.content, /@RestController/);
-    assert.match(tr.content, /issuePolicyHandler\.handle\(mappedCommand\)/);
+    assert.doesNotMatch(tr.content, /@RequestBody/);
+  });
+});
+
+test('emit kafka: the listener never returns the aggregate id (nowhere to put it)', () => {
+  withModel({ 'translators.md': TRANSLATORS_KAFKA }, (model, ctx, files) => {
+    const tr = files.find((f) => f.className === 'TranslateApplicationTranslator');
+    // both overloads are void
+    assert.match(tr.content, /public void onApplicationReceived\(String raw\)/);
+    assert.match(tr.content, /public void onApplicationReceived\(ApplicationReceivedExternal payload\)/);
+    assert.match(tr.content, /issuePolicyHandler\.handle\(mappedCommand\);/);
   });
 });
 

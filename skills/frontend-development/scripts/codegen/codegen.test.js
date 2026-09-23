@@ -141,13 +141,13 @@ test('the api client mirrors the generated Spring controllers', () => {
     (m) => {
       const ts = api(m.pages[0]);
       // POST <base>/<command-id> returning the new aggregate id
-      assert.match(ts, /issuePolicy\(payload: IssuePolicyPayload\): Promise<string>/);
-      assert.match(ts, /this\.http\.post<string>\(ISSUE_POLICY_ENDPOINT, payload\)/);
+      assert.match(ts, /issuePolicy\(payload: IssuePolicyPayload\): Promise<number>/);
+      assert.match(ts, /this\.http\.post<number>\(ISSUE_POLICY_ENDPOINT, payload\)/);
       // :Key -> collection endpoint, no path variable
       assert.match(ts, /getPolicyStatus\(\): Promise<PolicyStatusView\[\]>/);
       assert.match(ts, /this\.http\.get<PolicyStatusView\[\]>\(POLICY_STATUS_ENDPOINT\)/);
       // :Id -> single object keyed by aggregate id
-      assert.match(ts, /getUnderwritingQueue\(aggregateId: string\): Promise<UnderwritingQueueView>/);
+      assert.match(ts, /getUnderwritingQueue\(aggregateId: number\): Promise<UnderwritingQueueView>/);
       assert.match(ts, /underwritingQueueEndpoint\(aggregateId\)/);
       assert.doesNotMatch(ts, /throw new Error/);
     },

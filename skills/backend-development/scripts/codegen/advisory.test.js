@@ -86,8 +86,8 @@ test('computeAdvisory: detects drifted method body and returns prompt with snipp
 
 public class IssuePolicyHandler {
     @PostMapping("issue-policy")
-    public UUID handle(IssuePolicyCmd command) {
-        return UUID.randomUUID();
+    public Long handle(IssuePolicyCmd command) {
+        return aggregateIdSequence.nextId();
     }
 }
 `;
@@ -95,9 +95,9 @@ public class IssuePolicyHandler {
 
 public class IssuePolicyHandler {
     @PostMapping("issue-policy")
-    public UUID handle(IssuePolicyCmd command) {
+    public Long handle(IssuePolicyCmd command) {
         policyNumber();
-        return UUID.randomUUID();
+        return aggregateIdSequence.nextId();
     }
 }
 `;

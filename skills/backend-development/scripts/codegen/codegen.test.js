@@ -173,7 +173,7 @@ test('a :Id read model carries an implicit <aggregate>Id identity as its first f
   const fields = injectIdentity(s, s.fields);
   assert.deepEqual(fields.map((f) => f.name), ['policyId', 'policyHolder']);
   assert.equal(fields[0].identity, true);
-  assert.equal(fields[0].javaType, 'UUID');
+  assert.equal(fields[0].javaType, 'Long');
 });
 
 test('a :Key read model derives its identity name from the Key suffix', () => {
@@ -567,13 +567,14 @@ test('a fallback resolves what the source cannot supply', () => {
 
 const cmdField = (label, javaType = 'String') => ({ ...parseField(label), javaType, imports: [] });
 
-test('a command with NO bracketed field injects only the event stream', () => {
+test('a command with NO bracketed field injects only the event stream and aggregate id sequence', () => {
   const c = { ...naming.command(BASE, 'issue-policy'), id: 'issue-policy', fields: [cmdField('policy holder')] };
   const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', fields: [cmdField('policy holder')] };
 
   const handler = commandHandler(c, [e], BASE);
   assert.match(handler.content, /private final EventStream eventStream;/);
-  assert.doesNotMatch(handler.content, /Aggregate|\.check\(command\)/);
+  assert.match(handler.content, /private final AggregateIdSequence aggregateIdSequence;/);
+  assert.doesNotMatch(handler.content, /\.check\(command\)/);
 });
 
 test('a bracketed non-aggregate decision is a private throwing method in the handler', () => {
@@ -623,7 +624,7 @@ test('an aggregate is plain state hydrated only from events in its boundary', ()
   };
   const scaffold = aggregate('policy', [e], BASE);
 
-  assert.match(scaffold.content, /public record PolicyAggregate\(UUID id\) implements StateProjector<PolicyAggregate>/);
+  assert.match(scaffold.content, /public record PolicyAggregate\(Long id\) implements StateProjector<PolicyAggregate>/);
   assert.match(scaffold.content, /apply\(PolicyAggregate state, PolicyIssuedEvent event\)/);
   assert.match(scaffold.content, /new PolicyAggregate\(event\.aggregateId\(\)\)/);
   assert.doesNotMatch(scaffold.content, /@Component|Ability|check\(/);
@@ -931,7 +932,7 @@ test('readModelKey emits @Embeddable record with key fields', () => {
 test('readModelEntity uses @EmbeddedId PolicyListKey when keyFields present', () => {
   const ent = readModelEntity(keyedRm());
   assert.match(ent.content, /@EmbeddedId\s+private PolicyListKey id;/);
-  assert.doesNotMatch(ent.content, /UUID aggregateId/);
+  assert.doesNotMatch(ent.content, /Long aggregateId/);
   assert.match(ent.content, /return new PolicyList\(id\.policyNumber\(\), policyHolder\);/);
 });
 
@@ -1033,8 +1034,8 @@ const embeddedKeyedRm = () => ({
       name: 'policyKey',
       label: 'policy key',
       identity: true,
-      javaType: 'UUID',
-      imports: ['java.util.UUID'],
+      javaType: 'Long',
+      imports: [],
     },
     {
       name: 'policyHolder',
@@ -1083,7 +1084,7 @@ test('readModelKey embeds a whole value-object key field with no modifier on the
 test('readModelEntity keeps a non-key identity field as a plain column alongside an embedded-object @EmbeddedId', () => {
   const ent = readModelEntity(embeddedKeyedRm());
   assert.match(ent.content, /@EmbeddedId\s+private InsuredPoliciesKey id;/);
-  assert.match(ent.content, /private UUID policyKey;/);
+  assert.match(ent.content, /private Long policyKey;/);
   assert.doesNotMatch(ent.content, /private PolicyHolder policyHolder;/); // lives in the id, not as its own column
   assert.match(ent.content, /return new InsuredPolicies\(policyKey, id\.policyHolder\(\), noOfPolicies\);/);
 });
@@ -1117,8 +1118,8 @@ const IDENTITY_FIELD = {
   name: 'policyKey',
   label: 'policy key',
   identity: true,
-  javaType: 'UUID',
-  imports: ['java.util.UUID'],
+  javaType: 'Long',
+  imports: [],
 };
 
 const issuedEvent = (fields) => ({
@@ -1132,7 +1133,7 @@ const issuedEvent = (fields) => ({
 test('resolveArg sources the identity attribute from the aggregate id, never a name match', () => {
   const r = resolveArg(IDENTITY_FIELD, { sourceFields: [], sourceExpr: 'event' });
   assert.equal(r.expr, 'event.aggregateId()');
-  assert.deepEqual(r.imports, ['java.util.UUID']);
+  assert.deepEqual(r.imports, []);
 });
 
 test('resolveArg refuses a list or nested mapping whose source shape differs', () => {
@@ -1298,8 +1299,7 @@ test('an identity field marked :Key is a composite member looked up by the aggre
   assert.match(p.content, /new PolicyListEntity\(new PolicyListKey\(projected\.policyKey\(\)\), projected\.policyHolder\(\)\)/);
 
   const keyClass = readModelKey(rm);
-  assert.match(keyClass.content, /import java\.util\.UUID;/);
-  assert.match(keyClass.content, /UUID policyKey/);
+  assert.match(keyClass.content, /Long policyKey/);
 });
 
 test('a :Key field is never a search path — it lives in the @EmbeddedId', () => {

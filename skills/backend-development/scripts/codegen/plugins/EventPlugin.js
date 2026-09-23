@@ -7,7 +7,6 @@
 
 function event(e, ctx) {
   const imports = ctx.importBlock([
-    'java.util.UUID',
     'lombok.Builder',
     `${ctx.basePackage}.eventstream.DomainEvent`,
     ...e.fields.flatMap(f => f.imports)
@@ -17,7 +16,7 @@ function event(e, ctx) {
     package: e.package,
     className: e.className,
     overwrite: true,
-    content: `package ${e.package};\n\n${imports}\n\n@Builder\npublic record ${e.className}(UUID aggregateId, ${ctx.components(e.fields)}) implements DomainEvent {\n    @Override\n    public DomainEventType eventType() {\n        return DomainEventType.${e.typeEnum};\n    }\n}\n`
+    content: `package ${e.package};\n\n${imports}\n\n@Builder\npublic record ${e.className}(Long aggregateId, ${ctx.components(e.fields)}) implements DomainEvent {\n    @Override\n    public DomainEventType eventType() {\n        return DomainEventType.${e.typeEnum};\n    }\n}\n`
   };
 }
 

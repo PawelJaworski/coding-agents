@@ -11,6 +11,11 @@ const camel = (s) => {
 };
 const kebab = (s) => words(s).join('-');
 
+// Aggregate identity type on the wire. Mirrors the backend's AGGREGATE_ID.
+export const AGGREGATE_ID = {
+  tsType: 'number',
+};
+
 const naming = {
   words,
   pascal,

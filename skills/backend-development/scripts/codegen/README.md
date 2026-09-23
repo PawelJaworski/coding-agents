@@ -164,7 +164,7 @@ decision.
 
 The `<aggregate>:Id|:Key` line is itself a read model attribute. Every read model
 record starts with a first component `<aggregate>Id` (`:Id` models) or
-`<aggregate>Key` (`:Key` models), type `UUID`, always equal to the event's
+`<aggregate>Key` (`:Key` models), type `Long`, always equal to the event's
 `aggregateId` — so it can never drift from the header. Never write `* policy id`
 or `* policy key`: an explicit same-name line is absorbed (its `?`/`:Key` markers
 merged), and a `[bracketed]` duplicate is a model error.
@@ -235,7 +235,7 @@ A read model must declare one or the other; the generator refuses to guess.
 | | `<aggregate>:Id` | `<aggregate>:Key` |
 |---|---|---|
 | strategy | on-demand | persisting |
-| identity attribute | `<aggregate>Id: UUID` | `<aggregate>Key: UUID` |
+| identity attribute | `<aggregate>Id: Long` | `<aggregate>Key: Long` |
 | storage | none | `<Name>Entity` + `<Name>Repository` / `...JpaRepository` |
 | kept current by | replaying `findAllById` on each GET | `EventStream.append` pushing to `PersistingProjector.project` |
 | endpoint | `GET <id>/{aggregateId}` -> one row | `GET <id>` -> `List<...>` |
@@ -267,9 +267,9 @@ a persisting read model can be marked with a trailing `:Key` (e.g. `* policy num
 
 - when `:Key` field(s) are present: the generator emits a `<Name>Key` `@Embeddable record`
   composed of those key fields. The entity uses `@EmbeddedId private <Name>Key id;`, and
-  repositories/lookups operate on `<Name>Key` instead of `UUID aggregateId`. Multiple
+  repositories/lookups operate on `<Name>Key` instead of `Long aggregateId`. Multiple
   aggregates project into distinct rows identified by their business keys;
-- when no field carries `:Key`: the entity falls back to `UUID aggregateId` as `@Id`.
+- when no field carries `:Key`: the entity falls back to `Long aggregateId` as `@Id`.
 
 ### Named key attributes and unresolvable keys
 

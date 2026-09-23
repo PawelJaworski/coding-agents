@@ -53,7 +53,7 @@ function contracts(page, apiBase) {
         `export interface ${naming.view(view.id)} {\n${fields}\n}\n\n` +
         (view.collection
           ? `export const ${constName(view.id)}_ENDPOINT = '${apiBase}${viewPath(view)}';`
-          : `export const ${naming.camel(view.id)}Endpoint = (aggregateId: string) =>\n` +
+          : `export const ${naming.camel(view.id)}Endpoint = (aggregateId: number) =>\n` +
             `  \`${apiBase}${viewPath(view).replace(/\{[^}]+\}/, '${aggregateId}')}\`;`),
     );
     // A filtered read path over the same view type. Criteria are the operation's
@@ -154,7 +154,7 @@ function component(page) {
       `  /** Route is '${page.routePath}' because this page renders an :Id read model. */`,
     );
     lines.push(
-      `  protected readonly aggregateId = this.route.snapshot.paramMap.get('aggregateId') ?? '';`,
+      `  protected readonly aggregateId = Number(this.route.snapshot.paramMap.get('aggregateId') ?? 0);`,
     );
   }
   if (hasViews) {
@@ -238,10 +238,10 @@ function api(page) {
     lines.push('');
     lines.push(`  /** \`POST\` the \`${c.id}\` command. Resolves to the new aggregate id. */`);
     lines.push(
-      `  ${naming.postMethod(c.id)}(payload: ${naming.payload(c.id)}): Promise<string> {`,
+      `  ${naming.postMethod(c.id)}(payload: ${naming.payload(c.id)}): Promise<number> {`,
     );
     lines.push(
-      `    return firstValueFrom(this.http.post<string>(${constName(c.id)}_ENDPOINT, payload));`,
+      `    return firstValueFrom(this.http.post<number>(${constName(c.id)}_ENDPOINT, payload));`,
     );
     lines.push('  }');
   }
@@ -250,7 +250,7 @@ function api(page) {
     const url = v.collection ? `${constName(v.id)}_ENDPOINT` : `${naming.camel(v.id)}Endpoint(aggregateId)`;
     lines.push('');
     lines.push(`  /** \`GET\` the \`${v.id}\` read model. */`);
-    lines.push(`  ${naming.getMethod(v.id)}(${v.collection ? '' : 'aggregateId: string'}): Promise<${type}> {`);
+    lines.push(`  ${naming.getMethod(v.id)}(${v.collection ? '' : 'aggregateId: number'}): Promise<${type}> {`);
     lines.push(`    return firstValueFrom(this.http.get<${type}>(${url}));`);
     lines.push('  }');
     if (v.search) {
@@ -321,7 +321,7 @@ function store(page) {
   }
 
   for (const v of page.views) {
-    const args = v.collection ? '' : 'aggregateId: string';
+    const args = v.collection ? '' : 'aggregateId: number';
     lines.push('');
     lines.push(`  async ${naming.loadMethod(v.id)}(${args}): Promise<void> {`);
     lines.push(`    await this.run(async () => {`);

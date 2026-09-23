@@ -25,6 +25,22 @@ const snake = (s) =>
 // slice package: kebab collapses to a single lowercase segment (issue-policy -> issuepolicy)
 const slicePackage = (s) => words(s).join('');
 
+// Aggregate identity type. Every generated reference to an aggregate id —
+// event records, handlers, aggregates, read models, entities, test DSLs —
+// reads from here. Flip `javaType` back to 'UUID' (and restore the
+// 'java.util.UUID' import where the templates expect it) to revert.
+// `Long` lives in java.lang, so `imports` is empty.
+export const AGGREGATE_ID = {
+  javaType: 'Long',
+  imports: [],
+  tsType: 'number',
+  // The handler calls this collaborator method to allocate a new id.
+  sequenceField: 'aggregateIdSequence',
+  sequenceClass: 'AggregateIdSequence',
+  sequenceAbility: 'AggregateIdSequenceAbility',
+  generateExpr: 'aggregateIdSequence.nextId()',
+};
+
 const naming = {
   words,
   pascal,

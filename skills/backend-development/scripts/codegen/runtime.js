@@ -35,20 +35,16 @@ const file = (base, pkg, className, body, version = 1) => ({
 
 export function runtimeFiles(base) {
   return [
-    file(base, 'eventstream', 'DomainEvent', `import java.util.UUID;
-
-import ${base}.domain.events.DomainEventType;
+    file(base, 'eventstream', 'DomainEvent', `import ${base}.domain.events.DomainEventType;
 
 public interface DomainEvent {
-    UUID aggregateId();
+    Long aggregateId();
     DomainEventType eventType();
 }
 `),
 
-    file(base, 'eventstream', 'CommandHandler', `import java.util.UUID;
-
-public interface CommandHandler<T> {
-    UUID handle(T cmd);
+    file(base, 'eventstream', 'CommandHandler', `public interface CommandHandler<T> {
+    Long handle(T cmd);
 }
 `),
 
@@ -59,11 +55,10 @@ public interface CommandHandler<T> {
 
     file(base, 'eventstream', 'EventStream', `import java.util.Collection;
 import java.util.List;
-import java.util.UUID;
 
 public interface EventStream {
     void append(Collection<DomainEvent> events);
-    List<DomainEvent> findAllById(UUID id);
+    List<DomainEvent> findAllById(Long id);
 }
 `),
 
@@ -83,7 +78,6 @@ public interface PersistingProjector {
 
     file(base, 'infrastructure', 'EventStreamImpl', `import java.util.Collection;
 import java.util.List;
-import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -116,7 +110,7 @@ public class EventStreamImpl implements EventStream {
     }
 
     @Override
-    public List<DomainEvent> findAllById(UUID id) {
+    public List<DomainEvent> findAllById(Long id) {
         return repository.findAllByAggregateId(id).stream()
                 .map(DomainEventEntity::toDomainEvent)
                 .toList();
@@ -126,12 +120,11 @@ public class EventStreamImpl implements EventStream {
 
     file(base, 'infrastructure', 'DomainEventRepository', `import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 public interface DomainEventRepository {
     DomainEventEntity save(DomainEventEntity entity);
     Optional<DomainEventEntity> findById(Long id);
-    List<DomainEventEntity> findAllByAggregateId(UUID aggregateId);
+    List<DomainEventEntity> findAllByAggregateId(Long aggregateId);
     void deleteAll();
 }
 `),
@@ -149,7 +142,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 
 public class DomainEventInMemoryRepository implements DomainEventRepository {
 
@@ -172,7 +164,7 @@ public class DomainEventInMemoryRepository implements DomainEventRepository {
     }
 
     @Override
-    public List<DomainEventEntity> findAllByAggregateId(UUID aggregateId) {
+    public List<DomainEventEntity> findAllByAggregateId(Long aggregateId) {
         return entities.stream()
                 .filter(e -> Objects.equals(e.getAggregateId(), aggregateId))
                 .toList();
@@ -185,9 +177,7 @@ public class DomainEventInMemoryRepository implements DomainEventRepository {
 }
 `),
 
-    file(base, 'infrastructure', 'DomainEventEntity', `import java.util.UUID;
-
-import jakarta.persistence.Entity;
+    file(base, 'infrastructure', 'DomainEventEntity', `import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
@@ -216,7 +206,7 @@ public class DomainEventEntity {
     @Setter
     private Long id;
 
-    private UUID aggregateId;
+    private Long aggregateId;
 
     @Enumerated(EnumType.STRING)
     private DomainEventType type;

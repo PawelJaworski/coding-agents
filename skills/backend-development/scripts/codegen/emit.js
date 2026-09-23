@@ -168,7 +168,6 @@ ${imports.length ? imports.join('\n') + '\n\n' : ''}${immutable ? '@Embeddable\n
 
 function event(e, base) {
   const imports = importBlock([
-    'java.util.UUID',
     'lombok.Builder',
     `${base}.eventstream.DomainEvent`,
     ...e.fields.flatMap((f) => f.imports),
@@ -182,7 +181,7 @@ function event(e, base) {
 ${imports}
 
 @Builder
-public record ${e.className}(UUID aggregateId, ${components(e.fields)}) implements DomainEvent {
+public record ${e.className}(Long aggregateId, ${components(e.fields)}) implements DomainEvent {
     @Override
     public DomainEventType eventType() {
         return DomainEventType.${e.typeEnum};
@@ -231,6 +230,12 @@ function commandHandler(c, events, base) {
     testInstantiation: 'EventStreamAbility.INSTANCE',
     imports: [`${base}.eventstream.EventStream`],
   });
+  const aggregateIdSequence = collaborator({
+    fieldName: 'aggregateIdSequence',
+    className: 'AggregateIdSequence',
+    testInstantiation: 'AggregateIdSequenceAbility.INSTANCE',
+    imports: [`${base}.infrastructure.AggregateIdSequence`],
+  });
 
   const extraImports = [];
   const decisions = [];
@@ -259,11 +264,10 @@ function commandHandler(c, events, base) {
     return `new ${e.className}(\n${inner})`;
   });
 
-  const collaborators = [eventStream];
+  const collaborators = [eventStream, aggregateIdSequence];
 
   const imports = importBlock([
     'java.util.List',
-    'java.util.UUID',
     'lombok.RequiredArgsConstructor',
     'org.springframework.stereotype.Component',
     'org.springframework.transaction.annotation.Transactional',
@@ -308,8 +312,8 @@ ${fieldDeclarations(collaborators)}
 
     @PostMapping("${c.postMapping}")
     @Override
-    public UUID handle(@RequestBody ${c.className} command) {
-        var aggregateId = UUID.randomUUID();
+    public Long handle(@RequestBody ${c.className} command) {
+        var aggregateId = aggregateIdSequence.nextId();
         eventStream.append(List.of(${eventList}));
         return aggregateId;
     }${decisionMethods}
@@ -322,7 +326,6 @@ ${fieldDeclarations(collaborators)}
 function aggregate(aggregateName, events, base) {
   const aggregateNameParts = naming.aggregate(base, aggregateName);
   const imports = importBlock([
-    'java.util.UUID',
     `${base}.eventstream.StateProjector`,
     ...events.map((e) => `${e.package}.${e.className}`),
   ]);
@@ -348,7 +351,7 @@ package ${aggregateNameParts.package};
 
 ${imports}
 
-public record ${aggregateNameParts.className}(UUID id) implements StateProjector<${aggregateNameParts.className}> {
+public record ${aggregateNameParts.className}(Long id) implements StateProjector<${aggregateNameParts.className}> {
 
 ${applyMethods}
 }
@@ -378,6 +381,12 @@ function projector(rm, eventsById, base) {
     className: 'EventStream',
     testInstantiation: 'EventStreamAbility.INSTANCE',
     imports: [`${base}.eventstream.EventStream`],
+  });
+  const aggregateIdSequence = collaborator({
+    fieldName: 'aggregateIdSequence',
+    className: 'AggregateIdSequence',
+    testInstantiation: 'AggregateIdSequenceAbility.INSTANCE',
+    imports: [`${base}.infrastructure.AggregateIdSequence`],
   });
   const decider = collaborator({
     fieldName: 'decider',
@@ -411,7 +420,6 @@ ${args.map((a) => `                ${a}`).join(',\n')});
   const collaborators = delegated ? [eventStream, decider] : [eventStream];
 
   const imports = importBlock([
-    'java.util.UUID',
     'lombok.RequiredArgsConstructor',
     'org.springframework.stereotype.Component',
     'org.springframework.web.bind.annotation.GetMapping',
@@ -440,7 +448,7 @@ public class ${rm.projectorClassName} implements StateProjector<${rm.className}>
 ${fieldDeclarations(collaborators)}
 
     @GetMapping("${rm.getMapping}")
-    public ${rm.className} ${rm.getterMethod}(@PathVariable UUID aggregateId) {
+    public ${rm.className} ${rm.getterMethod}(@PathVariable Long aggregateId) {
         return hydrate(null, eventStream.findAllById(aggregateId));
     }
 
@@ -719,9 +727,9 @@ function commandAbility(c, base, collaborators) {
     content: `package ${c.package};
 
 ${importBlock([
-  'java.util.UUID',
   'java.util.function.Consumer',
   `${base}.eventstream.EventStreamAbility`,
+  `${base}.infrastructure.AggregateIdSequenceAbility`,
   `${td.package}.${td.className}`,
 ])}
 
@@ -734,7 +742,7 @@ public interface ${c.abilityClassName} extends ${td.className}, EventStreamAbili
         return ${c.abilityClassName}.INSTANCE;
     }
 
-    default UUID ${c.dslMethod}(Consumer<${c.className}.${c.className}Builder> testCase) {
+    default Long ${c.dslMethod}(Consumer<${c.className}.${c.className}Builder> testCase) {
         var cmd = ${naming.defaultBuilderMethod(c.className)}();
         testCase.accept(cmd);
         return get${c.handlerClassName}().handle(cmd.build());
@@ -753,7 +761,6 @@ function projectorAbility(rm, base, collaborators) {
     content: `package ${rm.package};
 
 ${importBlock([
-  'java.util.UUID',
   'java.util.function.Predicate',
   `${base}.eventstream.EventStreamAbility`,
 ])}
@@ -767,7 +774,7 @@ public interface ${rm.abilityClassName} extends EventStreamAbility {
         return ${rm.abilityClassName}.INSTANCE;
     }
 
-    default boolean ${rm.dslMethod}(UUID aggregateId, Predicate<${rm.className}> testCase) {
+    default boolean ${rm.dslMethod}(Long aggregateId, Predicate<${rm.className}> testCase) {
         return testCase.test(get${rm.projectorClassName}().${rm.getterMethod}(aggregateId));
     }
 }
@@ -788,7 +795,7 @@ function readModelEntity(rm) {
   // JSON; a scalar-only value object is embedded and flattened into prefixed columns.
   const jsonFields = nonKeyFields.filter((f) => (f.valueObject && !f.embeds) || f.list || f.children?.length);
   const importBlockList = [
-    ...(keyed ? ['jakarta.persistence.EmbeddedId'] : ['java.util.UUID', 'jakarta.persistence.Id']),
+    ...(keyed ? ['jakarta.persistence.EmbeddedId'] : ['jakarta.persistence.Id']),
     'jakarta.persistence.AttributeOverride',
     'jakarta.persistence.AttributeOverrides',
     'jakarta.persistence.Column',
@@ -812,7 +819,7 @@ function readModelEntity(rm) {
 `
     : `
     @Id
-    private UUID aggregateId;
+    private Long aggregateId;
 `;
   const columns = nonKeyFields
     .map((f) => {
@@ -926,7 +933,7 @@ function keyRecordImports(rm) {
   let hasEmbeddedStyle = false;
   let hasDerived = false;
   for (const f of rm.keyFields) {
-    // Scalar members need their type imports too (a UUID identity is not String).
+    // Scalar members need their type imports too (a Long identity is not String).
     for (const i of f.imports) set.add(i);
     if (f.embeds) hasEmbeddedStyle = true;
     if (f.derivedFrom) hasDerived = true;
@@ -979,8 +986,8 @@ function searchableFields(rm) {
 
 function readModelRepository(rm) {
   const keyed = rm.keyFields.length > 0;
-  const idType = keyed ? rm.idClassName : 'UUID';
-  const repoImports = ['java.util.List', 'java.util.Map', 'java.util.Optional', ...(keyed ? [] : ['java.util.UUID'])];
+  const idType = keyed ? rm.idClassName : 'Long';
+  const repoImports = ['java.util.List', 'java.util.Map', 'java.util.Optional'];
   return {
     package: rm.package,
     className: rm.repositoryClassName,
@@ -1003,7 +1010,7 @@ public interface ${rm.repositoryClassName} {
 
 function readModelJpaRepository(rm) {
   const keyed = rm.keyFields.length > 0;
-  const idType = keyed ? rm.idClassName : 'UUID';
+  const idType = keyed ? rm.idClassName : 'Long';
   const searchables = searchableFields(rm);
   const specImports = searchables.length
     ? [
@@ -1028,7 +1035,7 @@ function readModelJpaRepository(rm) {
     logic: true,
     content: `package ${rm.package};
 
-${importBlock(['java.util.List', 'java.util.Map', ...(keyed ? [] : ['java.util.UUID']), 'org.springframework.data.jpa.repository.JpaRepository', ...specImports])}
+${importBlock(['java.util.List', 'java.util.Map', 'org.springframework.data.jpa.repository.JpaRepository', ...specImports])}
 
 public interface ${rm.jpaRepositoryClassName}
         extends ${rm.repositoryClassName},
@@ -1049,7 +1056,7 @@ ${specSearch}
 
 function readModelInMemoryRepository(rm) {
   const keyed = rm.keyFields.length > 0;
-  const idType = keyed ? rm.idClassName : 'UUID';
+  const idType = keyed ? rm.idClassName : 'Long';
   const idExpr = keyed ? 'entity.getId()' : 'entity.getAggregateId()';
   const searchables = searchableFields(rm);
   const cases = searchables
@@ -1095,7 +1102,6 @@ ${importBlock([
   'java.util.List',
   'java.util.Map',
   'java.util.Optional',
-  ...(keyed ? [] : ['java.util.UUID']),
 ])}
 
 public class ${rm.inMemoryRepositoryClassName} implements ${rm.repositoryClassName} {
@@ -1245,7 +1251,6 @@ ${args.map((a) => `                ${a}`).join(',\n')});
   const imports = importBlock([
     'java.util.List',
     'java.util.Map',
-    ...(keyed ? [] : ['java.util.UUID']),
     'lombok.RequiredArgsConstructor',
     'org.springframework.stereotype.Component',
     'org.springframework.web.bind.annotation.GetMapping',

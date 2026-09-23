@@ -143,7 +143,7 @@ too — the generator only seeds it (`FormsModule` when the page triggers a comm
 # Route shape is derived, not chosen
 A page that renders a `:Key` read model is listable and routes at `/<ui-id>`. A page that
 renders an `:Id` read model is replayed for one aggregate, so it routes at
-`/<ui-id>/:aggregateId` and the generated component reads that param for you. This follows
+`/<ui-id>/:aggregateId` (`number`) and the generated component reads that param for you. This follows
 from the model — never edit a route by hand to change it.
 
 # Non-html UIs are not pages

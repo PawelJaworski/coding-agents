@@ -62,6 +62,10 @@ An aggregate is a plain domain object, never a Spring component or injected coll
 The generator scaffolds one `<Name>Aggregate` for each `<name>:Id` declared by an event.
 It implements `StateProjector` and is hydrated locally when a handler needs state:
 `new NameAggregate(...).hydrate(null, eventStream.findAllById(aggregateId))`.
+Aggregate ids are `Long`, allocated by the `AggregateIdSequence` collaborator
+(`aggregate_id_seq` database sequence; `AggregateIdSequence.inMemory()` in tests).
+Aggregate ids are `Long`, allocated by the `AggregateIdSequence` collaborator
+(`aggregate_id_seq` database sequence; `AggregateIdSequence.inMemory()` in tests).
 
 Only state and rules derived exclusively from events carrying that aggregate id belong
 inside it. Cross-aggregate decisions (for example, a policy number based on all policies)

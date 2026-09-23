@@ -65,7 +65,7 @@ not an interpretation of a markdown field list:
 |---|---|---|
 | command `<id>` | `POST <apiBase>/<id>` body = the request-body schema | new aggregate id |
 | read model `<agg>:Key` | `GET <apiBase>/<id>` | `View[]` |
-| read model `<agg>:Id` | `GET <apiBase>/<id>/{aggregateId}` | `View` |
+| read model `<agg>:Id` | `GET <apiBase>/<id>/{aggregateId}` (`number`) | `View` |
 
 Operations are matched to the model **by path, not by `operationId`** — springdoc
 names operations after the Java method (`handle`), which carries no model meaning.
@@ -103,7 +103,7 @@ With `openapiPath` unset the generator falls back to typing fields from
 - A UI whose id equals a **read model** id renders it. `ConsistsOf: a, b` adds more.
 - A `:Key` read model is a collection (`View[]`, endpoint `/api/<id>`).
 - An `:Id` read model is one aggregate (`View | null`, endpoint
-  `/api/<id>/<aggregateId>`), and forces the route to `/<ui-id>/:aggregateId`.
+  `/api/<id>/<aggregateId>`), and forces the route to `/<ui-id>/:aggregateId` (`number`).
 - `[bracketed]` command fields are server-side decisions and never enter a payload
   interface.
 - Anything other than `Type: html` is skipped.

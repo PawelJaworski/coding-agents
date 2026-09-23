@@ -25,6 +25,12 @@ function commandHandler(c, events, ctx) {
     testInstantiation: 'EventStreamAbility.INSTANCE',
     imports: [`${ctx.basePackage}.eventstream.EventStream`]
   });
+  const aggregateIdSequence = ctx.collaborator({
+    fieldName: 'aggregateIdSequence',
+    className: 'AggregateIdSequence',
+    testInstantiation: 'AggregateIdSequenceAbility.INSTANCE',
+    imports: [`${ctx.basePackage}.infrastructure.AggregateIdSequence`]
+  });
 
   const extraImports = [];
   const decisions = [];
@@ -52,10 +58,9 @@ function commandHandler(c, events, ctx) {
     return `new ${e.className}(\n${inner})`;
   });
 
-  const collaborators = [eventStream];
+  const collaborators = [eventStream, aggregateIdSequence];
   const imports = ctx.importBlock([
     'java.util.List',
-    'java.util.UUID',
     'lombok.RequiredArgsConstructor',
     'org.springframework.stereotype.Component',
     'org.springframework.transaction.annotation.Transactional',
@@ -95,8 +100,8 @@ function commandHandler(c, events, ctx) {
       ctx.fieldDeclarations(collaborators) + `\n\n` +
       `    @PostMapping("${c.postMapping}")\n` +
       `    @Override\n` +
-      `    public UUID handle(@RequestBody ${c.className} command) {\n` +
-      `        var aggregateId = UUID.randomUUID();\n` +
+      `    public Long handle(@RequestBody ${c.className} command) {\n` +
+      `        var aggregateId = aggregateIdSequence.nextId();\n` +
       `        eventStream.append(List.of(${eventList}));\n` +
       `        return aggregateId;\n` +
       `    }${decisionMethods}\n` +
@@ -120,9 +125,9 @@ function commandAbility(c, ctx, collaborators) {
     overwrite: true,
     content: `package ${c.package};\n\n` +
       ctx.importBlock([
-        'java.util.UUID',
         'java.util.function.Consumer',
         `${ctx.basePackage}.eventstream.EventStreamAbility`,
+        `${ctx.basePackage}.infrastructure.AggregateIdSequenceAbility`,
         `${td.package}.${td.className}`
       ]) + `\n\n` +
       `public interface ${c.abilityClassName} extends ${td.className}, EventStreamAbility {\n\n` +
@@ -131,7 +136,7 @@ function commandAbility(c, ctx, collaborators) {
       `    default ${c.handlerClassName} get${c.handlerClassName}() {\n` +
       `        return ${c.abilityClassName}.INSTANCE;\n` +
       `    }\n\n` +
-      `    default UUID ${c.dslMethod}(Consumer<${c.className}.${c.className}Builder> testCase) {\n` +
+      `    default Long ${c.dslMethod}(Consumer<${c.className}.${c.className}Builder> testCase) {\n` +
       `        var cmd = ${ctx.naming.defaultBuilderMethod(c.className)}();\n` +
       `        testCase.accept(cmd);\n` +
       `        return get${c.handlerClassName}().handle(cmd.build());\n` +

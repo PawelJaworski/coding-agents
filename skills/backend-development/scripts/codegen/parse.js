@@ -30,7 +30,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import naming from './naming.js';
+import naming, { AGGREGATE_ID } from './naming.js';
 
 const CONVENTIONS = {
   uuid: { javaType: 'UUID', expr: 'UUID.randomUUID()', imports: ['java.util.UUID'] },
@@ -293,7 +293,7 @@ export function requireSearchOnlyFieldsHaveData(readModelId, fields, searchOnlyF
 }
 
 // The `<aggregate>:Id|:Key` header line is itself a read model attribute: the
-// aggregate identity is prepended as the first field (UUID) without the model
+// aggregate identity is prepended as the first field (Long) without the model
 // spelling it out. Naming follows the header suffix — `policy:Id` -> `policyId`,
 // `policy:Key` -> `policyKey` — and the value is always the event's aggregateId,
 // so it can never drift from `attribute:id`/`attribute:key`.
@@ -320,8 +320,8 @@ export function injectIdentity(section, fields) {
     searchable: explicit?.searchable ?? false,
     ...(explicit?.key ? { key: true } : {}),
     identity: true,
-    javaType: 'UUID',
-    imports: ['java.util.UUID'],
+    javaType: AGGREGATE_ID.javaType,
+    imports: [...AGGREGATE_ID.imports],
     conventionExpr: null,
   };
   return [identity, ...fields.filter((f) => f.name !== name)];

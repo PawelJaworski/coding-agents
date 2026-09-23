@@ -5,7 +5,6 @@ const AGGREGATE_SCAFFOLD_VERSION = 1;
 function aggregateFile(aggregateName, events, ctx) {
   const aggregate = ctx.naming.aggregate(ctx.basePackage, aggregateName);
   const imports = ctx.importBlock([
-    'java.util.UUID',
     `${ctx.basePackage}.eventstream.StateProjector`,
     ...events.map(e => `${e.package}.${e.className}`)
   ]);
@@ -31,7 +30,7 @@ function aggregateFile(aggregateName, events, ctx) {
       `// Plain domain state hydrated only from events carrying this aggregate id.\n` +
       `package ${aggregate.package};\n\n` +
       `${imports}\n\n` +
-      `public record ${aggregate.className}(UUID id) implements StateProjector<${aggregate.className}> {\n\n` +
+      `public record ${aggregate.className}(Long id) implements StateProjector<${aggregate.className}> {\n\n` +
       `${applyMethods}\n` +
       `}\n`
   };

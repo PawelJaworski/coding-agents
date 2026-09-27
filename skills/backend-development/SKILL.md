@@ -40,10 +40,10 @@ debugging. Most surprises here are documented design decisions (patch files are 
 not live state) rather than bugs, and re-deriving that from scratch by trial and error
 wastes far more context than reading the ~200-line module once.
 
-The plugin system (`scripts/codegen/plugins/`) defines all constructs:
-DomainPlugin, EventPlugin, AggregatePlugin, CommandPlugin, TranslatorPlugin, ReadModelPlugin,
-TestDataPlugin, GWTPlugin. Steps are data, not code.
-Adding a new construct = adding a new plugin file.
+Each step is a package under `scripts/codegen/steps/<name>/` — its emitters, its
+prompt and its scanner behind one `index.js`. Steps are data, not code:
+adding a new construct = adding a new directory there and listing its manifest in
+`scripts/codegen/steps/index.js`.
 
 `codegen --test` prints the step machine.
 

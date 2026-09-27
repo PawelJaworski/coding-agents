@@ -6,7 +6,7 @@ improvements over fields the read model already has**. Nothing in the event mode
 changes, so nothing in `<docs>/*.md`, the diagram, or `scripts/codegen/*` is touched.
 
 This file is the complete recipe. Read it instead of reverse-engineering
-`scripts/codegen/merge.js`.
+`scripts/codegen/ownership/merge.js`.
 
 ## Is it ad-hoc, or is it a model change?
 

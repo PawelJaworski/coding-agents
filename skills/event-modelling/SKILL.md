@@ -217,13 +217,11 @@ Produces: submit-policy-application
 - `Type:` (`uis.md` and `translators.md`) is a **free-form** display hint — the
   value can be **anything** (no enum; `html`, `pdf`, `api`, `rest`, `kafka`,
   `underwriter-sync-bot`, ... are just examples) — shown as a small uppercase
-  label on the card; it does not affect linkage. On `uis.md` it labels the UI
-  card (and, for frontend codegen, `Type: html` is what selects a page — a
-  separate concern of that skill). On `translators.md` it labels the translator
-  card and, for **backend** codegen, `rest` and `kafka` additionally select an
-  ingress adapter (`@RestController` POST endpoint / `@KafkaListener`); any
-  other value still generates a plain `@Component` translator. This diagram
-  itself only ever displays the value.
+  label on the card; it does not affect linkage. **This diagram only ever
+  displays the value.** Three values are reserved for the code generators that
+  consume this model: `html` on `uis.md` (a UI that becomes a rendered page),
+  and `rest` / `kafka` on `translators.md` (a synchronous vs. an asynchronous
+  ingress transport). Anything else is a label and nothing more.
 - `ConsistsOf:` (`uis.md` only, comma-separated read model ids) — for a UI
   that's projected from **more than one** read model (e.g. a dashboard
   combining several views). See `uis.md` linkage below.
@@ -263,12 +261,7 @@ Produces: submit-policy-application
   **diagram generation** fails with `Unsupported structured-field mapping ...`
   — the diagram generator does not guess renaming, aggregation, filtering or
   reordering, so that stays a modelling decision to resolve here before it's
-  considered final. (Backend **codegen** is more lenient for the
-  event→read-model case specifically: rather than aborting the whole run, it
-  delegates the unmappable field to the read model's `*ProjectionDecider`,
-  which throws `UnsupportedOperationException` explaining the mismatch —
-  everything else still generates. That keeps implementation unblocked while
-  the model itself still needs this fixed or clarified.)
+  considered final.
 - A trailing `?` on a **read-model** field name marks it as a search criterion
   answerable by a direct DB query, and is a normal passthrough field — it must
   still trace back to an upstream event field (e.g. `* policy holder?`). A
@@ -276,12 +269,10 @@ Produces: submit-policy-application
   stored value at all** — never a field on the entity, never persisted, never
   part of the response, and NOT derived from any upstream event field (e.g.
   `* policy coverage risk??`) — see "Diagram consistency" below for the
-  diagram-consistency exemption this implies. Matching a `??` criterion is a
-  hand-written Java predicate applied by the persisting projector to the query
-  result AFTER it comes back from the repository — never a DB column or a
-  generated `Specification`/`JpaSpecificationExecutor` predicate (see
-  `backend-development/scripts/codegen/emit.js`'s `projectionDecider` /
-  `persistingProjector` for the generated stub). Both `?` and `??` are stripped
+  diagram-consistency exemption this implies. Because a `??` criterion is never
+  stored, nothing can be queried on it: matching it is hand-written business
+  logic applied to the query result AFTER it comes back from the repository, and
+  it can never be pushed down into the query itself. Both `?` and `??` are stripped
   for display in the diagram — the card shows `policy holder`, not
   `policy holder?` or `policy coverage risk??`.
 - Ignore anything else (descriptions, prose, `#` title lines).
@@ -673,11 +664,10 @@ Two distinct, non-overlapping annotations exist for **read-model fields**:
   has no upstream event field either. It **is exempt** from the passthrough-match
   check below, the same way `[...]` is — there is nothing to trace, by design.
   Unlike `?` (a plain DB predicate) or `[...]` (a computed VALUE), matching a `??`
-  criterion is business logic applied by the persisting projector to the query
-  result after it comes back from the repository — see the backend generator's
-  `projectionDecider`/`persistingProjector`, which scaffold an
-  `UnsupportedOperationException` stub (`matches<Field>(value, entity)`) for a
-  human to implement, exactly like a `[bracketed]` field's decider stub.
+  criterion is business logic applied to the query result after it comes back
+  from the repository. It is therefore the same kind of open decision as a
+  `[bracketed]` field: the model records *where* a human must decide and leaves
+  that decision deliberately unimplemented.
 
 Both are stripped for display (the diagram card shows `policy holder`, not
 `policy holder?`/`policy coverage risk??`) — purely search-capability markers,

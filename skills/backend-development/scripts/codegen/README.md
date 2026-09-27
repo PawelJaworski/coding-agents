@@ -13,7 +13,7 @@ node <skill>/scripts/codegen --accept-scaffold  # record once-files as reconcile
                                              # their current template (marker only —
                                              # never rewrites the body)
 node <skill>/scripts/codegen --project <dir> --model <dir>
-node --test <skill>/scripts/codegen/*.test.js
+node --test "<skill>/scripts/**/*.test.js"
 ```
 
 The project root is found by searching upwards from the current directory for
@@ -51,23 +51,56 @@ one restricted to the minimal edit that turns a red build green.
 
 `.codegen/` is derived scratch. Never commit it.
 
-## Files
+## Layout
 
-| file | role |
+The code is organised **by step, not by technical layer**, so that "understand a
+step" and "add a step" both mean "open one directory". Everything a step owns —
+its emitters, its prompt, its scanner and its tests — travels together behind
+that package's `index.js`.
+
+```
+index.js          CLI: argv, config resolution, ownership-aware writing
+core/             the engine every step plugs into
+  steps.js          THE step machine (selectStep/buildResult) — one copy
+  context.js        the emit context handed to every emitter
+  emit.js           run the step packages over a model
+  registry.js       plugin registry and dependency ordering
+model/            the grammar: markdown -> normalised model
+  naming.js         every naming/packaging rule as a pure function. Replaces any
+                    "code index" — names and packages are COMPUTED from the model
+  parse.js          model markdown -> model.json, incl. value-object resolution
+ownership/        what may be rewritten in an existing file
+  scaffold.js       scaffold-version / PRESERVED-BY-HAND markers
+  merge.js          add-only reconciliation. The only module that rewrites existing
+                    files, so it masks comments/literals before any structural scan
+                    and refuses to emit anything it cannot re-parse
+  patch.js          the model -> code diff as data (CREATE / ADD / UPDATE)
+  advisory.js       drift report for hand-owned logic files
+emit-kit/         primitives every step's emitters build Java from
+cli/              prompts (--next/--prompt), verification, debug log
+steps/<name>/     ONE STEP PER DIRECTORY — start here
+  index.js          the package's public surface: step definition + manifest
+  emit.js           that step's emitters
+  *.test.js         that step's tests
+```
+
+| step directory | what it owns |
 |---|---|
-| `naming.js` | every naming/packaging rule as a pure function. Replaces any "code index" — class names and packages are *computed* from the model, never looked up. |
-| `parse.js` | model markdown -> normalised `model.json`, incl. value-object type resolution |
-| `emit.js` | `model.json` -> Java sources |
-| `plugins/TranslatorPlugin.js` | Translation Pattern ingress: `Type: rest`/`kafka`/plain adapters + `*External` payload records |
-| `runtime.js` | domain-independent event-sourcing runtime, scaffolded once per project |
-| `merge.js` | add-only reconciliation of an existing `GENERATED` file. The only module that rewrites existing files, so it masks comments/literals before any structural scan and refuses to emit anything it cannot re-parse. |
-| `advisory.js` | drift report for hand-owned logic files: what the model has that the file lacks, and what conflicts |
-| `patch.js` | the model -> code diff as data: one entry per file, each carrying exactly one of CREATE / ADD / UPDATE |
-| `next.js` | pending GWT scenarios and business rules, matched to the slice their spec must live in |
-| `index.js` | CLI, config resolution, ownership-aware writing |
-| `codegen.test.js` | unit tests for the grammar and naming rules |
-| `merge.test.js` | unit tests for add-only reconciliation |
-| `patch.test.js` | unit tests for the three verbs and their `auto` flag |
+| `steps/domain/` | value objects, the domain-independent runtime (scaffolded once), one plain aggregate per aggregate name |
+| `steps/events/` | event records, `DomainEventType`, serde wrappers, `StateProjector`, `EventStreamAbility` |
+| `steps/commands/` | command records, hand-owned handlers, `CommandAbility` |
+| `steps/translators/` | Translation Pattern ingress: `Type: rest`/`kafka`/plain adapters + `*External` payload records |
+| `steps/readmodels/` | read models, projectors, projection deciders, and for `<aggregate>:Key` the entity/composite key/repositories |
+| `steps/testdata/` | the shared `TestDataAbility` constants and the scanner that reports what is still `= null` |
+| `steps/gwt/` | no files — it scans `gwt-*.md` / `business-rules-raw.md` against Spock specs and queues unimplemented work |
+
+**Adding a construct** means adding a directory under `steps/` and listing its
+manifest in `steps/index.js`. Order is never taken from that list: it comes from
+each manifest's `requires` (emitters) and each step's `after` (the step machine).
+
+A step owns its **prompt** too — a prompt is step knowledge. A step overrides
+`render` when its instructions are specific (`steps/gwt`, `steps/testdata`);
+everything else falls back to the shared verb rules in `cli/prompts.js`.
 
 ## Configuration
 

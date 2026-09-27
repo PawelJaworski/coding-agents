@@ -18,30 +18,23 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseModel } from './parse.js';
-import { emitWithPlugins, scanWithPlugins } from './emit-plugins.js';
+import { parseModel } from './model/parse.js';
+import { emitWithPlugins, scanWithPlugins } from './core/emit.js';
 import {
   parseScaffoldVersion,
   stampScaffoldVersion,
   misplacedSpecs,
   preservedReason,
   leadingCommentBlock,
-} from './scaffold.js';
-import { mergeGenerated, semanticDrift } from './merge.js';
-import { computeAdvisory, isLogicFile } from './advisory.js';
-import { classifyFile, buildPatches, patchFileName, stalePatchFiles } from './patch.js';
-import {
-  getAllSteps,
-  getGenerateSteps,
-  getCategoryOf,
-} from '../steps-bridge.js';
-import {
-  buildStep,
-  pendingEntries,
-  loadPatch,
-} from './prompts.js';
-import { createDebugLogger, DEBUG_LOG_PATH } from './debug-log.js';
-import { runVerification, verificationFailurePrompt } from './verification.js';
+} from './ownership/scaffold.js';
+import { mergeGenerated, semanticDrift } from './ownership/merge.js';
+import { computeAdvisory, isLogicFile } from './ownership/advisory.js';
+import { classifyFile, buildPatches, patchFileName, stalePatchFiles } from './ownership/patch.js';
+import { getSteps, getStep } from './steps/index.js';
+import { selectStep, buildResult } from './core/steps.js';
+import { buildStep, pendingEntries, loadPatch } from './cli/prompts.js';
+import { createDebugLogger, DEBUG_LOG_PATH } from './cli/debug-log.js';
+import { runVerification, verificationFailurePrompt } from './cli/verification.js';
 
 const CONFIG_FILE = 'codegen.config.json';
 const DEFAULTS = {
@@ -53,9 +46,8 @@ const DEFAULTS = {
 const PATCH_DIR = '.codegen/patch';
 const SKILL = '.opencode/skills/backend-development';
 
-const STEPS = getAllSteps();
-const GENERATE_STEPS = getGenerateSteps();
-const CATEGORY_OF = getCategoryOf();
+const GENERATE_STEPS = getSteps();
+const STEPS = ['TRANSLATE', 'RUN_CODEGEN', ...GENERATE_STEPS.map((s) => s.id), 'VERIFY'];
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -318,7 +310,7 @@ if (promptMode) {
     process.exit(0);
   }
 
-  const category = CATEGORY_OF[step];
+  const category = getStep(step)?.category ?? null;
   const patch = category ? loadPatch(projectRoot, category) : null;
   const result = buildStep(step, patch, item);
   debug.log('PROMPT', { step, item: result.item, prompt: result.prompt });
@@ -353,54 +345,6 @@ function verifyProject() {
   return runVerification(projectRoot);
 }
 
-function selectStep({ modelError, patches, hasReport }) {
-  if (modelError) return { step: 'MODEL_ERROR', item: 0 };
-
-  const all = Object.values(patches ?? {}).flatMap((p) => p?.entries ?? []);
-  if (all.some((e) => e.auto === true)) return { step: 'RUN_CODEGEN', item: 0 };
-
-  for (const step of GENERATE_STEPS) {
-    const patch = patches?.[CATEGORY_OF[step]];
-    if (pendingEntries(patch).length > 0) return { step, item: 0 };
-  }
-
-  if (!hasReport) return { step: 'VERIFY', item: 0 };
-  return { step: 'DONE', item: 0 };
-}
-
-function buildResult(selection, patches, modelError = null) {
-  const { step, item } = selection;
-
-  if (step === 'DONE') {
-    return { state: 'DONE', step, next: null, remaining: 0 };
-  }
-
-  if (step === 'MODEL_ERROR') {
-    return {
-      state: 'MODEL_ERROR',
-      step,
-      next: {
-        detail: modelError,
-        prompt:
-          `The event model does not parse: ${modelError}\n\n` +
-          'Do NOT fix this in code and do NOT edit the model — both are out of bounds.\n' +
-          'Skip this fragment, continue with everything else, and record it in development-report.md.\n' +
-          'A blocked fragment is a normal outcome of a run. An unreported one is not.',
-      },
-      remaining: 0,
-    };
-  }
-
-  const patch = patches?.[CATEGORY_OF[step]] ?? null;
-  const rendered = buildStep(step, patch, item);
-  return {
-    state: step.startsWith('GENERATE_') ? 'GENERATE' : step,
-    step,
-    next: { detail: rendered.entry ?? step, prompt: rendered.prompt },
-    remaining: rendered.remaining,
-  };
-}
-
 function printWarnings(warnings = []) {
   if (!warnings.length) return;
   console.error(`\n  WARNING${warnings.length > 1 ? 'S' : ''} (model generated with fallbacks):`);
@@ -433,7 +377,7 @@ if (nextMode) {
   function loadPatches() {
     const p = {};
     for (const step of GENERATE_STEPS) {
-      const category = CATEGORY_OF[step];
+      const category = step.category;
       const file = path.join(projectRoot, PATCH_DIR, `${category}-patch.json`);
       if (!fs.existsSync(file)) continue;
       try {

@@ -1,0 +1,72 @@
+// GENERATE_DOMAIN: value objects, the runtime templates (and their versions)
+// and the plain aggregate.
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import naming from '../../model/naming.js';
+import { parseField } from '../../model/parse.js';
+import { parseScaffoldVersion } from '../../ownership/scaffold.js';
+import { createEmitContext } from '../../core/context.js';
+import { runtimeFiles, valueObject, aggregateFile } from './index.js';
+
+const BASE = 'pl.pjaworski.insurance_company';
+const CTX = createEmitContext({ basePackage: BASE });
+const CTX_EXAMPLE = createEmitContext({ basePackage: 'com.example' });
+const cmdField = (label, javaType = 'String') => ({ ...parseField(label), javaType, imports: [] });
+
+test('every runtime template is stamped with its own version', () => {
+  for (const f of runtimeFiles(CTX_EXAMPLE)) {
+    assert.equal(
+      parseScaffoldVersion(f.content), f.version,
+      `${f.className} header disagrees with its declared version`,
+    );
+  }
+});
+
+test('runtime versions are deliberate, not uniform — bumped only where a contract changed', () => {
+  const byName = Object.fromEntries(runtimeFiles(CTX_EXAMPLE).map((f) => [f.className, f]));
+  // History in steps/domain/emit.js: EventStreamImpl and DomainEventEntity have
+  // each changed contract twice, the rest of the runtime at most once.
+  assert.equal(byName.EventStreamImpl.version, 3);
+  assert.equal(byName.DomainEventEntity.version, 3);
+  assert.equal(byName.DomainEvent.version, 2);
+  assert.equal(byName.CommandHandler.version, 2);
+  assert.equal(byName.EventStream.version, 2);
+  // Never bumped: unchanged since first scaffolded.
+  assert.equal(byName.EventHandler.version, 1);
+  assert.equal(byName.PersistingProjector.version, 1);
+  assert.equal(byName.DomainEventJpaRepository.version, 1);
+  assert.equal(byName.AggregateIdSequence.version, 1);
+});
+
+test('an aggregate is plain state hydrated only from events in its boundary', () => {
+  const e = {
+    ...naming.event(BASE, 'policy-issued'),
+    id: 'policy-issued',
+    aggregate: 'policy',
+    fields: [cmdField('policy holder')],
+  };
+  const scaffold = aggregateFile('policy', [e], CTX);
+
+  assert.match(scaffold.content, /public record PolicyAggregate\(Long id\) implements StateProjector<PolicyAggregate>/);
+  assert.match(scaffold.content, /apply\(PolicyAggregate state, PolicyIssuedEvent event\)/);
+  assert.match(scaffold.content, /new PolicyAggregate\(event\.aggregateId\(\)\)/);
+  assert.doesNotMatch(scaffold.content, /@Component|Ability|check\(/);
+  assert.equal(scaffold.once, true);
+});
+
+test('valueObject marks scalar-only records @Embeddable and leaves list-bearing ones plain', () => {
+  const scalar = valueObject({ className: 'PolicyHolder', package: 'x.domain', fields: [
+    { name: 'name', javaType: 'String' },
+    { name: 'surname', javaType: 'String' },
+  ] }, CTX);
+  assert.match(scalar.content, /@Embeddable/);
+  assert.match(scalar.content, /import jakarta.persistence.Embeddable;/);
+
+  const listy = valueObject({ className: 'PolicyCoverage', package: 'x.domain', fields: [
+    { name: 'coveragePeriod', javaType: 'String' },
+    { name: 'riskList', javaType: 'List<String>' },
+  ] }, CTX);
+  assert.doesNotMatch(listy.content, /@Embeddable/);
+});
+

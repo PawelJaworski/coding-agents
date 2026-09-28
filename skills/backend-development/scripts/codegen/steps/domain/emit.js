@@ -26,6 +26,8 @@
 //                          appended event to persisting projections.
 //   DomainEventEntity v2 - serialize() delegates to the GENERATED
 //                          DomainEventSerde instead of an inlined switch.
+//   AggregateIdSequence v2 - creates aggregate_id_seq on startup when missing:
+//                          it consumed a raw-SQL sequence that nothing created.
 
 const RUNTIME_VERSIONS = {
   DomainEvent: 2,
@@ -38,7 +40,7 @@ const RUNTIME_VERSIONS = {
   DomainEventJpaRepository: 1,
   DomainEventInMemoryRepository: 2,
   DomainEventEntity: 3,
-  AggregateIdSequence: 1
+  AggregateIdSequence: 2
 };
 
 export function valueObject(vo, ctx) {
@@ -146,7 +148,7 @@ export function runtimeFiles(ctx) {
       className: 'AggregateIdSequence',
       once: true,
       version: RUNTIME_VERSIONS.AggregateIdSequence,
-      content: `package ${base}.infrastructure;\n\nimport java.util.concurrent.atomic.AtomicLong;\nimport org.springframework.jdbc.core.JdbcTemplate;\nimport org.springframework.stereotype.Component;\n\n/**\n * Allocates aggregate ids from the {@code aggregate_id_seq} database sequence.\n *\n * <p>A plain infrastructure collaborator of every command handler: the handler\n * calls {@link #nextId()} before appending the first event, so the id is known\n * before persistence and is stable across the aggregate's event stream.</p>\n *\n * <p>Unit specs construct the handler without Spring, so the handler defaults its\n * collaborator to the shared {@link #inMemory()} double. It has exactly the same\n * contract and {@link #reset()} semantics as a repository/sequence collaborator.\n */\n@Component\npublic class AggregateIdSequence {\n\n    private static final AggregateIdSequence IN_MEMORY = new InMemorySequence();\n\n    private final JdbcTemplate jdbc;\n\n    public AggregateIdSequence(JdbcTemplate jdbc) {\n        this.jdbc = jdbc;\n    }\n\n    /** Shared in-memory double used by unit specs (no Spring context there). */\n    public static AggregateIdSequence inMemory() {\n        return IN_MEMORY;\n    }\n\n    /** Allocates the next aggregate id from the database sequence. */\n    public Long nextId() {\n        return jdbc.queryForObject("SELECT NEXT VALUE FOR aggregate_id_seq", Long.class);\n    }\n\n    /** Test hook: resets mutable collaborator state. No-op on the DB-backed instance. */\n    public void reset() {\n    }\n\n    private static final class InMemorySequence extends AggregateIdSequence {\n        private final AtomicLong counter = new AtomicLong();\n\n        private InMemorySequence() {\n            super(null);\n        }\n\n        @Override\n        public Long nextId() {\n            return counter.incrementAndGet();\n        }\n\n        @Override\n        public void reset() {\n            counter.set(0);\n        }\n    }\n}\n`
+      content: `package ${base}.infrastructure;\n\nimport jakarta.annotation.PostConstruct;\nimport java.util.concurrent.atomic.AtomicLong;\nimport org.springframework.jdbc.core.JdbcTemplate;\nimport org.springframework.stereotype.Component;\n\n/**\n * Allocates aggregate ids from the {@code aggregate_id_seq} database sequence.\n *\n * <p>A plain infrastructure collaborator of every command handler: the handler\n * calls {@link #nextId()} before appending the first event, so the id is known\n * before persistence and is stable across the aggregate's event stream.</p>\n *\n * <p>Unit specs construct the handler without Spring, so the handler defaults its\n * collaborator to the shared {@link #inMemory()} double. It has exactly the same\n * contract and {@link #reset()} semantics as a repository/sequence collaborator.\n */\n@Component\npublic class AggregateIdSequence {\n\n    private static final AggregateIdSequence IN_MEMORY = new InMemorySequence();\n\n    private final JdbcTemplate jdbc;\n\n    public AggregateIdSequence(JdbcTemplate jdbc) {\n        this.jdbc = jdbc;\n    }\n\n    /**\n     * Creates the {@code aggregate_id_seq} sequence when the database does not have it\n     * yet: it is a raw-SQL dependency of {@link #nextId()}, not a JPA-managed object,\n     * so nothing else creates it. A fresh database would otherwise fail on first\n     * allocation.\n     */\n    @PostConstruct\n    void ensureSequence() {\n        jdbc.execute("CREATE SEQUENCE IF NOT EXISTS aggregate_id_seq START WITH 1");\n    }\n\n    /** Shared in-memory double used by unit specs (no Spring context there). */\n    public static AggregateIdSequence inMemory() {\n        return IN_MEMORY;\n    }\n\n    /** Allocates the next aggregate id from the database sequence. */\n    public Long nextId() {\n        return jdbc.queryForObject("SELECT NEXT VALUE FOR aggregate_id_seq", Long.class);\n    }\n\n    /** Test hook: resets mutable collaborator state. No-op on the DB-backed instance. */\n    public void reset() {\n    }\n\n    private static final class InMemorySequence extends AggregateIdSequence {\n        private final AtomicLong counter = new AtomicLong();\n\n        private InMemorySequence() {\n            super(null);\n        }\n\n        @Override\n        public Long nextId() {\n            return counter.incrementAndGet();\n        }\n\n        @Override\n        public void reset() {\n            counter.set(0);\n        }\n    }\n}\n`
     }
   ];
 }

@@ -318,7 +318,7 @@ function store(page) {
     lines.push(`  readonly ${naming.viewSignal(v.id)} = signal<${type}>(${v.collection ? '[]' : 'null'});`);
   }
   for (const c of page.commands) {
-    lines.push(`  readonly ${naming.camel(c.id)}Result = signal<string | null>(null);`);
+    lines.push(`  readonly ${naming.camel(c.id)}Result = signal<number | null>(null);`);
   }
 
   for (const v of page.views) {

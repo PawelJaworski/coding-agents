@@ -37,11 +37,21 @@ test('runtime versions are deliberate, not uniform — bumped only where a contr
   assert.equal(byName.DomainEvent.version, 2);
   assert.equal(byName.CommandHandler.version, 2);
   assert.equal(byName.EventStream.version, 2);
+  // AggregateIdSequence bumped once: now creates aggregate_id_seq on startup —
+  // it consumed a raw-SQL sequence that nothing created ("Sequence not found").
+  assert.equal(byName.AggregateIdSequence.version, 2);
   // Never bumped: unchanged since first scaffolded.
   assert.equal(byName.EventHandler.version, 1);
   assert.equal(byName.PersistingProjector.version, 1);
   assert.equal(byName.DomainEventJpaRepository.version, 1);
-  assert.equal(byName.AggregateIdSequence.version, 1);
+});
+
+test('AggregateIdSequence owns the DDL for the sequence it allocates from', () => {
+  const byName = Object.fromEntries(runtimeFiles(CTX_EXAMPLE).map((f) => [f.className, f]));
+  const seq = byName.AggregateIdSequence.content;
+  assert.match(seq, /CREATE SEQUENCE IF NOT EXISTS aggregate_id_seq/);
+  assert.match(seq, /SELECT NEXT VALUE FOR aggregate_id_seq/);
+  assert.match(seq, /@PostConstruct/);
 });
 
 test('an aggregate is plain state hydrated only from events in its boundary', () => {

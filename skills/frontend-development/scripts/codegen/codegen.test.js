@@ -193,6 +193,9 @@ test('the store is pre-wired to the api and never throws a stub', () => {
       const ts = store(m.pages[0]);
       assert.match(ts, /await this\.api\.issuePolicy\(payload\)/);
       assert.match(ts, /await this\.api\.getPolicyStatus\(\)/);
+      // the command result is the new aggregate id — the same number the api
+      // client resolves, never a string
+      assert.match(ts, /issuePolicyResult = signal<number \| null>\(null\)/);
       assert.doesNotMatch(ts, /not implemented/);
       assert.doesNotMatch(ts, /throw new Error/);
     },

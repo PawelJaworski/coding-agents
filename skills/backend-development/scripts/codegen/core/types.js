@@ -109,12 +109,17 @@
  * @typedef {Object} ReadModel
  * @property {string} id
  * @property {string} name
- * @property {string} aggregate
- * @property {boolean} onDemand
- * @property {boolean} keyed
+ * @property {string} aggregate  aggregate name of the classic `<aggregate>:Id|Key|RowKey`
+ *   line, or null for a named-key read model
+ * @property {string} projection  'on-demand' (`:Id`) | 'persisting-single' (`:Key`) |
+ *   'persisting-list' (`:RowKey` or named key attributes)
+ * @property {boolean} onDemand  hydrated from the stream per request
+ * @property {boolean} keyed  persisting: JPA row(s) kept up to date on append
+ * @property {boolean} collection  row-list query shape (`GET <id>` -> `List<...>`);
+ *   false means a single-record one (`GET <id>/{aggregateId}` -> one row)
  * @property {string[]} subscribes
  * @property {Field[]} fields
- * @property {Field[]} keyFields
+ * @property {Field[]} keyFields  composite row-key members (row-list projections only)
  * @property {string} className
  * @property {string} package
  * @property {string} projectorClassName

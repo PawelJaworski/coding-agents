@@ -64,7 +64,8 @@ not an interpretation of a markdown field list:
 | model | request | response |
 |---|---|---|
 | command `<id>` | `POST <apiBase>/<id>` body = the request-body schema | new aggregate id |
-| read model `<agg>:Key` | `GET <apiBase>/<id>` | `View[]` |
+| read model `<agg>:RowKey` | `GET <apiBase>/<id>` | `View[]` |
+| read model `<agg>:Key` | `GET <apiBase>/<id>/{aggregateId}` (`number`) | `View` |
 | read model `<agg>:Id` | `GET <apiBase>/<id>/{aggregateId}` (`number`) | `View` |
 
 Operations are matched to the model **by path, not by `operationId`** — springdoc
@@ -75,7 +76,7 @@ The split of authority:
 | decided by `openapi.json` | decided by the event model |
 |---|---|
 | property names | which UIs exist, what each triggers/renders |
-| property types, incl. nested objects and arrays | `:Key` vs `:Id` route shape |
+| property types, incl. nested objects and arrays | `:Key`/`:RowKey` vs `:Id` route shape |
 | the URL of every operation | human labels for forms and tables |
 | | `[bracketed]` = server-side decision, never a form input |
 
@@ -84,8 +85,8 @@ Disagreements are errors, never silently reconciled:
 - a command or read model with no matching operation -> the backend does not
   serve it. Rebuild the service, or fix the model.
 - a field on one side only -> `CONTRACT DRIFT`, listing both directions.
-- `:Key` in `readmodels.md` but aggregate-scoped in the document (or vice versa)
-  -> the two sides disagree about the projection strategy.
+- the claimed projection strategy (`:Id`/`:Key` single vs `:RowKey` list) disagrees
+  with the document's shape -> the two sides disagree about the projection strategy.
 
 Since `openapi.json` is a **build artefact of another repo**, a stale one means
 stale contracts. Regenerate the backend before regenerating the frontend, and
@@ -101,9 +102,10 @@ With `openapiPath` unset the generator falls back to typing fields from
 
 - A UI whose id equals a **command** id triggers it. `Triggers: a, b` adds more.
 - A UI whose id equals a **read model** id renders it. `ConsistsOf: a, b` adds more.
-- A `:Key` read model is a collection (`View[]`, endpoint `/api/<id>`).
-- An `:Id` read model is one aggregate (`View | null`, endpoint
+- A `:RowKey` read model is a collection (`View[]`, endpoint `/api/<id>`).
+- An `:Id` or `:Key` read model is one aggregate (`View | null`, endpoint
   `/api/<id>/<aggregateId>`), and forces the route to `/<ui-id>/:aggregateId` (`number`).
+  (`:Key` differs from `:Id` server-side only: its record is persisted, not replayed.)
 - `[bracketed]` command fields are server-side decisions and never enter a payload
   interface.
 - Anything other than `Type: html` is skipped.

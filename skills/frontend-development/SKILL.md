@@ -97,15 +97,16 @@ name, every property type and every URL:
 | model element | endpoint | response |
 |---|---|---|
 | command `<id>` | `POST <apiBase>/<id>`, body = the request-body schema | the new aggregate id |
-| read model `<agg>:Key` | `GET <apiBase>/<id>` | `View[]` (listable across aggregates) |
-| read model `<agg>:Id` | `GET <apiBase>/<id>/{aggregateId}` | one `View` |
+| read model `<agg>:RowKey` | `GET <apiBase>/<id>` | `View[]` (listable across aggregates) |
+| read model `<agg>:Key` | `GET <apiBase>/<id>/{aggregateId}` | one `View` (persisted server-side) |
+| read model `<agg>:Id` | `GET <apiBase>/<id>/{aggregateId}` | one `View` (replayed per request) |
 
 The two sources split cleanly, and neither can cover for the other:
 
 | `openapi.json` decides | the event model decides |
 |---|---|
 | property names and types (incl. nested objects, arrays, numbers) | which UIs exist, what each triggers and renders |
-| the URL of every operation | `:Key` vs `:Id`, and therefore the route shape |
+| the URL of every operation | `:Key`/`:RowKey` vs `:Id`, and therefore the route shape |
 | | human labels used in forms and tables |
 | | `[bracketed]` — a server-side decision, never a form input |
 
@@ -115,8 +116,9 @@ A literal drifts silently; the constant cannot.
 ## Drift is an error, not something to absorb
 - a command or read model with no matching operation -> the backend does not serve it
 - a field present on one side only -> `CONTRACT DRIFT`, both directions listed
-- `:Key` in `readmodels.md` but aggregate-scoped in the document -> the sides
-  disagree about the projection strategy
+- a read model's claimed projection strategy (`:Id`/`:Key` single vs `:RowKey` list)
+  disagrees with the document's shape -> the sides disagree about the projection
+  strategy
 
 All three are `MODEL ERROR`s. The usual cause is a **stale `openapi.json`** — it is a
 build artefact of the backend repo. Rebuild the service first; only then suspect the
@@ -141,10 +143,10 @@ too — the generator only seeds it (`FormsModule` when the page triggers a comm
 `RouterLink`, pipes and child components there as your template needs them.
 
 # Route shape is derived, not chosen
-A page that renders a `:Key` read model is listable and routes at `/<ui-id>`. A page that
-renders an `:Id` read model is replayed for one aggregate, so it routes at
-`/<ui-id>/:aggregateId` (`number`) and the generated component reads that param for you. This follows
-from the model — never edit a route by hand to change it.
+A page that renders a `:RowKey` read model is listable and routes at `/<ui-id>`. A page
+that renders an `:Id` or `:Key` read model is served for one aggregate, so it routes at
+`/<ui-id>/:aggregateId` (`number`) and the generated component reads that param for you.
+This follows from the model — never edit a route by hand to change it.
 
 # Non-html UIs are not pages
 `Type: pdf` (and anything else) is reported under `skipped` and generates nothing. A PDF is

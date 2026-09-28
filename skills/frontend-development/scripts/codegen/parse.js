@@ -10,7 +10,12 @@
 //   ConsistsOf: <r1>, <r2>     (uis.md)     read models this page renders
 //   Produces: <event-id>       (commands.md)
 //   Subscribes: <e1>, <e2>     (readmodels.md)
-//   <aggregate>:Id | :Key      (readmodels.md) projection strategy
+//   <aggregate>:Id           (readmodels.md) on-demand projection — one record per
+//                            aggregate, replayed per request
+//   <aggregate>:Key          (readmodels.md) persisting projection, single record —
+//                            one record per aggregate, read back by aggregate id
+//   <aggregate>:RowKey       (readmodels.md) persisting projection, row list —
+//                            a list of rows across aggregates (with search)
 //   * field name               payload attribute / read-model column
 //   * field name?              search criterion field (generates query parameters)
 //   * field name??             search-ONLY criterion (read model only): a query
@@ -38,7 +43,7 @@ export function parseSections(text) {
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('## ')) {
-      current = { id: line.slice(3).trim(), props: {}, fields: [], searchFields: [], aggregate: null, keyed: false };
+      current = { id: line.slice(3).trim(), props: {}, fields: [], searchFields: [], aggregate: null, mode: null, headerLines: [], keyed: false };
       sections.push(current);
       continue;
     }
@@ -63,10 +68,12 @@ export function parseSections(text) {
       if (fieldStr.endsWith('?')) current.searchFields.push(parsed);
       continue;
     }
-    const aggregate = line.match(/^-?\s*([A-Za-z][\w -]*):(Id|Key)$/);
+    const aggregate = line.match(/^-?\s*([A-Za-z][\w -]*):(Id|Key|RowKey)$/);
     if (aggregate) {
+      current.headerLines.push({ name: aggregate[1].trim(), mode: aggregate[2] });
       current.aggregate = aggregate[1].trim();
-      current.keyed = aggregate[2] === 'Key';
+      current.mode = aggregate[2];
+      current.keyed = aggregate[2] !== 'Id';
       continue;
     }
     const prop = line.match(/^-?\s*([A-Za-z]+):\s*(.+)$/);
@@ -227,11 +234,31 @@ export function parseModel({ modelDir, openapiPath = null }) {
   });
   const commandById = new Map(commands.map((c) => [c.id, c]));
 
+  // Read models first (below) decide page structure; events.md is only read to
+  // know each subscribed event's aggregate name — the input to the classic-vs-
+  // named-key resolution that decides a read model's query shape.
+  const eventAggregateById = new Map(
+    parseSections(readOptional('events.md')).map((s) => [s.id, s.aggregate]),
+  );
+
   const readModels = readModelSections.map((s) => {
     let fields = decorate(s.fields);
-    // A `:Key` read model is listable across aggregates -> the page renders a
-    // collection. An `:Id` one is replayed for a single aggregate -> one object.
-    const collection = Boolean(s.keyed);
+    // Mirrors the backend's classic-vs-named resolution: exactly one identifying
+    // line naming a subscribed event's aggregate is the classic form, whose
+    // suffix decides the query shape — `:Id`/`:Key` answer with ONE record per
+    // aggregate (the `:Key` one persisted, the `:Id` one replayed), `:RowKey`
+    // answers with a LIST of rows. Anything else is a named-key read model and is
+    // always a row list. When events.md is absent there are no aggregate names to
+    // check against, so a single identifying line is assumed classic; a published
+    // openapi.json still cross-checks the claim below.
+    const subscribedAggregates = new Set(
+      list(s.props.subscribes).map((id) => eventAggregateById.get(id)).filter(Boolean),
+    );
+    const first = s.headerLines[0] || null;
+    const isClassic =
+      s.headerLines.length === 1 &&
+      (subscribedAggregates.size === 0 || subscribedAggregates.has(first.name));
+    const collection = first ? !isClassic || first.mode === 'RowKey' : false;
     let endpoint = collection ? `/${s.id}` : `/${s.id}/{aggregateId}`;
     let search = null;
     if (contract) {
@@ -244,7 +271,7 @@ export function parseModel({ modelDir, openapiPath = null }) {
       }
       if (op.collection !== collection) {
         throw new Error(
-          `Read model "${s.id}" is declared \`${s.aggregate}:${s.keyed ? 'Key' : 'Id'}\` in readmodels.md ` +
+          `Read model "${s.id}" is declared \`${s.aggregate}:${s.mode}\` in readmodels.md ` +
             `but openapi.json serves it as ${op.collection ? 'a collection' : 'a single aggregate'} ` +
             `(GET ${op.endpoint}). The two sides disagree about the projection strategy.`,
         );
@@ -298,9 +325,10 @@ export function parseModel({ modelDir, openapiPath = null }) {
       }
 
       const views = viewIds.map((id) => readModelById.get(id));
-      // An `:Id` read model is replayed for ONE aggregate, so the page needs the
-      // aggregate id — it comes from the route, which is why the route path grows
-      // a `:aggregateId` segment. `:Key` read models are listable and need none.
+      // An `:Id`/`:Key` read model answers with ONE record for one aggregate, so
+      // the page needs the aggregate id — it comes from the route, which is why
+      // the route path grows a `:aggregateId` segment. `:RowKey` (and named-key)
+      // read models are listable and need none.
       const aggregateParam = views.some((v) => !v.collection);
       const pageCommands = triggerIds.map((id) => commandById.get(id));
       // The nested interfaces this page's contracts file must declare — exactly

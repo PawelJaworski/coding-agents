@@ -23,6 +23,7 @@ const keyedRm = () => ({
   package: `${BASE}.policylist`,
   getterMethod: 'getPolicyList',
   getMapping: 'policy-list',
+  collection: true,
   dslMethod: 'expect_policy_list',
   entityClassName: 'PolicyListEntity',
   idClassName: 'PolicyListKey',

@@ -1,5 +1,6 @@
 // GENERATE_READ_MODELS: the read model record, its projection and — for
-// <aggregate>:Key — the entity, composite key and repositories that go with it.
+// <aggregate>:Key / <aggregate>:RowKey — the entity, composite key and
+// repositories that go with it.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,6 +30,7 @@ const vaRm = () => ({
   package: VA_ENT,
   getterMethod: 'getPolicyList',
   getMapping: 'policy-list',
+  collection: true,
   dslMethod: 'expect_policy_list',
   entityClassName: 'PolicyListEntity',
   idClassName: 'PolicyListKey',
@@ -176,6 +178,7 @@ const keyedRm = () => ({
   package: VA_ENT,
   getterMethod: 'getPolicyList',
   getMapping: 'policy-list',
+  collection: true,
   dslMethod: 'expect_policy_list',
   entityClassName: 'PolicyListEntity',
   idClassName: 'PolicyListKey',
@@ -302,6 +305,7 @@ const embeddedKeyedRm = () => ({
   package: VA_ENT,
   getterMethod: 'getInsuredPolicies',
   getMapping: 'insured-policies',
+  collection: true,
   dslMethod: 'expect_insured_policies',
   entityClassName: 'InsuredPoliciesEntity',
   idClassName: 'InsuredPoliciesKey',
@@ -485,6 +489,7 @@ test('a persisting projector for an unresolvable named key delegates the key to 
     package: `${BASE}.storedproduct`,
     getterMethod: 'getStoredProduct',
     getMapping: 'stored-product',
+    collection: true,
     dslMethod: 'expect_stored_product',
     entityClassName: 'StoredProductEntity',
     idClassName: 'StoredProductKey',
@@ -596,5 +601,65 @@ test('a :Key field is never a search path — it lives in the @EmbeddedId', () =
   assert.doesNotMatch(j.content, /policyKey/);
   const mem = readModelInMemoryRepository(rm);
   assert.doesNotMatch(mem.content, /case "policyKey"/);
+});
+
+// --- persisting projector, single-record shape (<aggregate>:Key) ----------------
+// ":Key" shares the persisting write side with ":RowKey" (entity, repositories,
+// per-event row advance) and differs only on the query side: one record looked
+// up by aggregate id instead of a searchable list of rows.
+
+const singleRm = () => ({
+  id: 'policy-card',
+  className: 'PolicyCard',
+  package: VA_ENT,
+  getterMethod: 'getPolicyCard',
+  getMapping: 'policy-card/{aggregateId}',
+  collection: false,
+  dslMethod: 'expect_policy_card',
+  entityClassName: 'PolicyCardEntity',
+  idClassName: 'PolicyCardKey',
+  projectorClassName: 'PolicyCardProjector',
+  abilityClassName: 'PolicyCardProjectorAbility',
+  repositoryClassName: 'PolicyCardRepository',
+  inMemoryRepositoryClassName: 'PolicyCardInMemoryRepository',
+  repositoryConstant: 'POLICY_CARD_REPOSITORY',
+  tableName: 'policy_card',
+  subscribes: ['policy-issued'],
+  keyFields: [],
+  searchOnlyFields: [],
+  fields: [IDENTITY_FIELD, { name: 'policyNumber', label: 'policy number', javaType: 'String', imports: [] }],
+});
+
+test('persistingProjector serves a single record by aggregate id, with no search map', () => {
+  const p = persistingProjector(singleRm(), new Map([['policy-issued', issuedEvent([{ name: 'policyNumber', javaType: 'String' }])]]), CTX);
+  assert.match(p.content, /@GetMapping\("policy-card\/\{aggregateId\}"\)/);
+  assert.match(p.content, /public PolicyCard getPolicyCard\(@PathVariable Long aggregateId\)/);
+  assert.match(p.content, /repository\.findById\(aggregateId\)/);
+  assert.match(p.content, /\.map\(PolicyCardEntity::toReadModel\)/);
+  assert.doesNotMatch(p.content, /@RequestParam|findAllBySearch/);
+  assert.match(p.content, /import org\.springframework\.web\.bind\.annotation\.PathVariable;/);
+  // The write side is the shared persisting one: the row is advanced on append.
+  assert.match(p.content, /implements PersistingProjector/);
+  assert.match(p.content, /repository\.save\(new PolicyCardEntity\(event\.aggregateId\(\), projected\.policyKey\(\), projected\.policyNumber\(\)\)\)/);
+});
+
+test('persistingProjectorAbility asserts the one row its aggregate id returns', () => {
+  const a = persistingProjectorAbility(singleRm(), CTX, []);
+  assert.match(a.content, /default boolean expect_policy_card\(Long aggregateId, Predicate<PolicyCard> testCase\)/);
+  assert.doesNotMatch(a.content, /List<PolicyCard>/);
+  assert.doesNotMatch(a.content, /Map<String, String>/);
+});
+
+test('a single-record persisting projector and a row-list one differ only in the getter', () => {
+  const eventsById = new Map([['policy-issued', issuedEvent([{ name: 'policyNumber', javaType: 'String' }])]]);
+  const single = persistingProjector(singleRm(), eventsById, CTX);
+  const rows = persistingProjector({ ...singleRm(), collection: true, getMapping: 'policy-card' }, eventsById, CTX);
+  assert.match(single.content, /public PolicyCard getPolicyCard\(@PathVariable Long aggregateId\)/);
+  assert.match(rows.content, /public List<PolicyCard> getPolicyCard\(@RequestParam Map<String, String> search\)/);
+  // identical write side — same per-event dispatch and apply() folds
+  assert.equal(
+    single.content.split('    @Override\n    public void project')[1],
+    rows.content.split('    @Override\n    public void project')[1],
+  );
 });
 

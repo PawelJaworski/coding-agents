@@ -1,9 +1,12 @@
 // GENERATE_READ_MODELS emitters: the read model record and its projection.
 //
-// Two shapes, decided by the model:
-//   <aggregate>:Id   on-demand projection — a projector rebuilt per query
-//   <aggregate>:Key  persisting projection — entity, repository and a
-//                    PersistingProjector that keeps the row up to date
+// Three shapes, decided by the model:
+//   <aggregate>:Id      on-demand projection — a projector rebuilt per query
+//   <aggregate>:Key     persisting projection, SINGLE record — entity,
+//                       repository and a PersistingProjector that keeps one row
+//                       per aggregate up to date; read back by aggregate id
+//   <aggregate>:RowKey  persisting projection, ROW LIST — same machinery,
+//                       queried as a list of rows (across aggregates, with search)
 // Projectors and persisting projectors are hand-owned logic (scaffolded once),
 // so their private decision method holds field-by-field event -> row mapping.
 
@@ -230,20 +233,20 @@ public interface ${rm.abilityClassName} extends EventStreamAbility {
   };
 }
 
-// --- persisting read models (<aggregate>:Key) --------------------------------
-// One row per aggregate, keyed by aggregateId, advanced on append. Unlike an
-// on-demand projection it can be listed across aggregates, which is the whole
-// reason the model marks it with ":Key".
+// --- persisting read models (<aggregate>:Key / <aggregate>:RowKey) -----------
+// JPA row(s), advanced on append. A ":RowKey" model is listable across
+// aggregates (which is the whole reason the model marks it with ":RowKey"); a
+// ":Key" model serves exactly one record per aggregate, looked up by its id.
 
 export function readModelEntity(rm) {
-  const keyed = rm.keyFields.length > 0;
+  const compositeKey = rm.keyFields.length > 0;
   const keyNames = new Set(rm.keyFields.map((f) => f.name));
   const nonKeyFields = rm.fields.filter((f) => !keyNames.has(f.name));
   // A value object with a list attribute cannot be a JPA embeddable and is stored as
   // JSON; a scalar-only value object is embedded and flattened into prefixed columns.
   const jsonFields = nonKeyFields.filter((f) => (f.valueObject && !f.embeds) || f.list || f.children?.length);
   const importBlockList = [
-    ...(keyed ? ['jakarta.persistence.EmbeddedId'] : ['jakarta.persistence.Id']),
+    ...(compositeKey ? ['jakarta.persistence.EmbeddedId'] : ['jakarta.persistence.Id']),
     'jakarta.persistence.AttributeOverride',
     'jakarta.persistence.AttributeOverrides',
     'jakarta.persistence.Column',
@@ -260,7 +263,7 @@ export function readModelEntity(rm) {
       : []),
     ...nonKeyFields.flatMap((f) => f.imports),
   ];
-  const idField = keyed
+  const idField = compositeKey
     ? `
     @EmbeddedId
     private ${rm.idClassName} id;
@@ -290,7 +293,7 @@ export function readModelEntity(rm) {
     .join('\n');
   // toReadModel passes fields in READ MODEL order: key fields come from id.<field>(),
   // everything else from the entity's own fields.
-  const readModelArgs = rm.fields.map((f) => (keyed && keyNames.has(f.name) ? `id.${f.name}()` : f.name));
+  const readModelArgs = rm.fields.map((f) => (compositeKey && keyNames.has(f.name) ? `id.${f.name}()` : f.name));
   return {
     package: rm.package,
     className: rm.entityClassName,
@@ -433,8 +436,8 @@ function searchableFields(rm) {
 }
 
 export function readModelRepository(rm) {
-  const keyed = rm.keyFields.length > 0;
-  const idType = keyed ? rm.idClassName : 'Long';
+  const compositeKey = rm.keyFields.length > 0;
+  const idType = compositeKey ? rm.idClassName : 'Long';
   const repoImports = ['java.util.List', 'java.util.Map', 'java.util.Optional'];
   return {
     package: rm.package,
@@ -457,8 +460,8 @@ public interface ${rm.repositoryClassName} {
 }
 
 export function readModelJpaRepository(rm) {
-  const keyed = rm.keyFields.length > 0;
-  const idType = keyed ? rm.idClassName : 'Long';
+  const compositeKey = rm.keyFields.length > 0;
+  const idType = compositeKey ? rm.idClassName : 'Long';
   const searchables = searchableFields(rm);
   const specImports = searchables.length
     ? [
@@ -503,9 +506,9 @@ ${specSearch}
 }
 
 export function readModelInMemoryRepository(rm) {
-  const keyed = rm.keyFields.length > 0;
-  const idType = keyed ? rm.idClassName : 'Long';
-  const idExpr = keyed ? 'entity.getId()' : 'entity.getAggregateId()';
+  const compositeKey = rm.keyFields.length > 0;
+  const idType = compositeKey ? rm.idClassName : 'Long';
+  const idExpr = compositeKey ? 'entity.getId()' : 'entity.getAggregateId()';
   const searchables = searchableFields(rm);
   const cases = searchables
     .map(
@@ -585,7 +588,7 @@ ${search}
 export function persistingProjector(rm, eventsById, ctx) {
   const base = ctx.basePackage;
   const extraImports = [];
-  const keyed = rm.keyFields.length > 0;
+  const compositeKey = rm.keyFields.length > 0;
   const keyNames = new Set(rm.keyFields.map((f) => f.name));
 
   // The repository is a collaborator like any other — note its
@@ -624,7 +627,7 @@ export function persistingProjector(rm, eventsById, ctx) {
     });
     extraImports.push(`${e.package}.${e.className}`);
 
-    // For keyed read models, build the composite key from projected key fields.
+    // For composite-keyed read models, build the composite key from projected key fields.
     // A derived field (one attribute carved out of a value-object field, e.g.
     // "policyHolderName") has no accessor of its own on the projected record —
     // it was never added as one of its components — so it reads through the
@@ -634,7 +637,7 @@ export function persistingProjector(rm, eventsById, ctx) {
       if (f.unmappableKey) return `decider.${f.name}(state, event)`;
       return f.derivedFrom ? `projected.${f.derivedFrom.field}().${f.derivedFrom.attr}()` : `projected.${f.name}()`;
     };
-    const entitySave = keyed
+    const entitySave = compositeKey
       ? `repository.save(new ${rm.entityClassName}(new ${rm.idClassName}(${rm.keyFields.map(projectedKeyArg).join(', ')}), ${rm.fields.filter((f) => !keyNames.has(f.name)).map((f) => `projected.${f.name}()`).join(', ')}));`
       : `repository.save(new ${rm.entityClassName}(event.aggregateId(), ${rm.fields.map((f) => `projected.${f.name}()`).join(', ')}));`;
 
@@ -667,7 +670,7 @@ ${args.map((a) => `                ${a}`).join(',\n')});
   const projectCases = rm.subscribes
     .map((eid) => {
       const e = eventsById.get(eid);
-      const keyExpr = keyed
+      const keyExpr = compositeKey
         ? `new ${rm.idClassName}(${rm.keyFields.map(persistedKeyArg).join(', ')})`
         : 'evt.aggregateId()';
       return `            case ${e.className} evt -> {
@@ -697,13 +700,33 @@ ${args.map((a) => `                ${a}`).join(',\n')});
     )
     .join('\n');
 
+  // The query side is the ONLY thing ":Key" (single record) and ":RowKey"
+  // (row list) change here: a single-record read model is looked up by its
+  // aggregate id and answers with one row, a row-list one runs the search map
+  // over the repository and answers with rows. The write side (apply/project,
+  // one row advanced per event) is identical.
+  const getter = rm.collection
+    ? `    @GetMapping("${rm.getMapping}")
+    public List<${rm.className}> ${rm.getterMethod}(@RequestParam Map<String, String> search) {
+        return repository.findAllBySearch(search).stream()
+                .map(${rm.entityClassName}::toReadModel)
+${searchOnlyFilters ? searchOnlyFilters + '\n' : ''}                .toList();
+    }`
+    : `    @GetMapping("${rm.getMapping}")
+    public ${rm.className} ${rm.getterMethod}(@PathVariable Long aggregateId) {
+        return repository.findById(aggregateId)
+                .map(${rm.entityClassName}::toReadModel)
+                .orElse(null);
+    }`;
+
   const imports = importBlock([
-    'java.util.List',
-    'java.util.Map',
+    ...(rm.collection ? ['java.util.List', 'java.util.Map'] : []),
     'lombok.RequiredArgsConstructor',
     'org.springframework.stereotype.Component',
     'org.springframework.web.bind.annotation.GetMapping',
-    'org.springframework.web.bind.annotation.RequestParam',
+    rm.collection
+      ? 'org.springframework.web.bind.annotation.RequestParam'
+      : 'org.springframework.web.bind.annotation.PathVariable',
     'org.springframework.web.bind.annotation.RestController',
     `${base}.eventstream.DomainEvent`,
     `${base}.eventstream.PersistingProjector`,
@@ -728,12 +751,7 @@ public class ${rm.projectorClassName} implements PersistingProjector {
 
 ${fieldDeclarations(collaborators)}
 
-    @GetMapping("${rm.getMapping}")
-    public List<${rm.className}> ${rm.getterMethod}(@RequestParam Map<String, String> search) {
-        return repository.findAllBySearch(search).stream()
-                .map(${rm.entityClassName}::toReadModel)
-${searchOnlyFilters ? searchOnlyFilters + '\n' : ''}                .toList();
-    }
+${getter}
 
     @Override
     public void project(DomainEvent event) {
@@ -752,6 +770,19 @@ ${applies.join('\n\n')}
 
 export function persistingProjectorAbility(rm, ctx, collaborators) {
   const base = ctx.basePackage;
+  // Mirror the projection's query shape: a row list is asserted over rows (and
+  // its search map), a single record over the one row its aggregate id returns.
+  const dsl = rm.collection
+    ? `    default boolean ${rm.dslMethod}(Predicate<List<${rm.className}>> testCase) {
+        return testCase.test(get${rm.projectorClassName}().${rm.getterMethod}(Map.of()));
+    }
+
+    default boolean ${rm.dslMethod}(Map<String, String> search, Predicate<List<${rm.className}>> testCase) {
+        return testCase.test(get${rm.projectorClassName}().${rm.getterMethod}(search));
+    }`
+    : `    default boolean ${rm.dslMethod}(Long aggregateId, Predicate<${rm.className}> testCase) {
+        return testCase.test(get${rm.projectorClassName}().${rm.getterMethod}(aggregateId));
+    }`;
   return {
     test: true,
     package: rm.package,
@@ -760,8 +791,7 @@ export function persistingProjectorAbility(rm, ctx, collaborators) {
     content: `package ${rm.package};
 
 ${importBlock([
-  'java.util.List',
-  'java.util.Map',
+  ...(rm.collection ? ['java.util.List', 'java.util.Map'] : []),
   'java.util.function.Predicate',
   `${base}.eventstream.EventStreamAbility`,
 ])}
@@ -778,13 +808,7 @@ public interface ${rm.abilityClassName} extends EventStreamAbility {
         return ${rm.abilityClassName}.INSTANCE;
     }
 
-    default boolean ${rm.dslMethod}(Predicate<List<${rm.className}>> testCase) {
-        return testCase.test(get${rm.projectorClassName}().${rm.getterMethod}(Map.of()));
-    }
-
-    default boolean ${rm.dslMethod}(Map<String, String> search, Predicate<List<${rm.className}>> testCase) {
-        return testCase.test(get${rm.projectorClassName}().${rm.getterMethod}(search));
-    }
+${dsl}
 }
 `,
   };

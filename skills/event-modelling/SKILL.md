@@ -691,11 +691,12 @@ taller (`AGG_ID_H` in `scripts/generate.js`) to make room for this line
 without shrinking the title or field list; cards without one stay at
 their normal base height.
 
-## Read-model `{keyName}:Key` attribute
+## Read-model `{keyName}:Key` / `{keyName}:RowKey` attributes
 
-Read models may additionally declare one or more repeatable `{keyName}:Key` lines
-(bullet `- customerId:Key` or plain `customerId:Key` form, same parsing convention as
-every other `key: value` line), e.g.:
+Read models may additionally declare one or more repeatable key lines —
+`{keyName}:Key` or `{keyName}:RowKey` (bullet `- customerId:Key` or plain
+`customerId:Key` form, same parsing convention as every other `key: value`
+line), e.g.:
 
 ```markdown
 ## order-list
@@ -705,36 +706,50 @@ customerId:Key
 region:Key
 ```
 
-`:Key` is meaningful **only on read models** — if it's declared on a command
-or an event it's silently ignored (parsed but unused), the same tier as any
-other attribute that isn't meaningful for that file's shape.
+The suffix is a projection-strategy marker and is **kept as written** — the
+diagram never normalises one into the other:
+- `{keyName}:Key` — the persisting **single-record** projection: kept up to
+  date on append (a database row, not a per-request stream replay) and
+  queried as **one** record. The classic `{aggregateName}:Key` line means one
+  row per aggregate, addressed by its id.
+- `{keyName}:RowKey` — the persisting **row-keyed list** projection: kept up
+  to date on append and queried as a **list of rows**. The classic
+  `{aggregateName}:RowKey` line keys each row by that aggregate's id.
 
-Rendering: `:Key` lines share the same slot as `{aggregateName}:Id` — stacked
+`:Key`/`:RowKey` are meaningful **only on read models** — if declared on a
+command or an event they're silently ignored (parsed but unused), the same
+tier as any other attribute that isn't meaningful for that file's shape.
+
+Rendering: key lines share the same slot as `{aggregateName}:Id` — stacked
 bold lines directly under the card's title, above the field list, reusing
 the `.agg-id` CSS class (one `<div class="agg-id">` per line, not
 comma-joined). If a read model has an `:Id` line, it renders first, then each
-`:Key` line below it in the order written in the markdown.
+key line below it in the order written in the markdown, each with its own
+suffix (`policy:RowKey` renders as `policy:RowKey`, never as `policy:Key`).
 
-**Hard blocker**: a read model must declare **at least one** of `:Id` or
-`:Key` — one with neither is a hard error (the generator throws, same tier
-as the orphan-event / missing-event-id checks). A read model with `:Id`
-only, `:Key` only (one or more), or both is fine.
+**Hard blocker**: a read model must declare **at least one** of `:Id`, `:Key`
+or `:RowKey` — one with neither is a hard error (the generator throws, same
+tier as the orphan-event / missing-event-id checks). Any set of at least one
+identifying line is fine.
 
 Geometry: `AGG_ID_H` (14px) is now added **once per identifying line**
-(the `:Id` line, if present, plus each `:Key` line) rather than a flat
-one-time bump — a read model with `:Id` + 2 `:Key` lines grows 3 × 14px
+(the `:Id` line, if present, plus each key line) rather than a flat
+one-time bump — a read model with `:Id` + 2 key lines grows 3 × 14px
 taller than its base height.
 
 ### Special vs. normal attributes
 
-`policy:Id` / `customerId:Key` (no bullet) are the **special** identifier
-lines described above — bold, under the title, never in the field list. A
-*normal* bullet field with a related name (`* policy id`, `* customer id`) is
-just a regular field, rendered in the field list like any other — the
-generator's field-consistency check (`isTransformationOfSpecialAttribute`)
-recognizes this camelCase→spaced+" id"/" key" naming as a legitimate
-passthrough of the special attribute rather than an orphan field. Don't
-conflate the two forms; only the colon form gets the bold card treatment.
+`policy:Id` / `customerId:Key` / `policy:RowKey` (no bullet) are the
+**special** identifier lines described above — bold, under the title, never
+in the field list. A *normal* bullet field with a related name (`* policy id`,
+`* customer id key`, `* policy key`) is just a regular field, rendered in the
+field list like any other — the generator's field-consistency check
+(`isTransformationOfSpecialAttribute`) recognizes this camelCase→spaced+
+" id"/" key" naming as a legitimate passthrough of the special attribute
+rather than an orphan field. Both `:Key` and `:RowKey` inject an identity
+named `<name> key` (never `<name> row key`) — the `Row` marker speaks about
+cardinality, not the name of the key. Don't conflate the two forms; only the
+colon form gets the bold card treatment.
 
 ## Read-model GWT (Given-When-Then) files
 

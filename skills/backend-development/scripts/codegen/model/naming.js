@@ -83,16 +83,19 @@ const naming = {
     serdePackage: `${base}.infrastructure`,
   }),
 
-  // `keyed` picks the persisting variant: an extra entity + repository pair, and a
-  // collection endpoint (no {aggregateId} path variable, since it spans aggregates).
-  readModel: (base, id, { keyed = false } = {}) => ({
+  // `collection` picks the row-list variant (`<aggregate>:RowKey` / named-key):
+  // an extra entity + repository pair, and a collection endpoint (no {aggregateId}
+  // path variable, since it spans aggregates) returning rows. A single-record read
+  // model — on-demand (`:Id`) or persisting (`:Key`) — takes the {aggregateId}
+  // path variable and serves exactly one row.
+  readModel: (base, id, { collection = false } = {}) => ({
     className: pascal(id),
     package: `${base}.${slicePackage(id)}`,
     projectorClassName: `${pascal(id)}Projector`,
     deciderClassName: `${pascal(id)}ProjectionDecider`,
     abilityClassName: `${pascal(id)}ProjectorAbility`,
     getterMethod: `get${pascal(id)}`,
-    getMapping: keyed ? id : `${id}/{aggregateId}`,
+    getMapping: collection ? id : `${id}/{aggregateId}`,
     dslMethod: `expect_${words(id).join('_')}`,
     // persisting-only names
     entityClassName: `${pascal(id)}Entity`,

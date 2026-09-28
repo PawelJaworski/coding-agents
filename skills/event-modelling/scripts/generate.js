@@ -190,15 +190,19 @@ function parseMdText(text) {
         cur.aggregateId = rawKey;
         continue;
       }
-      // Read-model-only attribute: one or more repeatable "keyName:Key"
-      // lines declaring a projection key, e.g. "policyNumber:Key". Parsed
-      // generically here (same as ":Id") but only meaningful/rendered/
-      // enforced on read models — see buildModel's hard-error check and
-      // renderTable. If it shows up on a command or event, it's silently
-      // ignored (same tier as any other attribute that isn't meaningful for
-      // that file's shape).
-      if (val === 'Key') {
-        (cur.keys || (cur.keys = [])).push(rawKey);
+      // Read-model-only attribute: one or more repeatable "keyName:Key" /
+      // "keyName:RowKey" lines declaring a projection key, e.g.
+      // "policyNumber:Key" or "policy:RowKey". Parsed generically here (same
+      // as ":Id") but only meaningful/rendered/enforced on read models — see
+      // buildModel's hard-error check and renderTable. If it shows up on a
+      // command or event, it's silently ignored (same tier as any other
+      // attribute that isn't meaningful for that file's shape).
+      //
+      // The suffix is kept on each entry and rendered as written: ":Key" is
+      // the single-record persisting projection, ":RowKey" the row-keyed list
+      // one (see SKILL.md). The diagram never normalises one into the other.
+      if (val === 'Key' || val === 'RowKey') {
+        (cur.keys || (cur.keys = [])).push({ name: rawKey, mode: val });
         continue;
       }
       const key = rawKey.toLowerCase();
@@ -383,10 +387,13 @@ function isPureFlattening(field, upstreamTrees) {
   );
 }
 
-// Check if a field is a transformation of a special :Id/:Key attribute.
+// Check if a field is a transformation of a special :Id/:Key/:RowKey attribute.
 // e.g., "policy id" is a transformation of "policy:Id"
-// e.g., "customer key" is a transformation of "customer:Key"
-// The transformation is: camelCase → space-separated + " id" or " key" suffix
+// e.g., "customer key" is a transformation of "customer:Key" and "customer:RowKey"
+// The transformation is: camelCase → space-separated + " id" or " key" suffix.
+// Both key markers inject an identity named "<name> key" — ":RowKey" speaks
+// about cardinality (a list of rows), not the name of the key — so "customer
+// row key" is NOT a transformation; the field is always "customer key".
 function isTransformationOfSpecialAttribute(field, aggregateId, keys) {
   const normalizedField = normalizeField(field);
   
@@ -400,11 +407,11 @@ function isTransformationOfSpecialAttribute(field, aggregateId, keys) {
     if (normalizedField === `${spacedAggregateId} id`) return true;
   }
   
-  // Check if it's a transformation of :Key
+  // Check if it's a transformation of :Key / :RowKey
   if (keys && keys.length) {
     for (const key of keys) {
-      const spacedKey = camelToSpace(key);
-      // "attribute key" matches "attribute:Key"
+      const spacedKey = camelToSpace(key.name);
+      // "attribute key" matches "attribute:Key" and "attribute:RowKey"
       if (normalizedField === `${spacedKey} key`) return true;
     }
   }
@@ -678,14 +685,14 @@ function buildModel(inputDir) {
   }
 
   // Sanity: every read model must declare at least one identifying line —
-  // either `{aggregateName}:Id` and/or one or more `{keyName}:Key` lines.
-  // This is a hard blocker, same tier as the orphan-event / missing-event-id
-  // checks.
+  // either `{aggregateName}:Id` and/or one or more `{keyName}:Key` /
+  // `{keyName}:RowKey` lines. This is a hard blocker, same tier as the
+  // orphan-event / missing-event-id checks.
   const readmodelsMissingIdOrKey = readmodels.filter((r) => !r.aggregateId && !(r.keys && r.keys.length));
   if (readmodelsMissingIdOrKey.length) {
     throw new Error(
-      `Read model(s) missing mandatory "{aggregateName}:Id" and/or "{keyName}:Key" — ${readmodelsMissingIdOrKey.map((r) => r.id).join(', ')}. ` +
-      `Add e.g. "policy:Id" and/or one or more "{keyName}:Key" lines to declare how the read model is identified.`
+      `Read model(s) missing mandatory "{aggregateName}:Id" and/or "{keyName}:Key|RowKey" — ${readmodelsMissingIdOrKey.map((r) => r.id).join(', ')}. ` +
+      `Add e.g. "policy:Id", "policy:Key" (single-record persisting) or "policy:RowKey" (row-keyed list persisting) — and/or one or more "{keyName}:Key" lines — to declare how the read model is identified.`
     );
   }
 
@@ -1102,13 +1109,14 @@ function fieldsHtml(fields) {
 
 // Read-model-only: stacked bold lines directly under the title — the
 // aggregate-id line first (if present), then each key line in the order
-// written in the markdown.
+// written in the markdown. Each key line renders with its own suffix
+// (`:Key` / `:RowKey`) exactly as written in readmodels.md.
 // Reuses the `.agg-id` CSS class per line (one <div> per line, not joined),
 // mirroring how the aggregate-id line alone renders on commands/events.
 function idKeyLinesHtml(rm) {
   const lines = [];
   if (rm.aggregateId) lines.push(`${escapeHtml(rm.aggregateId)}:Id`);
-  (rm.keys || []).forEach((k) => lines.push(`${escapeHtml(k)}:Key`));
+  (rm.keys || []).forEach((k) => lines.push(`${escapeHtml(k.name)}:${k.mode}`));
   return lines.map((l) => `<div class="agg-id">${l}</div>`).join('');
 }
 

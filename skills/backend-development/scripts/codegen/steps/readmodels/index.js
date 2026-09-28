@@ -1,9 +1,12 @@
 // GENERATE_READ_MODELS — the read model record and its projection.
 //
-// Two shapes, decided by the model:
-//   <aggregate>:Id   on-demand projection — a projector rebuilt per query
-//   <aggregate>:Key  persisting projection — entity, repository and a
-//                    PersistingProjector that keeps the row up to date
+// Three shapes, decided by the model:
+//   <aggregate>:Id      on-demand projection — a projector rebuilt per query
+//   <aggregate>:Key     persisting projection, single record — entity,
+//                       repository and a PersistingProjector that keeps the row
+//                       up to date, read back by aggregate id
+//   <aggregate>:RowKey  persisting projection, row list — same machinery,
+//                       queried as rows (across aggregates, with search)
 //
 // Public surface of this step package: `ReadModelStep` (what the step machine
 // needs) and `ReadModelPlugin` (what the emitter registry needs). Emitters live

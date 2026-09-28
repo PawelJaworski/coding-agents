@@ -569,7 +569,7 @@ product:Id
 * * description
 `,
       'readmodels.md': `## products
-product:Key
+product:RowKey
 Subscribes: products-added
 * product (List):Key
 * * name
@@ -621,6 +621,133 @@ policy:Key
   assert.equal(rm.aggregate, 'policy');
   assert.equal(rm.fields[0].identity, true);
   assert.equal(rm.fields[0].name, 'policyKey');
+});
+
+// --- projection modes: `:Id` (on-demand) | `:Key` (single record) | `:RowKey` (row list)
+
+test('parseSections keeps :Id / :Key / :RowKey header lines apart and flags both key markers as persisting', () => {
+  const [onDemand] = parseSections('## x\npolicy:Id\n');
+  const [single] = parseSections('## x\npolicy:Key\n');
+  const [rows] = parseSections('## x\npolicy:RowKey\n');
+  assert.deepEqual(onDemand.headerLines, [{ name: 'policy', mode: 'Id' }]);
+  assert.equal(onDemand.keyed, false);
+  assert.deepEqual(single.headerLines, [{ name: 'policy', mode: 'Key' }]);
+  assert.equal(single.keyed, true);
+  assert.deepEqual(rows.headerLines, [{ name: 'policy', mode: 'RowKey' }]);
+  assert.equal(rows.keyed, true);
+});
+
+test('a :RowKey read model keeps the "<aggregate>Key" identity name — :RowKey speaks about cardinality, not the name of the key', () => {
+  const [s] = parseSections('## issued-policies\npolicy:RowKey\n* policy holder\n');
+  const fields = injectIdentity(s, s.fields);
+  assert.deepEqual(fields.map((f) => f.name), ['policyKey', 'policyHolder']);
+});
+
+test('parseField rejects a field-level :RowKey marker — field/named key markers keep the ":Key" spelling', () => {
+  assert.throws(() => parseField('policy number:RowKey'), /":RowKey" is only the classic header line/);
+});
+
+test('parseModel maps the three classic markers to on-demand / persisting-single / persisting-list', () => {
+  const run = (header) =>
+    withModelDir(
+      {
+        ...NAMED_KEY_MODEL_FILES,
+        'readmodels.md': `## policy-view
+Name: Policy View
+Subscribes: policy-issued
+${header}
+* policy holder
+`,
+      },
+      (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+    ).readModels.find((r) => r.id === 'policy-view');
+
+  const onDemand = run('policy:Id');
+  assert.equal(onDemand.projection, 'on-demand');
+  assert.equal(onDemand.keyed, false);
+  assert.equal(onDemand.collection, false);
+  assert.equal(onDemand.getMapping, 'policy-view/{aggregateId}');
+
+  const single = run('policy:Key');
+  assert.equal(single.projection, 'persisting-single');
+  assert.equal(single.keyed, true);
+  assert.equal(single.collection, false);
+  assert.equal(single.getMapping, 'policy-view/{aggregateId}');
+
+  const rows = run('policy:RowKey');
+  assert.equal(rows.projection, 'persisting-list');
+  assert.equal(rows.keyed, true);
+  assert.equal(rows.collection, true);
+  assert.equal(rows.getMapping, 'policy-view');
+});
+
+test('parseModel raises a MODEL ERROR when a named key attribute uses :RowKey instead of :Key', () => {
+  const run = () =>
+    withModelDir(
+      {
+        ...NAMED_KEY_MODEL_FILES,
+        'readmodels.md': `## insured-policies
+Name: Insured policies
+Subscribes: policy-issued
+policyHolderName:RowKey
+* policy holder
+* [no of policies]
+`,
+      },
+      (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+    );
+  assert.throws(run, /insured-policies.*policyHolderName:RowKey.*must use ":Key"/s);
+});
+
+test('parseModel raises a MODEL ERROR when a single-record (":Key") read model marks a composite key field', () => {
+  const run = () =>
+    withModelDir(
+      {
+        ...NAMED_KEY_MODEL_FILES,
+        'readmodels.md': `## policy-view
+Name: Policy View
+Subscribes: policy-issued
+policy:Key
+* policy holder:Key
+`,
+      },
+      (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+    );
+  assert.throws(run, /policy-view.*marks field\(s\) with ":Key" but is not a row-list/s);
+});
+
+test('parseModel raises a MODEL ERROR when a "??" search-only criterion lands on a single-record (":Key") read model', () => {
+  const run = () =>
+    withModelDir(
+      {
+        ...NAMED_KEY_MODEL_FILES,
+        'readmodels.md': `## policy-view
+Name: Policy View
+Subscribes: policy-issued
+policy:Key
+* policy holder
+* policy coverage risk??
+`,
+      },
+      (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+    );
+  assert.throws(run, /policy-view.*"\?\?" \(search-only criterion\).*not a row-list/s);
+});
+
+test('parseModel raises a MODEL ERROR when an event uses :RowKey', () => {
+  const run = () =>
+    withModelDir(
+      {
+        ...NAMED_KEY_MODEL_FILES,
+        'events.md': `## policy-issued
+Name: Policy Issued
+policy:RowKey
+* policy holder
+`,
+      },
+      (modelDir) => parseModel({ modelDir, basePackage: 'a.b' }),
+    );
+  assert.throws(run, /policy-issued.*uses <aggregate>:RowKey.*always use ":Id"/s);
 });
 
 test('CLI: an unresolvable named key generates a full project, warning prints, and --check exits 0 (warnings are non-blocking)', () => {

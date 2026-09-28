@@ -161,7 +161,34 @@ customerId:Key
 region:Key
 `);
   assert.equal(items.length, 1);
-  assert.deepEqual(items[0].keys, ['customerId', 'region']);
+  assert.deepEqual(items[0].keys, [
+    { name: 'customerId', mode: 'Key' },
+    { name: 'region', mode: 'Key' },
+  ]);
+});
+
+test('parseMdText parses {keyName}:RowKey lines and keeps the suffix for rendering', () => {
+  const items = parseMdText(`
+## issued-policies
+Name: Issued Policies
+Subscribes: policy-issued
+policy:RowKey
+`);
+  assert.deepEqual(items[0].keys, [{ name: 'policy', mode: 'RowKey' }]);
+});
+
+test('parseMdText keeps :Key and :RowKey lines apart in written order', () => {
+  const items = parseMdText(`
+## order-list
+Name: Order List
+Subscribes: order-created
+region:RowKey
+customerId:Key
+`);
+  assert.deepEqual(items[0].keys, [
+    { name: 'region', mode: 'RowKey' },
+    { name: 'customerId', mode: 'Key' },
+  ]);
 });
 
 test('parseMdText parses a uis.md-shaped entry with Triggers: and ConsistsOf:', () => {
@@ -236,16 +263,24 @@ test('isTransformationOfSpecialAttribute detects camelCase to space-separated tr
   assert.equal(isTransformationOfSpecialAttribute('POLICY HOLDER ID', 'policyHolder', null), true);
   
   // Test :Key transformations
-  assert.equal(isTransformationOfSpecialAttribute('customer key', null, ['customer']), true);
-  assert.equal(isTransformationOfSpecialAttribute('customer id key', null, ['customerId']), true);
-  assert.equal(isTransformationOfSpecialAttribute('CUSTOMER ID KEY', null, ['customerId']), true);
+  assert.equal(isTransformationOfSpecialAttribute('customer key', null, [{ name: 'customer', mode: 'Key' }]), true);
+  assert.equal(isTransformationOfSpecialAttribute('customer id key', null, [{ name: 'customerId', mode: 'Key' }]), true);
+  assert.equal(isTransformationOfSpecialAttribute('CUSTOMER ID KEY', null, [{ name: 'customerId', mode: 'Key' }]), true);
   
   // Test multiple keys
-  assert.equal(isTransformationOfSpecialAttribute('region key', null, ['customerId', 'region']), true);
+  assert.equal(isTransformationOfSpecialAttribute('region key', null, [
+    { name: 'customerId', mode: 'Key' },
+    { name: 'region', mode: 'Key' },
+  ]), true);
+  
+  // Test :RowKey transformations — ":RowKey" speaks about cardinality, the
+  // injected identity is still "<name> key", never "<name> row key"
+  assert.equal(isTransformationOfSpecialAttribute('customer key', null, [{ name: 'customer', mode: 'RowKey' }]), true);
+  assert.equal(isTransformationOfSpecialAttribute('customer row key', null, [{ name: 'customer', mode: 'RowKey' }]), false);
   
   // Test non-transformations
   assert.equal(isTransformationOfSpecialAttribute('policy name', 'policy', null), false);
-  assert.equal(isTransformationOfSpecialAttribute('customer id', null, ['customer']), false);
+  assert.equal(isTransformationOfSpecialAttribute('customer id', null, [{ name: 'customer', mode: 'Key' }]), false);
   assert.equal(isTransformationOfSpecialAttribute('policy', 'policy', null), false);
 });
 
@@ -843,7 +878,7 @@ ConsistsOf: policy-holder-view
 // buildModel / renderTable — read-model `{keyName}:Key` attribute
 // ---------------------------------------------------------------------------
 
-test('buildModel throws when a read model has neither {aggregateName}:Id nor {keyName}:Key', () => {
+test('buildModel throws when a read model has neither {aggregateName}:Id nor {keyName}:Key|RowKey', () => {
   const dir = baseFixture({
     readmodels: `
 ## policy-holder-view
@@ -854,7 +889,7 @@ Subscribes: policy-holder-added
   });
   assert.throws(
     () => buildModel(dir),
-    /Read model\(s\) missing mandatory "\{aggregateName\}:Id" and\/or "\{keyName\}:Key" — policy-holder-view/
+    /Read model\(s\) missing mandatory "\{aggregateName\}:Id" and\/or "\{keyName\}:Key\|RowKey" — policy-holder-view/
   );
 });
 
@@ -872,6 +907,22 @@ policyHolderId:Key
   assert.doesNotThrow(() => buildModel(dir));
 });
 
+test('buildModel allows a read model with only {keyName}:RowKey (no {aggregateName}:Id)', () => {
+  const dir = baseFixture({
+    readmodels: `
+## issued-policies
+Name: Issued Policies
+Subscribes: policy-holder-added
+policy:RowKey
+* name
+* address
+`,
+  });
+  const model = buildModel(dir);
+  const rm = model.readmodels.find((r) => r.id === 'issued-policies');
+  assert.deepEqual(rm.keys, [{ name: 'policy', mode: 'RowKey' }]);
+});
+
 test('buildModel allows a read model with multiple {keyName}:Key lines', () => {
   const dir = baseFixture({
     readmodels: `
@@ -886,7 +937,10 @@ region:Key
   });
   const model = buildModel(dir);
   const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
-  assert.deepEqual(rm.keys, ['policyHolderId', 'region']);
+  assert.deepEqual(rm.keys, [
+    { name: 'policyHolderId', mode: 'Key' },
+    { name: 'region', mode: 'Key' },
+  ]);
 });
 
 test('buildModel allows a read model with both {aggregateName}:Id and {keyName}:Key', () => {
@@ -926,7 +980,7 @@ region:Key
   const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
   // Special attributes are parsed separately
   assert.equal(rm.aggregateId, 'policyHolder');
-  assert.deepEqual(rm.keys, ['region']);
+  assert.deepEqual(rm.keys, [{ name: 'region', mode: 'Key' }]);
   // Normal field attributes are parsed as fields
   assert.deepEqual(rm.fields, ['policy holder id', 'name', 'address']);
 });
@@ -954,6 +1008,23 @@ region:Key
   // Normal field attributes are rendered as bullet points
   assert.match(html, /<li>policy holder id<\/li>/);
   assert.match(html, /<li>name<\/li>/);
+});
+
+test('renderTable renders a {keyName}:RowKey line with its own suffix (never normalised to :Key)', () => {
+  const dir = baseFixture({
+    readmodels: `
+## issued-policies
+Name: Issued Policies
+Subscribes: policy-holder-added
+policy:RowKey
+* name
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  assert.match(html, /<div class="agg-id">policy:RowKey<\/div>/);
+  assert.doesNotMatch(html, /policy:Key/);
 });
 
 test('renderTable stacks {aggregateName}:Id then {keyName}:Key lines (in written order) as separate .agg-id divs, and grows card height 14px per line', () => {

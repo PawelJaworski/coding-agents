@@ -39,7 +39,7 @@ Produces: policy-issued
 const READMODELS = `# Read Models
 ## policy-status
 Name: Policy Status
-Policy:Key
+Policy:RowKey
 Subscribes: policy-issued
 * policy number
 * status
@@ -80,7 +80,7 @@ test('a UI whose id matches a command triggers it without Triggers:', () => {
   });
 });
 
-test('ConsistsOf pulls in several read models; :Key is a collection, :Id is not', () => {
+test('ConsistsOf pulls in several read models; :RowKey is a collection, :Id is not', () => {
   withModel(
     {
       uis: `# UIs\n## agent-dashboard\nType: html\nConsistsOf: policy-status, underwriting-queue\n`,
@@ -91,14 +91,42 @@ test('ConsistsOf pulls in several read models; :Key is a collection, :Id is not'
       assert.deepEqual(page.viewIds, ['policy-status', 'underwriting-queue']);
       assert.equal(page.views[0].collection, true);
       assert.equal(page.views[1].collection, false);
-      // an :Id view needs an aggregate id, which can only come from the route
+      // a single-record (:Id/:Key) view needs an aggregate id, which can only
+      // come from the route
       assert.equal(page.aggregateParam, true);
       assert.equal(page.routePath, 'agent-dashboard/:aggregateId');
     },
   );
 });
 
-test('a page of only :Key read models keeps a plain route path', () => {
+test('a :Key read model is single-record like :Id (persisted instead of replayed)', () => {
+  withModel(
+    {
+      uis: `# UIs\n## policy-card\nType: html\nConsistsOf: policy-card\n`,
+      readmodels: `# Read Models\n## policy-card\nName: Policy Card\nPolicy:Key\nSubscribes: policy-issued\n* policy number\n`,
+    },
+    (m) => {
+      assert.equal(page0(m).views[0].collection, false);
+      assert.equal(page0(m).aggregateParam, true);
+      assert.equal(page0(m).routePath, 'policy-card/:aggregateId');
+    },
+  );
+});
+
+test('a named-key read model (no classic aggregate line) is a collection', () => {
+  withModel(
+    {
+      uis: `# UIs\n## insured-policies\nType: html\n`,
+      readmodels: `# Read Models\n## insured-policies\nName: Insured Policies\nSubscribes: policy-issued\npolicyHolderName:Key\npolicyHolderSurname:Key\n* policy holder\n`,
+    },
+    (m) => {
+      assert.equal(page0(m).views[0].collection, true);
+      assert.equal(page0(m).aggregateParam, false);
+    },
+  );
+});
+
+test('a page of only :RowKey read models keeps a plain route path', () => {
   withModel(
     { uis: `# UIs\n## policy-status\nType: html\n`, readmodels: READMODELS },
     (m) => {
@@ -143,7 +171,7 @@ test('the api client mirrors the generated Spring controllers', () => {
       // POST <base>/<command-id> returning the new aggregate id
       assert.match(ts, /issuePolicy\(payload: IssuePolicyPayload\): Promise<number>/);
       assert.match(ts, /this\.http\.post<number>\(ISSUE_POLICY_ENDPOINT, payload\)/);
-      // :Key -> collection endpoint, no path variable
+      // :RowKey -> collection endpoint, no path variable
       assert.match(ts, /getPolicyStatus\(\): Promise<PolicyStatusView\[\]>/);
       assert.match(ts, /this\.http\.get<PolicyStatusView\[\]>\(POLICY_STATUS_ENDPOINT\)/);
       // :Id -> single object keyed by aggregate id
@@ -470,7 +498,7 @@ test('a field in the model but not in the contract is reported as drift', () => 
   );
 });
 
-test('a :Key read model served as a single aggregate is a contract disagreement', () => {
+test('a :RowKey read model served as a single aggregate is a contract disagreement', () => {
   const swapped = JSON.parse(JSON.stringify(OPENAPI));
   swapped.paths['/policy-status/{aggregateId}'] = {
     get: { responses: { 200: { content: { '*/*': { schema: schemaRef('PolicyStatus') } } } } },
@@ -483,6 +511,27 @@ test('a :Key read model served as a single aggregate is a contract disagreement'
         () => {},
       ),
     /disagree about the projection strategy/,
+  );
+});
+
+test('a single-record (:Key) read model served as a collection is a contract disagreement', () => {
+  const openapi = JSON.parse(JSON.stringify(OPENAPI));
+  openapi.paths['/underwriting-queue'] = {
+    get: { responses: { 200: { content: { '*/*': { schema: { type: 'array', items: schemaRef('UnderwritingQueue') } } } } } },
+  };
+  delete openapi.paths['/underwriting-queue/{aggregateId}'];
+  assert.throws(
+    () =>
+      withModel(
+        {
+          uis: OPENAPI_UIS,
+          commands: OPENAPI_COMMANDS,
+          readmodels: `# Read Models\n## underwriting-queue\nName: Underwriting Queue\nPolicy:Key\nSubscribes: policy-issued\n* applicant\n`,
+          openapi,
+        },
+        () => {},
+      ),
+    /underwriting-queue.*Policy:Key.*disagree about the projection strategy/s,
   );
 });
 
@@ -509,7 +558,7 @@ const SEARCH_READMODELS = `# Read Models
 ## policy-list
 Name: Policy List
 Subscribes: policy-issued
-policy:Key
+policy:RowKey
 * policy holder
 * policy number
 * policy holder?

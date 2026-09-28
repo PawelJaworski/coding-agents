@@ -151,7 +151,7 @@ function component(page) {
     lines.push(`  private readonly route = inject(ActivatedRoute);`);
     lines.push('');
     lines.push(
-      `  /** Route is '${page.routePath}' because this page renders an :Id read model. */`,
+      `  /** Route is '${page.routePath}' because this page renders a single-record (:Id/:Key) read model. */`,
     );
     lines.push(
       `  protected readonly aggregateId = Number(this.route.snapshot.paramMap.get('aggregateId') ?? 0);`,
@@ -202,8 +202,9 @@ function component(page) {
 // same event model, so method, path, body and response type are all decided by
 // the model — there is nothing here for a human to choose.
 //   command      -> POST <base>/<command-id>, body <Cmd>, returns the aggregate id
-//   read model :Key -> GET <base>/<id>            -> View[]
-//   read model :Id  -> GET <base>/<id>/{aggregateId} -> View
+//   read model :RowKey -> GET <base>/<id>                -> View[]
+//   read model :Id     -> GET <base>/<id>/{aggregateId}  -> View
+//   read model :Key    -> GET <base>/<id>/{aggregateId}  -> View (persisted)
 function api(page) {
   const types = [
     ...page.commands.map((c) => naming.payload(c.id)),

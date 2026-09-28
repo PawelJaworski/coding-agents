@@ -44,8 +44,8 @@ test('read model naming', () => {
   assert.equal(rm.dslMethod, 'expect_policy_document');
 });
 
-test('keyed read model drops the {aggregateId} path variable (it spans aggregates)', () => {
-  const rm = naming.readModel(BASE, 'policy-list', { keyed: true });
+test('row-list read model drops the {aggregateId} path variable (it spans aggregates)', () => {
+  const rm = naming.readModel(BASE, 'policy-list', { collection: true });
   assert.equal(rm.getMapping, 'policy-list');
   assert.equal(rm.entityClassName, 'PolicyListEntity');
   assert.equal(rm.repositoryClassName, 'PolicyListRepository');

@@ -18,27 +18,24 @@
 // leaves a file still claiming to come from it), and nothing reads it. Proven: with
 // the line stripped, --patch and --check classify identically.
 //
-// The two markers that DO survive are not answers, they are inputs, and the patch
-// cannot compute either of them:
-//   scaffold-version: N     which template a `once` file was born from. Its body has
-//                           since diverged, so this is unrecoverable from content.
-//   PRESERVED-BY-HAND: why  that a conflict was resolved deliberately. The only way
-//                           to close an UPDATE; without it the entry recurs forever.
+// The two facts a comment cannot derive belong in generator-state.json, not here
+// (ownership/state.js):
+//   scaffoldVersions   which template a `once` file was born from. Its body has
+//                      since diverged, so this is unrecoverable from content.
+//                      Pure metadata — it never needed to be near the code.
+//   preserved          which classes the team has taken over from the model.
+//                      The only way to close an UPDATE; without it the entry
+//                      recurs forever.
+//
+// Neither is stamped back into the source — not even as a breadcrumb. A
+// declaration is class-level because that is the granularity the generator acts
+// on, and the why belongs in a comment beside the code that needs it.
 
-// Aggregates/deciders are `once`, so they carry the same drift marker as the runtime.
+// Aggregates/deciders are `once`, so they version the same way as the runtime.
 // Bump SCAFFOLD_VERSION only if the SHAPE of a scaffolded once-file changes
 // (not when the model gains a field — a missing stub is already a loud javac error
 // naming the exact method).
 export const SCAFFOLD_VERSION = 1;
-
-// `SCAFFOLDED ONCE` and `scaffold-version:` are both parsed (scaffold.js), so this
-// header is machinery, not commentary. The third line is the one thing a reader
-// cannot derive from the class itself: what belongs in it.
-export const ONCE_HEADER = (what) =>
-  `// SCAFFOLDED ONCE by scripts/codegen — this file is YOURS.\n` +
-  `// scaffold-version: ${SCAFFOLD_VERSION}\n` +
-  `// Hand-written logic for ${what}: business rules in check(), one decision per\n` +
-  `// [bracketed] field. Drive both in with a test.\n`;
 
 export const uniq = (xs) => [...new Set(xs)].filter(Boolean);
 export const importBlock = (imports) =>

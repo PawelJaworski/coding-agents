@@ -10,15 +10,6 @@ import naming from '../../model/naming.js';
 
 const TEST_DATA_SCAFFOLD_VERSION = 1;
 
-const ONCE_HEADER = (what) =>
-  `// SCAFFOLDED ONCE by scripts/codegen — this file is YOURS.\n` +
-  `// scaffold-version: ${TEST_DATA_SCAFFOLD_VERSION}\n` +
-  `// ${what}: every generated *Ability DSL pre-sets its builder from these\n` +
-  `// constants, so a spec overrides only what its scenario cares about. A\n` +
-  `// "= null" constant flows as no default: fill it from the business\n` +
-  `// definition's examples, invent a value, or opt out with a trailing\n` +
-  `// "// no test data" marker.\n`;
-
 // --- derivation --------------------------------------------------------------
 
 export const javaString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
@@ -119,7 +110,6 @@ export function testDataAbility(model, base) {
   if ([...constants].some((k) => k.usesList)) imports.add('java.util.List');
 
   const content =
-    ONCE_HEADER('Test data for specs') +
     `package ${td.package};\n\n` +
     [...imports].sort().map((i) => `import ${i};`).join('\n') +
     `\n\npublic interface ${td.className} {\n\n` +

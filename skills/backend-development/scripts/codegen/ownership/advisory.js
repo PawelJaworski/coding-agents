@@ -14,7 +14,7 @@ import {
   splitFile,
   semanticDrift,
 } from './merge.js';
-import { preservedReason } from './scaffold.js';
+import { emptyState, isPreserved, STATE_FILE } from './state.js';
 
 /**
  * Returns true if the emitted file is a logic-holding class where
@@ -34,18 +34,14 @@ export function isLogicFile(file) {
  * @param {string} params.currentContent - File content on disk
  * @param {string} params.generatedContent - Emitted content from model
  * @param {string} params.relPath - Relative path to file for display
+ * @param {object} [params.state] - the loaded generator-state.json
  * @returns {object|null} Advisory report object, or null if in sync
  */
-export function computeAdvisory({ currentContent, generatedContent, relPath }) {
+export function computeAdvisory({ currentContent, generatedContent, relPath, state = emptyState() }) {
   if (currentContent === generatedContent) return null;
 
-  const reason = preservedReason(currentContent);
-  if (reason) {
-    return {
-      relPath,
-      isPreserved: true,
-      reason,
-    };
+  if (isPreserved(state, relPath)) {
+    return { relPath, isPreserved: true };
   }
 
   const existingSplit = splitFile(currentContent);
@@ -140,10 +136,12 @@ export function computeAdvisory({ currentContent, generatedContent, relPath }) {
   }
 
   promptSections.push(
-    `\nIf the hand-written logic is intentional, the developer may add\n` +
-      `\`// PRESERVED-BY-HAND: <reason>\` to silence this report. Choosing to align\n` +
-      `working logic with the model is the developer's decision, not the agent's —\n` +
-      `report it instead of doing it.`,
+    `\nIf the hand-written logic is intentional, the class is now yours — add its path to\n` +
+      `\`"preserved"\` in ${STATE_FILE} and explain the decision in a comment beside the\n` +
+      `code. That is the whole declaration; there is no per-member bookkeeping. The build\n` +
+      `is the feedback loop from then on.\n` +
+      `Choosing to align working logic with the model is the developer's decision, not the\n` +
+      `agent's — report it instead of doing it.`,
   );
 
   return {

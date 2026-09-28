@@ -69,10 +69,15 @@ test('a GENERATED file carries no header — the patch answers that, and stays c
   }
 });
 
-test('a `once` file keeps its header — scaffold-version is state the patch cannot compute', () => {
+test('a `once` file carries no banner — its template version is bookkeeping, not content', () => {
   const e = { ...naming.event(BASE, 'policy-issued'), id: 'policy-issued', aggregate: 'policy', fields: [] };
   const agg = aggregateFile('policy', [e], CTX);
-  assert.match(agg.content, /^\/\/ SCAFFOLDED ONCE/);
-  assert.match(agg.content, /scaffold-version: \d+/);
+  assert.match(agg.content, /^package /, 'a once file starts at its package declaration like any other');
+  assert.doesNotMatch(agg.content, /SCAFFOLDED|scaffold-version|PRESERVED-BY-HAND|DO NOT EDIT/);
+  // Which template a `once` file was born from cannot be recomputed from its
+  // (diverged) body, so the emitter carries the number and the generator records
+  // it in generator-state.json. Stamping it into the source would be a cached
+  // answer that costs a line per file and can go stale.
+  assert.ok(Number.isInteger(agg.version) && agg.version >= 1);
 });
 

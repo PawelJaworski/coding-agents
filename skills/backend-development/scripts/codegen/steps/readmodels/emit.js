@@ -9,7 +9,6 @@
 
 import naming from '../../model/naming.js';
 import {
-  ONCE_HEADER,
   SCAFFOLD_VERSION,
   importBlock,
   components,
@@ -187,7 +186,7 @@ export function projectionDecider(rm, eventsById, ctx) {
     className: rm.deciderClassName,
     once: true,
     version: SCAFFOLD_VERSION,
-    content: `${ONCE_HEADER(`read model "${rm.id}"`)}package ${rm.package};
+    content: `package ${rm.package};
 
 ${importBlock(imports)}
 

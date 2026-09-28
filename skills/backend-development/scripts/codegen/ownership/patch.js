@@ -23,7 +23,7 @@
 
 import { splitTopLevelMembers, memberKey, splitFile, semanticDrift } from './merge.js';
 import { mergeGenerated } from './merge.js';
-import { preservedReason, parseScaffoldVersion } from './scaffold.js';
+import { emptyState, isPreserved, scaffoldVersion, STATE_FILE } from './state.js';
 import { isLogicFile } from './advisory.js';
 
 export const CATEGORIES = ['domain', 'commands', 'events', 'translators', 'readmodels', 'testdata'];
@@ -77,9 +77,10 @@ function missingMemberKeys(current, generated) {
  * @param {object} params.file - an emit() file: {package, className, content, category, once, version, test}
  * @param {string|null} params.currentContent - file content on disk, or null if absent
  * @param {string} params.relPath - path relative to the project root
+ * @param {object} [params.state] - the loaded generator-state.json
  * @returns {object|null} patch entry
  */
-export function classifyFile({ file, currentContent, relPath }) {
+export function classifyFile({ file, currentContent, relPath, state = emptyState() }) {
   const base = {
     category: file.category ?? 'domain',
     package: file.package,
@@ -100,13 +101,12 @@ export function classifyFile({ file, currentContent, relPath }) {
 
   if (currentContent === file.content) return null;
 
-  const preserved = preservedReason(currentContent);
-  if (preserved) return null; // a declared, deliberate deviation is not work
+  if (isPreserved(state, relPath)) return null; // a declared, deliberate deviation is not work
 
   // `once` files (aggregates, deciders, runtime) are never rewritten. The only thing that can
   // be stale is the scaffold TEMPLATE they were born from.
   if (file.once) {
-    const onDisk = parseScaffoldVersion(currentContent);
+    const onDisk = scaffoldVersion(state, relPath);
     const template = file.version ?? 1;
     if (onDisk >= template) return null;
     return {
@@ -117,9 +117,9 @@ export function classifyFile({ file, currentContent, relPath }) {
       members: [],
       hints: [
         `template v${onDisk} -> v${template}: port the delta into the file body — do not just`,
-        'bump the comment. Diff against the CURRENT generated `content` for this class (not an',
-        'older doc), confirm every new/changed member you copied is actually present on disk,',
-        'then `codegen --accept-scaffold`. Your logic stays.',
+        'bump the version in generator-state.json. Diff against the CURRENT generated `content` for',
+        'this class (not an older doc), confirm every new/changed member you copied is actually present',
+        'on disk, then `codegen --accept-scaffold`. Your logic stays.',
       ],
     };
   }
@@ -147,7 +147,9 @@ export function classifyFile({ file, currentContent, relPath }) {
       owner: isLogicFile(file) ? 'yours' : 'generator',
       members: drifted,
       hints: [
-        'intentional? add `// PRESERVED-BY-HAND: <reason>`',
+        `intentional? the class is yours — add its path to "preserved" in ${STATE_FILE}`,
+        `and explain the decision in a comment beside the code. The build is the feedback`,
+        `loop from then on: javac names anything the model later requires.`,
         ...(missing.length > 0 ? [`also missing (safe to add): ${missing.join(', ')}`] : []),
       ],
     };

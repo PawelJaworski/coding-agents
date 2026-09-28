@@ -20,13 +20,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseModel } from './model/parse.js';
 import { emitWithPlugins, scanWithPlugins } from './core/emit.js';
+import { misplacedSpecs } from './ownership/scaffold.js';
 import {
-  parseScaffoldVersion,
-  stampScaffoldVersion,
-  misplacedSpecs,
-  preservedReason,
-  leadingCommentBlock,
-} from './ownership/scaffold.js';
+  STATE_FILE,
+  readGeneratorState,
+  writeGeneratorState,
+  scaffoldVersion,
+  recordScaffoldVersion,
+  isPreserved,
+  pruneStaleState,
+} from './ownership/state.js';
 import { mergeGenerated, semanticDrift } from './ownership/merge.js';
 import { computeAdvisory, isLogicFile } from './ownership/advisory.js';
 import { classifyFile, buildPatches, patchFileName, stalePatchFiles } from './ownership/patch.js';
@@ -132,6 +135,45 @@ function walk(dir) {
 }
 
 // ---------------------------------------------------------------------------
+// generator-state.json — the generator's own bookkeeping
+//
+// Which template a `once` file was born from, and why a file deviates on
+// purpose: neither is recoverable from source content, so neither lives there.
+// One small JSON answers both questions in a single read and is committed with
+// the change. See ownership/state.js for the two-way integrity contract.
+// ---------------------------------------------------------------------------
+
+const { state: generatorState, error: stateError } = readGeneratorState(projectRoot);
+if (stateError && !testMode) {
+  die(
+    `STATE ERROR  ${stateError}\n` +
+      `  ${STATE_FILE} records which template each \`once\` file was born from and which\n` +
+      `  deviations were deliberate — facts no amount of re-reading the code can recover.\n` +
+      `  It must parse. Fix the JSON (or delete it to start the bookkeeping fresh), then re-run.\n`,
+  );
+}
+
+/**
+ * Facts about every emitted file that the bookkeeping is kept honest against:
+ * does it exist, and does it still differ from what the model would emit?
+ */
+function collectStateFacts(files) {
+  const facts = new Map();
+  for (const file of files) {
+    const root = file.test ? testRoot : mainRoot;
+    const target = path.join(root, ...file.package.split('.'), `${file.className}.java`);
+    const rel = path.relative(projectRoot, target);
+    const exists = fs.existsSync(target);
+    const currentContent = exists ? fs.readFileSync(target, 'utf8') : null;
+    facts.set(rel, {
+      exists,
+      deviates: exists && currentContent !== file.content,
+    });
+  }
+  return facts;
+}
+
+// ---------------------------------------------------------------------------
 // Preflight: Groovy specs must live in the Groovy source root
 // ---------------------------------------------------------------------------
 
@@ -199,9 +241,13 @@ if (patchMode) {
     const target = path.join(root, ...file.package.split('.'), `${file.className}.java`);
     const rel = path.relative(projectRoot, target);
     const currentContent = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
-    const entry = classifyFile({ file, currentContent, relPath: rel });
+    const entry = classifyFile({ file, currentContent, relPath: rel, state: generatorState });
     if (entry) entries.push(entry);
   }
+
+  // Read-only mode: nothing is pruned or written here. `--next` shells out to
+  // `--patch`, so this must never fail the run over bookkeeping.
+  const pruned = pruneStaleState(generatorState, collectStateFacts(files));
 
   const scanned = scanWithPlugins(model, {
     projectRoot,
@@ -248,10 +294,17 @@ if (patchMode) {
   debug.log('PATCH_RESULT', summary);
 
   if (json) {
-    console.log(JSON.stringify({ patchDir: PATCH_DIR, patches: summary, warnings: model.warnings }, null, 2));
+    console.log(
+      JSON.stringify(
+        { patchDir: PATCH_DIR, patches: summary, warnings: model.warnings, prunedStateEntries: pruned },
+        null,
+        2,
+      ),
+    );
     process.exit(0);
   }
   printWarnings(model.warnings);
+  if (pruned.length) reportPrunedState(pruned);
   console.log(`\n  PATCH written to ${PATCH_DIR}/\n`);
   for (const s of summary) {
     console.log(
@@ -472,6 +525,12 @@ if (nextMode) {
 // Default: regenerate code from model
 // ---------------------------------------------------------------------------
 
+// Bookkeeping that no longer points at anything is dropped first, so a
+// `preserved` entry for a file that is gone (or that has drifted back to exactly
+// what the model would emit) never rides along. Nothing to refuse over: a
+// declaration is a fact about who owns the file, not a claim about its body.
+const prunedState = pruneStaleState(generatorState, collectStateFacts(files));
+
 debug.log('GENERATE_START', { files: files.length });
 const written = [];
 const preserved = [];
@@ -490,17 +549,27 @@ for (const file of files) {
   const rel = path.relative(projectRoot, target);
 
   // `once` files are scaffolded then owned by the project (aggregates, deciders, runtime).
-  if (file.once && exists) {
-    const current = fs.readFileSync(target, 'utf8');
-    const onDisk = parseScaffoldVersion(current);
+  if (file.once) {
     const template = file.version ?? 1;
 
-    if (acceptScaffold) {
-      const stamped = stampScaffoldVersion(current, template, file.content);
-      if (stamped !== current) {
-        fs.writeFileSync(target, stamped);
-        restamped.push(`${rel}  (v${onDisk} -> v${template})`);
+    if (!exists) {
+      if (check) {
+        stale.push(rel);
+        continue;
       }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file.content);
+      recordScaffoldVersion(generatorState, rel, template);
+      written.push(`created  ${rel}`);
+      continue;
+    }
+
+    // Never rewritten — the body may hold local edits an auto-merge would destroy.
+    // The only thing that can be stale is the template it was born from.
+    const onDisk = scaffoldVersion(generatorState, rel);
+    if (acceptScaffold) {
+      recordScaffoldVersion(generatorState, rel, template);
+      if (onDisk !== template) restamped.push(`${rel}  (v${onDisk} -> v${template})`);
     } else if (onDisk < template) {
       staleScaffold.push(`${rel}  (on disk: v${onDisk}, template: v${template})`);
     }
@@ -512,33 +581,24 @@ for (const file of files) {
   // Logic-bearing classes (handlers, projectors, repositories, entities) are scaffolded
   // on creation and never overwritten when they exist.
   if (isLogicFile(file) && exists) {
-    let current = fs.readFileSync(target, 'utf8');
+    const current = fs.readFileSync(target, 'utf8');
 
-    const adv = computeAdvisory({ currentContent: current, generatedContent: file.content, relPath: rel });
+    const adv = computeAdvisory({
+      currentContent: current,
+      generatedContent: file.content,
+      relPath: rel,
+      state: generatorState,
+    });
     if (adv && adv.isPreserved) {
-      preservedByHand.push(`${rel}  // PRESERVED-BY-HAND: ${adv.reason}`);
+      preservedByHand.push(rel);
       preserved.push(rel);
       continue;
     }
-
-    const genHeader = leadingCommentBlock(file.content);
-    const curHeader = leadingCommentBlock(current);
-    if (curHeader !== genHeader) {
-      const body = current.slice(curHeader.length).replace(/^\n+/, '');
-      if (check) {
-        stale.push(`${rel}  (header would be reconciled)`);
-      } else {
-        fs.writeFileSync(target, `${genHeader}\n${body}`);
-        written.push(`header   ${rel}`);
-        current = `${genHeader}\n${body}`;
-      }
-    }
-    if (adv) {
-      advisoryDrifts.push(adv);
-      preserved.push(rel);
-    } else {
-      preserved.push(rel);
-    }
+    // Deliberately NO header reconciliation: the templates carry no banner, so
+    // "make the leading comment block match" would delete a comment a developer
+    // wrote at the top of their own class.
+    if (adv) advisoryDrifts.push(adv);
+    preserved.push(rel);
     continue;
   }
 
@@ -550,11 +610,11 @@ for (const file of files) {
       continue;
     }
     const drift = semanticDrift(current, file.content);
-    const preserveReason = preservedReason(current);
+    const declared = isPreserved(generatorState, rel);
     if (drift.length > 0) {
       const list = `${rel}  (${drift.join(', ')})`;
-      if (preserveReason) {
-        preservedByHand.push(`${list}  // PRESERVED-BY-HAND: ${preserveReason}`);
+      if (declared) {
+        preservedByHand.push(rel);
         preserved.push(rel);
       } else {
         staleGenerated.push(list);
@@ -611,7 +671,7 @@ function reportStaleScaffold() {
     `\n  These are YOURS — the generator will not touch them, and re-running it\n` +
       `  changes nothing. Diff each against its CURRENT emitted template (the plugin's\n` +
       `  \`content\`, not an older doc) and port the delta into the file body — the version\n` +
-      `  comment alone proves nothing. Then record it:\n\n` +
+      `  recorded in ${STATE_FILE} alone proves nothing. Then record it:\n\n` +
       `    node ${SKILL}/scripts/codegen --accept-scaffold\n`,
   );
 }
@@ -632,19 +692,26 @@ function reportNeedsManualMerge() {
 function reportStaleGenerated() {
   console.error(
     `\n  STALE GENERATED  ${staleGenerated.length} generated file(s) have member bodies that no longer\n` +
-      `  match the model, with no // PRESERVED-BY-HAND marker:`,
+      `  match the model, and ${STATE_FILE} declares no preserved deviation for them:`,
   );
   staleGenerated.forEach((f) => console.error(`    ${f}`));
   console.error(
     `\n  The add-only merge cannot repair a stale member body. Classify each one:\n` +
-      `    - intentional hand edit -> add "// PRESERVED-BY-HAND: <reason>" to the file's\n` +
-      `      leading comment block and re-run --check;\n` +
+      `    - intentional hand edit -> the class is yours: add its path to "preserved" in\n` +
+      `      ${STATE_FILE} and explain the decision in a comment beside the code,\n` +
+      `      then re-run --check;\n` +
       `    - genuine staleness     -> delete the generated file and regenerate it.\n`,
   );
 }
 
+/** Bookkeeping dropped because it no longer describes anything. Informational. */
+function reportPrunedState(dropped) {
+  console.log(`\n  NOTE  ${STATE_FILE} dropped ${dropped.length} stale entr(y/ies):`);
+  dropped.forEach((d) => console.log(`    ${d}`));
+}
+
 function reportPreservedByHand() {
-  console.log(`\n  preserved by hand (intentional deviations from the model):`);
+  console.log(`\n  preserved by hand (classes the team owns, per ${STATE_FILE}):`);
   preservedByHand.forEach((f) => console.log(`    ${f}`));
 }
 
@@ -688,10 +755,8 @@ if (checkOnly) {
   if (staleGenerated.length) reportStaleGenerated();
   if (advisoryDrifts.length) reportAdvisoryDrifts();
   if (needsManualMerge.length) reportNeedsManualMerge();
-  if (preservedByHand.length) {
-    console.log(`\n  preserved by hand (intentional deviations from the model):`);
-    preservedByHand.forEach((f) => console.log(`    ${f}`));
-  }
+  if (preservedByHand.length) reportPreservedByHand();
+  if (prunedState.length) reportPrunedState(prunedState);
   if (stale.length || staleScaffold.length || staleGenerated.length || needsManualMerge.length) {
     process.exit(1);
   }
@@ -699,11 +764,14 @@ if (checkOnly) {
   process.exit(0);
 }
 
+if (!check) writeGeneratorState(projectRoot, generatorState);
+
 written.forEach((w) => console.log(`  ${w}`));
 if (restamped.length) {
-  console.log(`\n  scaffold version recorded:`);
+  console.log(`\n  scaffold version recorded in ${STATE_FILE}:`);
   restamped.forEach((s) => console.log(`    ${s}`));
 }
+if (prunedState.length) reportPrunedState(prunedState);
 if (preserved.length) {
   console.log(`\n  kept (yours, scaffolded once / hand-extended):`);
   preserved.forEach((s) => console.log(`    ${s}`));

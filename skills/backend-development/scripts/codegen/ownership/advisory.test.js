@@ -24,9 +24,9 @@ public class IssuePolicyHandler {
   assert.equal(res, null);
 });
 
-test('computeAdvisory: returns isPreserved when stamped with PRESERVED-BY-HAND', () => {
-  const current = `// PRESERVED-BY-HAND: custom handler logic
-package com.example;
+test('computeAdvisory: a class the team owns is isPreserved', () => {
+  const relPath = 'src/main/java/com/example/IssuePolicyHandler.java';
+  const current = `package com.example;
 
 public class IssuePolicyHandler {
     public void handleCustom() {
@@ -40,14 +40,40 @@ public class IssuePolicyHandler {
     }
 }
 `;
+  const state = { scaffoldVersions: {}, preserved: [relPath] };
   const res = computeAdvisory({
     currentContent: current,
     generatedContent: generated,
-    relPath: 'src/main/java/com/example/IssuePolicyHandler.java',
+    relPath,
+    state,
   });
   assert.ok(res);
   assert.equal(res.isPreserved, true);
-  assert.equal(res.reason, 'custom handler logic');
+});
+
+test('computeAdvisory: an undeclared class is still reported as drift — nothing is silent by default', () => {
+  const relPath = 'src/main/java/com/example/IssuePolicyHandler.java';
+  const current = `package com.example;
+
+public class IssuePolicyHandler {
+    void handle() {
+        b();
+    }
+}
+`;
+  const generated = `package com.example;
+
+public class IssuePolicyHandler {
+    void handle() {
+        a();
+    }
+}
+`;
+  const res = computeAdvisory({ currentContent: current, generatedContent: generated, relPath });
+  assert.ok(res);
+  assert.notEqual(res.isPreserved, true);
+  assert.equal(res.hasDrift, true);
+  assert.equal(res.driftedMembers.length, 1);
 });
 
 test('computeAdvisory: detects missing method from model and returns prompt with snippet', () => {

@@ -98,9 +98,11 @@ regeneration, still TDD. A new *field* or a new *event* is not ad-hoc — escala
 Full recipe and traps: `reference/ad-hoc-extensions.md`.
 
 ## Hand edits to a generated file
-Rewriting a method body is allowed and needs no marker — bodies are yours, the contract
-is the generator's. A *structural* deviation (a new type, a renamed field) needs
-`// PRESERVED-BY-HAND: <reason>`, which is also the only way to close an `UPDATE`.
-Which is which: `reference/edit-classification.md`.
+Rewriting a method body is allowed and needs nothing — bodies are yours, the contract is
+the generator's. A *structural* deviation (a new type, a renamed field) means listing the
+file's path in `"preserved"` in `generator-state.json`: class-level, one line, and the
+only way to close an `UPDATE`. Explain the decision in a comment beside the code. From
+then on the build is the feedback loop — nothing watches for the deviation going stale,
+because javac already does. Which is which: `reference/edit-classification.md`.
 
 ## During code generation NEVER change code generator js files

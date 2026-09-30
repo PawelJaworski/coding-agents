@@ -6,6 +6,9 @@
 // Usage:
 //   node <skill>/scripts/codegen                          regenerate (cwd = project root)
 //   node <skill>/scripts/codegen --check                  CI gate: fail if stale
+//   node <skill>/scripts/codegen --init                   first contact: generate, adopt
+//                                                         existing scaffolding by content,
+//                                                         itemize the remaining work
 //   node <skill>/scripts/codegen --patch                  model -> code diff as .codegen/patch/*.json
 //   node <skill>/scripts/codegen --json                   print the parsed model
 //   node <skill>/scripts/codegen --next                   pick next step and render prompt
@@ -33,6 +36,7 @@ import {
 import { mergeGenerated, semanticDrift } from './ownership/merge.js';
 import { computeAdvisory, isLogicFile } from './ownership/advisory.js';
 import { classifyFile, buildPatches, patchFileName, stalePatchFiles } from './ownership/patch.js';
+import { checkSpecHygiene } from './ownership/spec-hygiene.js';
 import { getSteps, getStep } from './steps/index.js';
 import { selectStep, buildResult } from './core/steps.js';
 import { buildStep, pendingEntries, loadPatch } from './cli/prompts.js';
@@ -67,6 +71,7 @@ const patchMode = args.includes('--patch');
 const promptMode = args.includes('--prompt');
 const testMode = args.includes('--test');
 const acceptScaffold = args.includes('--accept-scaffold');
+const initMode = args.includes('--init');
 const json = args.includes('--json');
 const check = checkOnly || nextMode || patchMode;
 
@@ -144,6 +149,7 @@ function walk(dir) {
 // ---------------------------------------------------------------------------
 
 const { state: generatorState, error: stateError } = readGeneratorState(projectRoot);
+const stateFileMissing = !fs.existsSync(path.join(projectRoot, STATE_FILE));
 if (stateError && !testMode) {
   die(
     `STATE ERROR  ${stateError}\n` +
@@ -233,7 +239,7 @@ try {
 // --patch: the model->code diff as JSON documents
 // ---------------------------------------------------------------------------
 
-if (patchMode) {
+function writePatchDocs() {
   debug.log('PATCH_START');
   const entries = [];
   for (const file of files) {
@@ -292,6 +298,11 @@ if (patchMode) {
     summary.push({ category, file: `${PATCH_DIR}/${name}`, ...doc.summary });
   }
   debug.log('PATCH_RESULT', summary);
+  return { summary, pruned };
+}
+
+if (patchMode) {
+  const { summary, pruned } = writePatchDocs();
 
   if (json) {
     console.log(
@@ -540,6 +551,7 @@ const staleGenerated = [];
 const advisoryDrifts = [];
 const preservedByHand = [];
 const restamped = [];
+const adopted = [];
 const needsManualMerge = [];
 
 for (const file of files) {
@@ -565,8 +577,22 @@ for (const file of files) {
     }
 
     // Never rewritten — the body may hold local edits an auto-merge would destroy.
-    // The only thing that can be stale is the template it was born from.
+    // The only thing that can be stale is the template it was born from. Content
+    // is the truth: a body that already matches the current template has nothing
+    // to port, so it is adopted at the template version instead of being reported
+    // as stale work — first contact with a project whose bookkeeping is missing
+    // (no generator-state.json yet) or lags must not cry wolf over every file.
+    const current = fs.readFileSync(target, 'utf8');
     const onDisk = scaffoldVersion(generatorState, rel);
+    if (current === file.content) {
+      if (!check && onDisk !== template) {
+        recordScaffoldVersion(generatorState, rel, template);
+        adopted.push(`${rel}  (v${onDisk} -> v${template})`);
+      }
+      preserved.push(rel);
+      continue;
+    }
+
     if (acceptScaffold) {
       recordScaffoldVersion(generatorState, rel, template);
       if (onDisk !== template) restamped.push(`${rel}  (v${onDisk} -> v${template})`);
@@ -659,6 +685,12 @@ for (const file of files) {
 }
 
 // ---------------------------------------------------------------------------
+// Spec hygiene: specs must reach production through *Ability DSLs only
+// ---------------------------------------------------------------------------
+
+const specHygieneViolations = checkSpecHygiene({ groovyTestRoot, projectRoot });
+
+// ---------------------------------------------------------------------------
 // Report generation
 // ---------------------------------------------------------------------------
 
@@ -669,10 +701,30 @@ function reportStaleScaffold() {
   staleScaffold.forEach((f) => console.error(`    ${f}`));
   console.error(
     `\n  These are YOURS — the generator will not touch them, and re-running it\n` +
-      `  changes nothing. Diff each against its CURRENT emitted template (the plugin's\n` +
-      `  \`content\`, not an older doc) and port the delta into the file body — the version\n` +
-      `  recorded in ${STATE_FILE} alone proves nothing. Then record it:\n\n` +
+      `  changes nothing. Diff each against its CURRENT emitted template — run\n` +
+      `\`codegen --init\` (or \`--patch\`): every UPDATE entry carries the template\n` +
+      `  body in \`expected\`. Port the delta into the file body (the version recorded\n` +
+      `  in ${STATE_FILE} alone proves nothing), then record it:\n\n` +
       `    node ${SKILL}/scripts/codegen --accept-scaffold\n`,
+  );
+}
+
+function reportAdopted() {
+  console.log(`\n  adopted (body already matches the current template — bookkeeping stamped):`);
+  adopted.forEach((s) => console.log(`    ${s}`));
+}
+
+function reportSpecHygiene() {
+  console.error(
+    `\n  SPEC HYGIENE  ${specHygieneViolations.length} production collaborator(s) constructed in specs:`,
+  );
+  specHygieneViolations.forEach((v) =>
+    console.error(`    ${v.file}:${v.line}: ${v.snippet}\n      -> reach it through ${v.suggestion}`),
+  );
+  console.error(
+    `\n  A spec reaches production only through *Ability DSLs — never \`new\` a handler,\n` +
+      `  projector, repository, entity or event in a spec. Mix in the generated *Ability\n` +
+      `  interfaces and call their DSL methods instead.\n`,
   );
 }
 
@@ -741,6 +793,7 @@ if (checkOnly) {
     needsManualMerge,
     warnings: model.warnings,
     advisoryDrifts: advisoryDrifts.map((item) => item.relPath),
+    specHygiene: specHygieneViolations.map((v) => `${v.file}:${v.line}`),
   });
   // Warnings are non-blocking: the generator deliberately generated a throwing
   // stub instead of aborting. They do not, on their own, make --check fail — but
@@ -755,9 +808,16 @@ if (checkOnly) {
   if (staleGenerated.length) reportStaleGenerated();
   if (advisoryDrifts.length) reportAdvisoryDrifts();
   if (needsManualMerge.length) reportNeedsManualMerge();
+  if (specHygieneViolations.length) reportSpecHygiene();
   if (preservedByHand.length) reportPreservedByHand();
   if (prunedState.length) reportPrunedState(prunedState);
-  if (stale.length || staleScaffold.length || staleGenerated.length || needsManualMerge.length) {
+  if (
+    stale.length ||
+    staleScaffold.length ||
+    staleGenerated.length ||
+    needsManualMerge.length ||
+    specHygieneViolations.length
+  ) {
     process.exit(1);
   }
   console.log('codegen: up to date');
@@ -767,6 +827,10 @@ if (checkOnly) {
 if (!check) writeGeneratorState(projectRoot, generatorState);
 
 written.forEach((w) => console.log(`  ${w}`));
+if (stateFileMissing) {
+  console.log(`\n  INIT  no ${STATE_FILE} — once-owned scaffolding adopted by content match`);
+}
+if (adopted.length) reportAdopted();
 if (restamped.length) {
   console.log(`\n  scaffold version recorded in ${STATE_FILE}:`);
   restamped.forEach((s) => console.log(`    ${s}`));
@@ -791,6 +855,19 @@ debug.log('GENERATE_RESULT', {
   warnings: model.warnings,
   debugLog: DEBUG_LOG_PATH,
 });
+if (initMode) {
+  const { summary } = writePatchDocs();
+  console.log(`\n  INIT  remaining work itemized in ${PATCH_DIR}/ — UPDATE entries carry the`);
+  console.log(`  template body in \`expected\`. Get one prompt at a time:\n`);
+  for (const s of summary) {
+    if (!s.create && !s.add && !s.update) continue;
+    console.log(
+      `    ${s.category.padEnd(12)} CREATE ${s.create}  ADD ${s.add}  UPDATE ${s.update}` +
+        `   (needs an agent: ${s.needsAgent})`,
+    );
+  }
+  console.log(`\n    node ${SKILL}/scripts/codegen --prompt GENERATE_COMMANDS --item 0\n`);
+}
 if (staleGenerated.length) {
   reportStaleGenerated();
   process.exit(1);
@@ -804,5 +881,9 @@ if (staleScaffold.length) {
 }
 if (needsManualMerge.length) {
   reportNeedsManualMerge();
+  process.exit(1);
+}
+if (specHygieneViolations.length) {
+  reportSpecHygiene();
   process.exit(1);
 }

@@ -115,11 +115,12 @@ export function classifyFile({ file, currentContent, relPath, state = emptyState
       auto: false,
       owner: 'yours',
       members: [],
+      expected: file.content,
       hints: [
         `template v${onDisk} -> v${template}: port the delta into the file body — do not just`,
-        'bump the version in generator-state.json. Diff against the CURRENT generated `content` for',
-        'this class (not an older doc), confirm every new/changed member you copied is actually present',
-        'on disk, then `codegen --accept-scaffold`. Your logic stays.',
+        'bump the version in generator-state.json. The template body is `expected` in this entry —',
+        'diff it against the file, port every new/changed member that is actually missing on disk,',
+        'then `codegen --accept-scaffold`. Your logic stays.',
       ],
     };
   }
@@ -146,6 +147,7 @@ export function classifyFile({ file, currentContent, relPath, state = emptyState
       auto: false,
       owner: isLogicFile(file) ? 'yours' : 'generator',
       members: drifted,
+      expected: file.content,
       hints: [
         `intentional? the class is yours — add its path to "preserved" in ${STATE_FILE}`,
         `and explain the decision in a comment beside the code. The build is the feedback`,

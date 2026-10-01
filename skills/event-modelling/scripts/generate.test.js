@@ -856,11 +856,13 @@ Type: html
   assert.equal(model.roles.length, 1);
   assert.deepEqual(model.roles[0].actors, ['Insurance Agent', 'Policy Holder']);
   const html = renderTable(model, computeGeometry(model));
-  assert.match(html, /class="gutter role-gutter"[^>]*>Insurance Agent<br>Policy Holder</);
+  assert.match(html, /class="gutter role-gutter"[^>]*><div class="actor-lines"><div>Insurance Agent<\/div><div>Policy Holder<\/div><\/div></);
   // The UI is still one card in that single swimlane, with one trigger arrow.
   assert.equal((html.match(/data-element="ui-add-policy-holder--triggers-add-policy-holder"/g) || []).length, 1);
   const svg = renderArrows(model, computeGeometry(model));
   assert.equal((svg.match(/data-kind="triggers"/g) || []).length, 1);
+  // The stacked names carry a small gap (`.actor-lines` CSS).
+  assert.match(renderPage(model, computeGeometry(model), html, svg), /\.actor-lines\{[^}]*gap:2px\}/);
 });
 
 test('buildModel matches actor groups regardless of written order (fan-in UIs share one swimlane)', () => {
@@ -937,7 +939,7 @@ Actor: Insurance Agent, Policy Holder
   });
   const model = buildModel(dir);
   const html = renderTable(model, computeGeometry(model));
-  assert.match(html, /class="caption">Insurance Agent<br>Policy Holder<\/div>/);
+  assert.match(html, /class="caption"><div class="actor-lines"><div>Insurance Agent<\/div><div>Policy Holder<\/div><\/div><\/div>/);
   assert.match(html, /Unwired UIs/);
 });
 

@@ -1157,6 +1157,14 @@ function idKeyLinesHtml(rm) {
   return lines.map((l) => `<div class="agg-id">${l}</div>`).join('');
 }
 
+// Actor names, one per line with a small gap (`.actor-lines`); a single name
+// stays plain text so one-actor models render exactly as before.
+function actorsHtml(actors) {
+  const names = (actors || []).map((a) => escapeHtml(a));
+  if (names.length <= 1) return names.join('');
+  return `<div class="actor-lines">${names.map((n) => `<div>${n}</div>`).join('')}</div>`;
+}
+
 function triggerUiElementId(uiId, commandId) {
   return `ui-${uiId}--triggers-${commandId}`;
 }
@@ -1220,14 +1228,13 @@ function renderTable(model, geo) {
   if (standaloneUis.length) {
     const cards = standaloneUis.map((u) => {
       const label = u.typeHint ? u.typeHint.toUpperCase() : 'UI';
-      return `<div class="card ui-card standalone-ui" data-element="ui-${u.id}" data-type="ui" title="ui-${u.id} — standalone UI (no Triggers:, no view) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(u.name || u.id)}</div>${u.actors && u.actors.length ? `<div class="caption">${u.actors.map((a) => escapeHtml(a)).join('<br>')}</div>` : ''}</div>`;
+      return `<div class="card ui-card standalone-ui" data-element="ui-${u.id}" data-type="ui" title="ui-${u.id} — standalone UI (no Triggers:, no view) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(u.name || u.id)}</div>${u.actors && u.actors.length ? `<div class="caption">${actorsHtml(u.actors)}</div>` : ''}</div>`;
     }).join('');
     standaloneRow = `<tr style="height:${STANDALONE_H}px"><td class="gutter standalone-gutter">Unwired UIs</td><td class="lane-cell standalone-cell" colspan="${columns.length}"><div class="standalone-row">${cards}</div></td></tr>`;
   }
 
   const roleRows = roles.map((role, r) => {
-    // One name per line in the gutter (multi-actor group).
-    const roleLabel = role.actors.map((a) => escapeHtml(a)).join('<br>');
+    const roleLabel = actorsHtml(role.actors);
     let cells = `<td class="gutter role-gutter" style="background:${roleColor(r)}">${roleLabel}</td>`;
     columns.forEach((c, i) => {
       let content = '';
@@ -1609,6 +1616,7 @@ svg [data-from].dim{opacity:.08}
 .tr-card .ui-label{color:rgba(234,255,251,.75)}
 .title{font-size:13px;font-weight:700;padding:0 8px;text-align:center;flex-shrink:0}
 .caption{font-size:10px;opacity:.8;text-transform:uppercase;letter-spacing:.04em}
+.actor-lines{display:flex;flex-direction:column;gap:2px}
 .agg-id{font-size:10px;font-weight:700;text-align:center;flex-shrink:0}
 .fields{width:100%;margin-top:4px;padding:5px 10px 5px;border-top:1px solid rgba(0,0,0,.15)}
 .fields ul{list-style:none;margin:0;padding:0}

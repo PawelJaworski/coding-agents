@@ -208,7 +208,12 @@ function parseMdText(text) {
       const key = rawKey.toLowerCase();
       switch (key) {
         case 'name': cur.name = val; break;
-        case 'actor': cur.actor = val; break;
+        case 'actor':
+          // Comma-separated actor names (`Actor: A, B`); `actor` keeps the raw
+          // line, `actors` the parsed list (one name = one-element list).
+          cur.actor = val;
+          cur.actors = val.split(',').map((s) => s.trim()).filter(Boolean);
+          break;
         case 'type':
           // Free-form display hint — value can be anything (no enum). Used by
           // uis.md (html, pdf, ...) and translators.md (whatever the team calls
@@ -458,16 +463,31 @@ function loadDefinedTerms(inputDir) {
   return terms;
 }
 
+// `Actor: A, B` names one actor GROUP: de-duplicated, order-insensitive for
+// identity (so `A, B` and `B, A` share one swimlane); display keeps the
+// order written on the line that first introduced the group.
+function normalizeActors(actors) {
+  const out = [];
+  (actors || []).forEach((a) => { if (a && !out.includes(a)) out.push(a); });
+  return out;
+}
+
+// Placement key of an actor group — same key = same swimlane.
+function actorGroupKey(actors) {
+  return normalizeActors(actors).slice().sort().join(' | ');
+}
+
 // Non-blocking: warn (don't throw) about commands' effective actors (from
 // uis.md) that aren't documented in docs/business-definitions.html.
 // Ubiquitous-language drift here is a business-intent question, not
 // something the generator should silently accept or silently block on —
 // surface it and require a human to confirm before it's treated as final.
+// Each name on a multi-actor `Actor:` line is checked on its own.
 function checkActorsAgainstDefinitions(commands, inputDir) {
   const terms = loadDefinedTerms(inputDir);
   if (!terms) return;
   const actors = new Set();
-  commands.forEach((c) => { if (c.actor) actors.add(c.actor); });
+  commands.forEach((c) => (c.actors || []).forEach((a) => actors.add(a)));
   const undefinedActors = [...actors].filter((a) => !terms.has(a.toLowerCase()));
   if (undefinedActors.length) {
     console.warn(
@@ -510,7 +530,11 @@ function buildModel(inputDir) {
   //    rightmost source read model's column, with one arrow per source.
   // `Type:` (html, pdf, ...) is a free-form display hint only; linkage is by id.
   const uiById = {};
-  uis.forEach((u) => { uiById[u.id] = u; });
+  uis.forEach((u) => {
+    u.actors = normalizeActors(u.actors);
+    u.actorKey = u.actors.length ? actorGroupKey(u.actors) : undefined;
+    uiById[u.id] = u;
+  });
   const commandIds = new Set(commands.map((c) => c.id));
   const readmodelIds = new Set(readmodels.map((r) => r.id));
 
@@ -558,16 +582,17 @@ function buildModel(inputDir) {
     }
   });
   // Sanity: all UIs fanning into the same command must share the same
-  // actor — a command's role-row placement is keyed by a single actor, so
-  // conflicting actors across triggering UIs would be ambiguous and must
-  // be surfaced rather than guessed at (e.g. silently picking the first).
+  // actor group — a command's role-row placement is keyed by a single actor
+  // swimlane, so conflicting actors across triggering UIs would be ambiguous
+  // and must be surfaced rather than guessed at (e.g. silently picking the
+  // first). Group equality is set-based: `A, B` matches `B, A`.
   Object.keys(triggerUiForCommand).forEach((cmdId) => {
     const list = triggerUiForCommand[cmdId];
-    const actors = new Set(list.map((u) => u.actor));
-    if (actors.size > 1) {
+    const actorGroups = new Set(list.map((u) => u.actorKey));
+    if (actorGroups.size > 1) {
       throw new Error(
-        `Command "${cmdId}" is triggered by UIs with different actors — ${list.map((u) => `${u.id}:${u.actor}`).join(', ')}. ` +
-        `All UIs triggering the same command must share the same Actor:.`
+        `Command "${cmdId}" is triggered by UIs with different actors — ${list.map((u) => `${u.id}:${u.actor || '(none)'}`).join(', ')}. ` +
+        `All UIs triggering the same command must share the same Actor: (same actors, any order).`
       );
     }
   });
@@ -611,7 +636,14 @@ function buildModel(inputDir) {
       `Commands no longer carry Actor: directly; move it to a matching "## ${commandsWithInlineActor[0].id}" entry in uis.md instead.`
     );
   }
-  commands.forEach((c) => { c.actor = triggerUiForCommand[c.id] ? triggerUiForCommand[c.id][0].actor : undefined; });
+  // A human command inherits its actor group (raw `actor` + parsed list/key)
+  // from its triggering UI.
+  commands.forEach((c) => {
+    const src = triggerUiForCommand[c.id] ? triggerUiForCommand[c.id][0] : undefined;
+    c.actor = src ? src.actor : undefined;
+    c.actors = src ? src.actors : undefined;
+    c.actorKey = src ? src.actorKey : undefined;
+  });
 
   commands.forEach((c) => { if (!c.name) c.name = c.id; c._h = cardHeight(c.aggregateId ? CMD_H + AGG_ID_H : CMD_H, c.fields); });
   const defaultSubprocess = (events[0] && events[0].subprocess) || 'Default';
@@ -981,12 +1013,17 @@ function buildModel(inputDir) {
   const wiredAsTrigger = new Set(Object.values(triggerUiForCommand).flat().map((u) => u.id));
   const standaloneUis = uis.filter((u) => !wiredAsTrigger.has(u.id) && !uiSources[u.id]);
 
+  // One swimlane per actor group (`{ key, actors }`), collected in order
+  // first encountered from command- and read-model-linked UIs alike — a
+  // multi-actor `Actor: A, B` line is ONE row, not two.
   const roles = [];
-  commands.forEach((c) => {
-    if (c.actor && !roles.includes(c.actor)) roles.push(c.actor);
-  });
+  const addRole = (actorKey, actors) => {
+    if (!actorKey || roles.some((r) => r.key === actorKey)) return;
+    roles.push({ key: actorKey, actors });
+  };
+  commands.forEach((c) => { addRole(c.actorKey, c.actors); });
   uis.forEach((ui) => {
-    if (uiSources[ui.id] && ui.actor && !roles.includes(ui.actor)) roles.push(ui.actor);
+    if (uiSources[ui.id]) addRole(ui.actorKey, ui.actors);
   });
   // A command is automated ("System") when it declares `Observes:` — that's
   // the sole signal now that commands no longer carry an `Actor:` label.
@@ -1183,13 +1220,15 @@ function renderTable(model, geo) {
   if (standaloneUis.length) {
     const cards = standaloneUis.map((u) => {
       const label = u.typeHint ? u.typeHint.toUpperCase() : 'UI';
-      return `<div class="card ui-card standalone-ui" data-element="ui-${u.id}" data-type="ui" title="ui-${u.id} — standalone UI (no Triggers:, no view) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(u.name || u.id)}</div>${u.actor ? `<div class="caption">${escapeHtml(u.actor)}</div>` : ''}</div>`;
+      return `<div class="card ui-card standalone-ui" data-element="ui-${u.id}" data-type="ui" title="ui-${u.id} — standalone UI (no Triggers:, no view) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(u.name || u.id)}</div>${u.actors && u.actors.length ? `<div class="caption">${u.actors.map((a) => escapeHtml(a)).join('<br>')}</div>` : ''}</div>`;
     }).join('');
     standaloneRow = `<tr style="height:${STANDALONE_H}px"><td class="gutter standalone-gutter">Unwired UIs</td><td class="lane-cell standalone-cell" colspan="${columns.length}"><div class="standalone-row">${cards}</div></td></tr>`;
   }
 
   const roleRows = roles.map((role, r) => {
-    let cells = `<td class="gutter role-gutter" style="background:${roleColor(r)}">${escapeHtml(role)}</td>`;
+    // One name per line in the gutter (multi-actor group).
+    const roleLabel = role.actors.map((a) => escapeHtml(a)).join('<br>');
+    let cells = `<td class="gutter role-gutter" style="background:${roleColor(r)}">${roleLabel}</td>`;
     columns.forEach((c, i) => {
       let content = '';
       if (c.type === 'event') {
@@ -1198,7 +1237,7 @@ function renderTable(model, geo) {
         // (leftmost) produced event's column — the command card lives there,
         // so the UI stack stays above it even when the command produces
         // several events.
-        if (cmd && cmd.actor === role && commandPrimaryEvent[cmd.id] === c.eventId) {
+        if (cmd && cmd.actorKey === role.key && commandPrimaryEvent[cmd.id] === c.eventId) {
           // Fan-in: a command may be triggered by more than one UI (e.g. an
           // explicit Triggers: claim plus an id-match claim, or several
           // distinct entry-point scenarios) — render one box per triggering
@@ -1218,7 +1257,7 @@ function renderTable(model, geo) {
       // matching a single read model's column, so it also works when its
       // own id doesn't equal any read model id (a purely composite UI).
       if (!content) {
-        const outUi = uis.find((u) => uiPlacementCol[u.id] === i && u.actor === role);
+        const outUi = uis.find((u) => uiPlacementCol[u.id] === i && u.actorKey === role.key);
         if (outUi) {
           const label = outUi.typeHint ? outUi.typeHint.toUpperCase() : 'UI';
           const elementId = outputUiElementId(outUi.id);
@@ -1298,7 +1337,7 @@ function renderTable(model, geo) {
 function renderArrows(model, geo) {
   const { commands, events, readmodels, uiById, triggerUiForCommand, uis, uiSources, uiPlacementCol, eventProducer, commandPrimaryEvent, columns, roles, subprocesses, colIndexForEvent, colIndexForView, externalEvents, externalSystems, colIndexForExt, translatorBoxes, translatorElementId } = model;
   const arrows = [];
-  const roleIndex = (actor) => roles.indexOf(actor);
+  const roleIndexByKey = (key) => roles.findIndex((rr) => rr.key === key);
 
   columns.forEach((c, i) => {
     if (c.type !== 'event') return;
@@ -1323,8 +1362,8 @@ function renderArrows(model, geo) {
         // A command with no matching uis.md entry (no id-match, no Triggers:)
         // has no actor, hence no UI card and no swimlane row — and therefore
         // no trigger arrow. Only commands with a real trigger UI get one.
-        if (cmd.actor !== undefined) {
-          const r = roleIndex(cmd.actor);
+        if (cmd.actorKey !== undefined) {
+          const r = roleIndexByKey(cmd.actorKey);
           const roleBottom = geo.roleCenterY(r) + UI_H / 2;
           // Fan-in: draw one arrow per triggering UI, each anchored under its
           // own box's x position within the fanned-in row (mirrors the CSS
@@ -1417,8 +1456,8 @@ function renderArrows(model, geo) {
   // vertical arrow, any other source is routed sideways into it first.
   uis.forEach((ui) => {
     const srcs = uiSources[ui.id];
-    if (!srcs || !ui.actor) return;
-    const r = roles.indexOf(ui.actor);
+    if (!srcs || !ui.actorKey) return;
+    const r = roleIndexByKey(ui.actorKey);
     if (r === -1) return;
     const placementIdx = uiPlacementCol[ui.id];
     const uiCx = geo.colCenterX(placementIdx);

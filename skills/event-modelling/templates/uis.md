@@ -20,12 +20,14 @@ Triggers: issue-policy, cancel-policy
 ## policy-document
 Type: pdf
 Name: Policy Document
-Actor: Policy Holder
+Actor: Policy Holder, Insurance Agent
+
+An `Actor:` line may name several actors, comma-separated (order does not matter).
 
 ## agent-dashboard
 Type: html
 Name: Agent Dashboard
-Actor: Insurance Agent
+Actor: Insurance Agent, Policy Holder
 ConsistsOf: policy-status, underwriting-queue
 
 The entry below is intentionally left unwired: its id matches neither a

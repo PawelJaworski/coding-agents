@@ -203,6 +203,8 @@ Produces: submit-policy-application
   it, to whichever command or read model that UI is linked to (see `uis.md`
   linkage below). Commands **never** carry `Actor:` themselves — the script
   throws if `commands.md` has one (see "No inline command Actor" below).
+  May name several actors, comma-separated (`Actor: A, B`) — one swimlane,
+  each name on its own line in its gutter.
 - `Observes:` (one event id) marks a command as **automated**: the sole
   signal that a command is a `System` command is having `Observes:` — there
   is no explicit `Actor: System` anymore. A command is either automated
@@ -312,8 +314,8 @@ views):
   trigger the `issue-policy` command — the diagram shows two boxes
   (`policy-proposal` and `issue-policy`) feeding into it. The only
   constraint: all UIs fanning into the same command must share the same
-  `Actor:` (a command's role-row placement is a single swimlane) — the
-  script throws if they don't.
+  `Actor:` names in any order (a command's role-row placement is a single
+  swimlane) — the script throws if they don't.
 - `Triggers:` accepts a **comma-separated list of command ids**
   (`Triggers: create-policy-proposal, issue-policy`) to link one `uis.md`
   entry to several commands at once. The markdown stays a single `##
@@ -464,7 +466,7 @@ fields a card has.
 ### Structure
 
 Rows top→bottom: time badges → **Bots swimlane (only if translators exist)** →
-one swimlane per human actor (from `uis.md`
+one swimlane per human actor group (from `uis.md`
 `Actor:` on command- or read-model-linked entries) → System swimlane (only
 if any command has `Observes:`) → a single free-space **mid-row** holding
 every command *and* every read-model card → one swimlane per `Subprocess` →

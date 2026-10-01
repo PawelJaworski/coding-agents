@@ -2,7 +2,7 @@
 /*
  * Unit tests for generate.js — parsing + validation rules.
  *
- * Run with: node --test .opencode/skills/event-modelling/scripts/
+ * Run with: node --test .opencode/skills/event-modelling/scripts/generate.test.js
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -202,9 +202,24 @@ ConsistsOf: view-a, view-b
 `);
   assert.equal(items.length, 1);
   assert.equal(items[0].actor, 'Clerk');
+  assert.deepEqual(items[0].actors, ['Clerk']); // single actor is a one-element list
   assert.equal(items[0].typeHint, 'html');
   assert.deepEqual(items[0].triggers, ['cmd-a', 'cmd-b']);
   assert.deepEqual(items[0].consistsOf, ['view-a', 'view-b']);
+});
+
+test('parseMdText splits a comma-separated Actor: line into one actor per name', () => {
+  const items = parseMdText(`
+## some-ui
+Name: Some UI
+Actor: Insurance Agent, Policy Holder
+Type: html
+`);
+  assert.equal(items.length, 1);
+  // The raw line is kept as written (error messages), while `actors` is the
+  // parsed list every placement/rendering rule uses.
+  assert.equal(items[0].actor, 'Insurance Agent, Policy Holder');
+  assert.deepEqual(items[0].actors, ['Insurance Agent', 'Policy Holder']);
 });
 
 test('parseMdText parses multiple headings into separate items', () => {
@@ -819,6 +834,140 @@ Type: html
   const geo = computeGeometry(model);
   const svg = renderArrows(model, geo);
   assert.match(svg, /data-kind="displays"/);
+});
+
+// ---------------------------------------------------------------------------
+// Multi-actor `Actor:` lines (`Actor: Insurance Agent, Policy Holder`) — the
+// named actors form ONE actor group: a single swimlane whose gutter label
+// lists each actor on its own line (a command's role-row placement stays a
+// single swimlane even when several actors share the UI).
+// ---------------------------------------------------------------------------
+
+test('a multi-actor Actor: line is ONE swimlane whose gutter lists each actor on its own line', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Insurance Agent, Policy Holder
+Type: html
+`,
+  });
+  const model = buildModel(dir);
+  assert.equal(model.roles.length, 1);
+  assert.deepEqual(model.roles[0].actors, ['Insurance Agent', 'Policy Holder']);
+  const html = renderTable(model, computeGeometry(model));
+  assert.match(html, /class="gutter role-gutter"[^>]*>Insurance Agent<br>Policy Holder</);
+  // The UI is still one card in that single swimlane, with one trigger arrow.
+  assert.equal((html.match(/data-element="ui-add-policy-holder--triggers-add-policy-holder"/g) || []).length, 1);
+  const svg = renderArrows(model, computeGeometry(model));
+  assert.equal((svg.match(/data-kind="triggers"/g) || []).length, 1);
+});
+
+test('buildModel matches actor groups regardless of written order (fan-in UIs share one swimlane)', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Insurance Agent, Policy Holder
+
+## second-entry
+Name: Second Entry Point
+Actor: Policy Holder, Insurance Agent
+Triggers: add-policy-holder
+`,
+  });
+  const model = buildModel(dir);
+  // `A, B` and `B, A` name the same actor set — one swimlane, one gutter label.
+  assert.equal(model.roles.length, 1);
+  const html = renderTable(model, computeGeometry(model));
+  assert.equal((html.match(/role-gutter/g) || []).length, 1);
+});
+
+test('buildModel throws when UIs fanning into one command name different actor groups', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Insurance Agent, Policy Holder
+
+## second-entry
+Name: Second Entry Point
+Actor: Insurance Agent
+Triggers: add-policy-holder
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /different actors/
+  );
+});
+
+test('an output UI naming the same actors as the trigger UI shares the swimlane and keeps its "displays" edge', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Insurance Agent, Policy Holder
+
+## policy-holder-view
+Name: Policy Holder View Screen
+Actor: Policy Holder, Insurance Agent
+Type: html
+`,
+  });
+  const model = buildModel(dir);
+  assert.equal(model.roles.length, 1);
+  const svg = renderArrows(model, computeGeometry(model));
+  assert.equal((svg.match(/data-kind="displays"/g) || []).length, 1);
+  assert.equal((svg.match(/data-kind="triggers"/g) || []).length, 1);
+});
+
+test('renderTable lists each actor of a standalone UI on its own line in the caption', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Clerk
+
+## policy-holder-portal
+Name: Policy Holder Portal
+Type: html
+Actor: Insurance Agent, Policy Holder
+`,
+  });
+  const model = buildModel(dir);
+  const html = renderTable(model, computeGeometry(model));
+  assert.match(html, /class="caption">Insurance Agent<br>Policy Holder<\/div>/);
+  assert.match(html, /Unwired UIs/);
+});
+
+test('the definitions warning reports each undefined actor of a multi-actor line separately', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Insurance Agent, Policy Holder
+Type: html
+`,
+  });
+  fs.mkdirSync(path.join(dir, 'docs'));
+  fs.writeFileSync(
+    path.join(dir, 'docs', 'business-definitions.html'),
+    '<span data-name="Insurance Agent"></span>'
+  );
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (msg) => { warnings.push(String(msg)); };
+  try {
+    buildModel(dir);
+  } finally {
+    console.warn = origWarn;
+  }
+  // "Insurance Agent" is documented; only the undocumented "Policy Holder"
+  // is reported — the line is never treated as one composite term.
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Policy Holder/);
+  assert.doesNotMatch(warnings[0], /Insurance Agent/);
 });
 
 test('fan-out and output copies of one UI use distinct interaction node ids', () => {

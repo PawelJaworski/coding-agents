@@ -1458,11 +1458,13 @@ test('renderPage includes GWT modal CSS styles', () => {
 /*
  * Loads reference/interactivity.js in a vm sandbox against a minimal fake DOM
  * built from a list of cards and arrows, then returns a helper to click a card
- * and read back which cards ended up dimmed.
+ * and read back which cards survived the filter (the visible set passed to
+ * the EM_RENDER stub). Filtering HIDES non-connected cards entirely.
  */
 function loadInteractivity({ cards, arrows }) {
   const vm = require('node:vm');
   const scrollCalls = [];
+  let lastVisible = [...cards]; // EM_RENDER(null) = everything visible
 
   const mkNode = (attrs) => {
     const classes = new Set();
@@ -1498,11 +1500,19 @@ function loadInteractivity({ cards, arrows }) {
     };
   };
 
-  const cardNodes = cards.map((id) => mkNode({ 'data-element': id }));
+  const cardNodes = cards.map((id) => {
+    const n = mkNode({ 'data-element': id });
+    // Delegated clicks resolve the card via e.target.closest('.card').
+    n.closest = (sel) => (sel === '.card' ? n : null);
+    return n;
+  });
   const arrowNodes = arrows.map(([from, to, kind]) =>
     mkNode({ 'data-from': from, 'data-to': to, 'data-kind': kind }));
 
+  // interactivity.js binds its delegated listeners on document.querySelector
+  // ('.wrap') — the stub returns `noop`, so that IS the wrap node here.
   const noop = mkNode({});
+  const wrap = noop;
   const document = {
     querySelectorAll(sel) {
       if (sel === '.card') return cardNodes;
@@ -1514,47 +1524,52 @@ function loadInteractivity({ cards, arrows }) {
     addEventListener() {},
   };
 
+  // The browser glue calls EM_RENDER(visibleIdsOrNull) on every filter
+  // change; the stub records the surviving card ids instead of re-rendering.
+  function EM_RENDER(visibleIds) {
+    lastVisible = visibleIds ? cards.filter((c) => visibleIds[c]) : [...cards];
+  }
+
   const src = fs.readFileSync(
     path.join(__dirname, '..', 'reference', 'interactivity.js'), 'utf8');
   vm.runInNewContext(src, {
     document,
+    EM_RENDER,
     window: {
       scrollBy(x, y) { scrollCalls.push([x, y]); },
     },
   });
 
+  const visibleNow = () => [...lastVisible].sort();
   return {
     clickCard(id) {
-      cardNodes[cards.indexOf(id)].click();
-      return {
-        dimmed: cards.filter((c, i) => cardNodes[i].has('dim')),
-        highlighted: cards.filter((c, i) => !cardNodes[i].has('dim')),
-      };
+      wrap.dispatch('click', { target: cardNodes[cards.indexOf(id)] });
+      return { visible: visibleNow(), hidden: cards.filter((c) => !lastVisible.includes(c)).sort() };
     },
     clickBackground() {
-      noop.dispatch('click');
-      return cards.filter((c, i) => !cardNodes[i].has('dim'));
+      wrap.dispatch('click', { target: noop });
+      return visibleNow();
     },
     dragBackground(from, to) {
       const pointerId = 1;
-      noop.dispatch('pointerdown', {
+      wrap.dispatch('pointerdown', {
         button: 0,
         pointerId,
         clientX: from.x,
         clientY: from.y,
         target: { closest: () => null },
       });
-      noop.dispatch('pointermove', {
+      wrap.dispatch('pointermove', {
         pointerId,
         clientX: to.x,
         clientY: to.y,
       });
-      noop.dispatch('pointerup', { pointerId });
-      noop.dispatch('click');
+      wrap.dispatch('pointerup', { pointerId });
+      wrap.dispatch('click', { target: noop });
       return {
         scrollCalls: [...scrollCalls],
-        isPanning: noop.has('is-panning'),
-        highlighted: cards.filter((c, i) => !cardNodes[i].has('dim')),
+        isPanning: wrap.has('is-panning'),
+        visible: visibleNow(),
       };
     },
   };
@@ -1579,12 +1594,12 @@ const INTERACTIVITY_FIXTURE = {
   ],
 };
 
-test('clicking an output UI keeps its upstream chain undimmed (not everything greyed)', () => {
+test('clicking an output UI keeps its upstream chain visible (unrelated cards hidden)', () => {
   const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
-  const { highlighted, dimmed } = dom.clickCard('ui-policy-details');
+  const { visible, hidden } = dom.clickCard('ui-policy-details');
 
   // The whole upstream slice behind the clicked UI stays visible.
-  assert.deepEqual(highlighted.sort(), [
+  assert.deepEqual(visible, [
     'cmd-issue-policy',
     'evt-policy-issued',
     'rm-policy-details',
@@ -1592,17 +1607,17 @@ test('clicking an output UI keeps its upstream chain undimmed (not everything gr
     'ui-policy-details',
   ].sort());
 
-  // ...and only the genuinely unrelated card is dimmed.
-  assert.deepEqual(dimmed, ['rm-unrelated']);
+  // ...and only the genuinely unrelated card is hidden.
+  assert.deepEqual(hidden, ['rm-unrelated']);
 });
 
 test('a UI reached as an ancestor is still terminal — its displays edge is not walked', () => {
   const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
-  const { highlighted } = dom.clickCard('rm-policy-details');
+  const { visible } = dom.clickCard('rm-policy-details');
 
   // ui-issue-policy is pulled in via its "triggers" edge, but the read model
   // it happens to display (rm-unrelated) must NOT be.
-  assert.deepEqual(highlighted.sort(), [
+  assert.deepEqual(visible, [
     'cmd-issue-policy',
     'evt-policy-issued',
     'rm-policy-details',
@@ -1610,11 +1625,11 @@ test('a UI reached as an ancestor is still terminal — its displays edge is not
   ].sort());
 });
 
-test('clicking an input UI highlights its complete downstream slice', () => {
+test('clicking an input UI shows its complete downstream slice', () => {
   const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
-  const { highlighted } = dom.clickCard('ui-issue-policy');
+  const { visible } = dom.clickCard('ui-issue-policy');
 
-  assert.deepEqual(highlighted.sort(), [
+  assert.deepEqual(visible, [
     'cmd-issue-policy',
     'evt-policy-issued',
     'rm-policy-details',
@@ -1625,12 +1640,12 @@ test('clicking an input UI highlights its complete downstream slice', () => {
 
 test('dragging the diagram background pans without clearing the current focus', () => {
   const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
-  const focused = dom.clickCard('rm-policy-details').highlighted.sort();
+  const focused = dom.clickCard('rm-policy-details').visible;
   const result = dom.dragBackground({ x: 120, y: 80 }, { x: 75, y: 65 });
 
   assert.deepEqual(result.scrollCalls, [[45, 15]]);
   assert.equal(result.isPanning, false);
-  assert.deepEqual(result.highlighted.sort(), focused);
+  assert.deepEqual(result.visible, focused);
 });
 
 test('clicking the diagram background without dragging still clears focus', () => {
@@ -1640,7 +1655,7 @@ test('clicking the diagram background without dragging still clears focus', () =
   assert.deepEqual(dom.clickBackground().sort(), INTERACTIVITY_FIXTURE.cards.sort());
 });
 
-test('clicking a command fed by a fan-out UI highlights only its visual UI copy', () => {
+test('clicking a command fed by a fan-out UI shows only its visual UI copy', () => {
   const fixture = {
     cards: [
       'ui-shared--triggers-cmd-a',
@@ -1664,7 +1679,7 @@ test('clicking a command fed by a fan-out UI highlights only its visual UI copy'
   };
   const dom = loadInteractivity(fixture);
 
-  assert.deepEqual(dom.clickCard('cmd-a').highlighted.sort(), [
+  assert.deepEqual(dom.clickCard('cmd-a').visible, [
     'cmd-a',
     'ui-shared--triggers-cmd-a',
   ].sort());
@@ -1693,7 +1708,7 @@ test('clicking one fan-out UI copy follows only that copy command slice', () => 
   };
   const dom = loadInteractivity(fixture);
 
-  assert.deepEqual(dom.clickCard('ui-shared--triggers-cmd-a').highlighted.sort(), [
+  assert.deepEqual(dom.clickCard('ui-shared--triggers-cmd-a').visible, [
     'cmd-a',
     'evt-a',
     'rm-a',
@@ -2104,7 +2119,7 @@ test('interactivity: clicking an external event walks forward through translator
     ],
   };
   const dom = loadInteractivity(fixture);
-  assert.deepEqual(dom.clickCard('ext-application-received').highlighted.sort(), [
+  assert.deepEqual(dom.clickCard('ext-application-received').visible, [
     'add-policy-holder',
     'ext-application-received',
     'policy-holder-added',
@@ -2130,10 +2145,246 @@ test('interactivity: clicking a translator walks forward through the command/eve
     ],
   };
   const dom = loadInteractivity(fixture);
-  assert.deepEqual(dom.clickCard('tr-translate-application--cmd-add-policy-holder').highlighted.sort(), [
+  assert.deepEqual(dom.clickCard('tr-translate-application--cmd-add-policy-holder').visible, [
     'add-policy-holder',
     'policy-holder-added',
     'policy-holder-view',
     'tr-translate-application--cmd-add-policy-holder',
   ].sort());
+});
+
+// ---------------------------------------------------------------------------
+// Responsive filtering (visibility-aware layout — placeCards registry)
+// ---------------------------------------------------------------------------
+
+const LAYOUT = require('./layout.js');
+
+function idsIn(html) {
+  return [...html.matchAll(/data-element="([^"]*)"/g)].map((m) => m[1]).sort();
+}
+
+test('placeCards registry matches renderTable 1:1 (every card drawn is registered, with its height)', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  const registry = LAYOUT.placeCards(model);
+  assert.deepEqual(registry.map((c) => c.id).sort(), idsIn(html));
+  registry.forEach((c) => {
+    const card = new RegExp(`data-element="${c.id}"[^>]*style="height:${c.h}px"|style="height:${c.h}px"[^>]*data-element="${c.id}"`);
+    // every registered size must be the size actually rendered
+    assert.ok(c.w > 0 && c.h > 0, `${c.id} has a real box size`);
+    if (c.kind !== 'ui' && c.kind !== 'standalone-ui') {
+      assert.ok(card.test(html), `${c.id} renders at height ${c.h}px`);
+    }
+  });
+});
+
+test('a hidden card leaves the table entirely — and so do arrows with a hidden endpoint', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const visible = new Set(['add-policy-holder', 'policy-holder-added']);
+  const { html } = LAYOUT.wrapInnerHtml(model, visible);
+  assert.ok(!html.includes('data-element="policy-holder-view"'), 'hidden read model is gone');
+  assert.ok(!html.includes('data-element="tr-translate-application--cmd-add-policy-holder"'), 'hidden translator is gone');
+  assert.ok(html.includes('data-element="add-policy-holder"'), 'visible command stays');
+  assert.ok(html.includes('data-element="policy-holder-added"'), 'visible event stays');
+  // arrows: cmd -> evt survives; evt -> view and ext -> tr are gone
+  assert.ok(html.includes('data-from="add-policy-holder" data-to="policy-holder-added"'));
+  assert.ok(!html.includes('data-to="policy-holder-view"'), 'arrow into hidden read model is gone');
+  assert.ok(!html.includes('data-to="tr-translate-application--cmd-add-policy-holder"'), 'arrow into hidden translator is gone');
+});
+
+test('columns without visible cards collapse to zero width and later columns shift left', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const full = LAYOUT.wrapInnerHtml(model, null);
+  const visible = new Set(['add-policy-holder', 'policy-holder-added']);
+  const filtered = LAYOUT.wrapInnerHtml(model, visible);
+  // 3 columns unfiltered (ext + event + view); only the event column survives
+  assert.equal(full.geo.width - filtered.geo.width, 2 * LAYOUT.COL);
+  assert.equal(filtered.geo.colActive.filter(Boolean).length, 1);
+  // the surviving column is centered where column 0 lives, not column 1
+  const evtCol = LAYOUT.colIndexForEvent(model, 'policy-holder-added');
+  assert.equal(filtered.geo.colCenterX(evtCol), LAYOUT.GUT + LAYOUT.COL / 2);
+  // table colgroup must zero out the collapsed columns (no gaps)
+  const zeroCols = (filtered.html.match(/<col style="width:0px">/g) || []).length;
+  assert.equal(zeroCols, 2);
+});
+
+test('rows without visible cards drop out of the table and row heights re-fit to the tallest visible card', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  // Give the read model many fields so the mid row is tall; hiding it must
+  // shrink the mid row to the command's height.
+  const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
+  const cmd = model.commands.find((c) => c.id === 'add-policy-holder');
+  const full = LAYOUT.wrapInnerHtml(model, null);
+  assert.ok(full.geo.midRowH > LAYOUT.rowHeightFor(cmd._h, LAYOUT.MID_H), 'read model makes the row tall');
+  // Hide everything but the command (mid row keeps one short card) + its UI.
+  const visible = new Set(['add-policy-holder', 'ui-add-policy-holder--triggers-add-policy-holder']);
+  const filtered = LAYOUT.wrapInnerHtml(model, visible);
+  assert.equal(filtered.geo.midRowH, LAYOUT.rowHeightFor(cmd._h, LAYOUT.MID_H), 'mid row re-fits to the visible card');
+  assert.ok(!filtered.html.includes('policy-holder-view process'), 'no dead rows');
+  assert.ok(!filtered.html.includes('Underwriter Portal'), 'external lane gone with its only card');
+  assert.ok(!filtered.html.includes('Bots</td>'), 'bots lane gone with its only card');
+  // unfiltered: rows present
+  assert.ok(full.html.includes('Underwriter Portal'));
+  assert.ok(full.html.includes('Bots</td>'));
+  void rm;
+});
+
+test('the System routing band exists only while a visible automation/translation edge routes through it', () => {
+  const dir = makeFixtureDir({
+    'commands.md': `
+## issue-policy
+Name: Issue Policy
+Produces: policy-issued
+* x
+## auto-cmd
+Name: Auto Cmd
+Observes: policy-issued
+Produces: policy-posted
+* y
+`,
+    'events.md': `
+## policy-issued
+policy:Id
+Name: Policy Issued
+Subprocess: Policy
+* x
+## policy-posted
+policy:Id
+Name: Policy Posted
+Subprocess: Policy
+* y
+`,
+    'readmodels.md': `
+## policy-view
+Name: Policy View
+Subscribes: policy-issued
+policy:Key
+* x
+`,
+    'uis.md': `
+## issue-policy
+Type: html
+Name: Issue Policy
+Actor: Clerk
+`,
+  });
+  const model = buildModel(dir);
+  assert.equal(model.hasSystem, true);
+  assert.ok(LAYOUT.wrapInnerHtml(model, null).html.includes('sys-gutter'), 'unfiltered: System band present');
+  // Human slice only — no visible automation edge routes through the band.
+  const visible = new Set(['issue-policy', 'ui-issue-policy--triggers-issue-policy', 'policy-issued']);
+  const filtered = LAYOUT.wrapInnerHtml(model, visible);
+  assert.equal(filtered.geo.sysH, 0, 'band collapses when unused');
+  assert.ok(!filtered.html.includes('sys-gutter'), 'no gap where the band was');
+  // Automated command + its observed event both visible -> band is back.
+  const withAuto = new Set(['auto-cmd', 'policy-issued', 'policy-posted']);
+  const filtered2 = LAYOUT.wrapInnerHtml(model, withAuto);
+  assert.equal(filtered2.geo.sysH, LAYOUT.SYS_H);
+  assert.ok(filtered2.html.includes('sys-gutter'));
+});
+
+test('wrapInnerHtml(model, null) equals the static page wrap content — no-JS page and JS re-render agree', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const tableHtml = renderTable(model, geo);
+  const arrowsHtml = renderArrows(model, geo);
+  const page = renderPage(model, geo, tableHtml, arrowsHtml);
+  const i = page.indexOf('<div class="wrap">') + '<div class="wrap">'.length;
+  const j = page.indexOf('</svg>\n</div>') + '</svg>'.length;
+  assert.equal(page.slice(i, j), '\n' + LAYOUT.wrapInnerHtml(model, null).html);
+});
+
+test('time badges keep their original story numbers when earlier events are filtered out (Q1)', () => {
+  const dir = makeFixtureDir({
+    'commands.md': `
+## cmd-a
+Name: Cmd A
+Produces: evt-a
+* x
+## cmd-b
+Name: Cmd B
+Produces: evt-b
+* y
+`,
+    'events.md': `
+## evt-a
+policy:Id
+Name: Evt A
+Subprocess: S
+* x
+## evt-b
+policy:Id
+Name: Evt B
+Subprocess: S
+* y
+`,
+    'readmodels.md': `
+## view-b
+Name: View B
+Subscribes: evt-b
+policy:Key
+* y
+`,
+    'uis.md': `
+## cmd-b
+Type: html
+Name: Cmd B
+Actor: Clerk
+`,
+  });
+  const model = buildModel(dir);
+  // Filter to the second slice only: its badge must still read "2", not "1".
+  const visible = new Set(['cmd-b', 'evt-b', 'ui-cmd-b--triggers-cmd-b']);
+  const { html } = LAYOUT.wrapInnerHtml(model, visible);
+  assert.ok(html.includes('time-badge">2<'), 'original story number kept');
+  assert.ok(!html.includes('time-badge">1<'), 'first badge hidden with its event');
+  // unfiltered: 1 and 2 both present
+  const full = LAYOUT.wrapInnerHtml(model, null).html;
+  assert.ok(full.includes('time-badge">1<') && full.includes('time-badge">2<'));
+});
+
+test('computeGeometry accepts the plain {id:true} map that connectedSet() builds (not just a Set)', () => {
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const mapShape = { 'add-policy-holder': true, 'policy-holder-added': true };
+  const setShape = new Set(['add-policy-holder', 'policy-holder-added']);
+  const a = computeGeometry(model, mapShape);
+  const b = computeGeometry(model, setShape);
+  assert.equal(a.width, b.width);
+  assert.equal(a.height, b.height);
+  assert.deepEqual(a.colActive, b.colActive);
+  // and a false-y entry in the map must NOT count as visible
+  const withFalse = { 'add-policy-holder': true, 'policy-holder-added': true, 'policy-holder-view': false };
+  const c = computeGeometry(model, withFalse);
+  assert.equal(c.width, a.width, 'false value = hidden');
+});
+
+test('the table fragment is self-describing: inline width, no baked CSS width (regression: stretched columns)', () => {
+  // The CSS used to bake `width:${geo.width}px` on the table. A browser
+  // re-render of a FILTERED layout left that stale full width in place, so
+  // table-layout:fixed stretched the surviving columns and pulled the cards
+  // out from under the correctly-computed arrow coordinates. The width must
+  // travel with the fragment instead.
+  const dir = translationFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  assert.ok(html.startsWith(`<table style="width:${geo.width}px">`), 'table carries its own width');
+  // and the stylesheet must not re-introduce a competing pixel width
+  const page = renderPage(model, geo, html, renderArrows(model, geo));
+  const css = page.slice(page.indexOf('<style>'), page.indexOf('</style>'));
+  const tableRule = css.match(/table\{[^}]*\}/)[0];
+  assert.ok(!/width:/.test(tableRule), 'no width in the table CSS rule');
+  // filtered render: the inline width must follow the collapsed geometry
+  const visible = new Set(['add-policy-holder', 'policy-holder-added']);
+  const fgeo = computeGeometry(model, visible);
+  const fhtml = renderTable(model, fgeo, visible);
+  assert.ok(fhtml.startsWith(`<table style="width:${fgeo.width}px">`));
+  assert.ok(fgeo.width < geo.width, 'filtered table is narrower');
 });

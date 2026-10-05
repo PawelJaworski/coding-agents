@@ -26,7 +26,10 @@ positioned `<svg>` arrow overlay, no external assets).
 
 **This is a generator, not a hand-drawing task.** All layout math (column
 placement, read-model insertion, row/column geometry, arrow coordinates) is
-implemented once in `scripts/generate.js`, a dependency-free Node script.
+implemented once: parsing/placement in `scripts/generate.js` and the shared
+geometry+render pipeline in `scripts/layout.js` (a dependency-free
+dual-environment module — the same file is required by the generator in Node
+and inlined into the page for browser re-rendering).
 **Do not hand-compute coordinates or re-derive the algorithm in prose** —
 run the script and let it emit the HTML deterministically. Only fall back to
 editing HTML by hand if the user asks for a one-off tweak that isn't worth
@@ -457,9 +460,13 @@ row stays its normal size and is just vertically centered in the taller row.
 Past 6 fields the list gets a fixed max-height and scrolls internally
 (`overflow-y:auto`) instead of growing forever. All arrow endpoints (event
 top edge, command top/bottom edge, read-model entry point) are computed from
-each element's own actual height (`element._h` in `scripts/generate.js`), not
-a shared constant, so arrows always land correctly regardless of how many
-fields a card has.
+each element's own actual height (`element._h`, set in `scripts/generate.js`
+from `cardHeight()` in `scripts/layout.js`), not a shared constant, so arrows
+always land correctly regardless of how many fields a card has.
+
+The same rule applies **under filtering**: row heights follow the tallest
+*visible* card, so hiding the tallest card of a row shrinks that row and the
+diagram re-flows around the survivors (see "Interactivity" below).
 
 ## Layout (what the generator does — read this if you need to extend it)
 
@@ -504,8 +511,8 @@ no two read models ever share a column.
 ### Geometry constants
 
 All layout constants (gutter/column width, row heights, card sizes,
-`AGG_ID_H` per identifying line) live as named `const`s near the top of the
-"2. Layout" section in `scripts/generate.js` — read them there, don't
+`AGG_ID_H` per identifying line) live as named `const`s at the top of
+`scripts/layout.js` — read them there, don't
 duplicate the numbers here (they're allowed to change; this doc shouldn't
 need an edit every time they do). `width`/`height` are derived from them plus
 the column/row counts (`T`, `R`, `P`) printed in the generator's stdout
@@ -557,26 +564,46 @@ meets a flat edge, not the rounded notch.
   read model's bottom/left/right edge. Multiple sources into the same edge
   are spread out so endpoints never coincide.
 
-### Interactivity
+### Interactivity (filtering = removal + re-flow)
 
-`reference/interactivity.js` is copied byte-identical into the page's
-`<script>` by the generator — **never hand-edit or rephrase it; edit the
-source file and the doc comments there instead.** It's normally an upstream
-click-to-focus filter (walks `data-from`/`data-to` edges backwards from the
-clicked card, dimming everything that isn't an ancestor). A clicked trigger
-UI copy is the exception: because it starts a slice and has no upstream
-ancestors, the traversal follows that copy's outgoing trigger and the
-resulting command/event/view chain forward. A UI reached as an ancestor is
-still terminal (its `displays` edge into a read model is not walked further),
-while a clicked output UI follows its own `displays` edge backwards. The full
-rationale is in the comments at the top of that file — read them there if you
-need to change the behavior, don't re-derive it here.
+The page embeds three scripts in its `<script>` block, in order: the model as
+`EM_MODEL` (plain JSON produced by `buildModel`), `scripts/layout.js`
+verbatim (exposed as `EMLayout` — the same geometry/render pipeline the
+generator runs in Node), and `reference/interactivity.js` verbatim. **never
+hand-edit or rephrase the two `.js` sources; edit the files and the doc
+comments there instead.**
+
+Click-to-focus computes the clicked card's connected set (walking
+`data-from`/`data-to` edges backwards from the clicked card, i.e. upstream
+ancestors) and calls `EM_RENDER(visibleIds)`, which re-runs
+`computeGeometry`/`renderTable`/`renderArrows` over the card registry
+(`placeCards`) for just the visible cards. The effect is **removal, not
+dimming**: cards outside the connected set disappear from the diagram, their
+columns collapse to zero width, their rows drop (and surviving rows re-fit to
+their tallest visible card), so no gaps are left behind. Arrows disappear
+with their endpoints (an arrow is drawn iff both endpoint cards are visible).
+A clicked trigger UI copy is the exception to the upstream walk: because it
+starts a slice and has no upstream ancestors, the traversal follows that
+copy's outgoing trigger and the resulting command/event/view chain forward.
+A UI reached as an ancestor is still terminal (its `displays` edge into a
+read model is not walked further), while a clicked output UI follows its own
+`displays` edge backwards. The full rationale is in the comments at the top
+of `interactivity.js` — read them there if you need to change the behavior,
+don't re-derive it here.
 Each arrow's `data-kind` (`triggers`/`produces`/`observes`/`observes-cmd`/
 `displays`/`translates`/`translates-cmd`) is what lets the traversal
 distinguish edge semantics.
 When one logical UI is rendered more than once, each visual trigger copy and
 its output/view copy use distinct `data-element` graph ids; the original
 markdown UI id remains available as `data-ui-id`.
+
+Because `EM_RENDER` replaces the table/SVG nodes, all click handling is
+**event delegation** on `.wrap` (`.card` and `.gwt-badge` resolved via
+`closest()`); the `EDGES` graph is captured once from the initial full DOM
+and never re-derived, so the walk still sees connections of currently hidden
+cards. The `EM_MODEL` JSON is only ever *read* by `layout.js`; the static
+no-JS page renders the identical full diagram (verified byte-identical to the
+JS re-render of `wrapInnerHtml(model, null)`).
 
 The diagram background also supports pointer drag-to-pan: press on empty
 space and drag to scroll the viewport horizontally or vertically. Cards and
@@ -647,7 +674,8 @@ edge-`kind` tagging. Run them with:
 node --test .opencode/skills/event-modelling/scripts/generate.test.js
 ```
 
-Run this after modifying `generate.js` or `reference/interactivity.js`.
+Run this after modifying `generate.js`, `scripts/layout.js` or
+`reference/interactivity.js`.
 
 # Diagram consistency
 Dataflow should be consistent. Attributes of read model should be derivated from related events.

@@ -11,11 +11,15 @@
  *   "observes", "observes-cmd", "displays", "translates", "translates-cmd")
  *   identifying the semantic edge type — see kind meanings below.
  * - the outer container has class "wrap"
- * - CSS defines .card.dim (dimmed) and .card.active (focused) states,
- *   a dim rule for arrows, and grab/grabbing cursors for .wrap, e.g.:
- *     .card.dim{opacity:.12}
+ * - a global EM_RENDER(visibleIds) that re-renders the table + SVG for the
+ *   given visible card-id set (null = everything), re-flowing rows/columns
+ *   so hidden cards leave NO gaps — provided by the page glue emitted by
+ *   generate.js on top of the inlined scripts/layout.js (EMLayout) and the
+ *   model JSON (EM_MODEL). Filtering HIDES cards entirely (they disappear
+ *   from the diagram) instead of dimming them.
+ * - CSS defines .card.active (focused) state and grab/grabbing cursors for
+ *   .wrap, e.g.:
  *     .card.active{outline:3px solid #333;outline-offset:2px}
- *     svg [data-from].dim{opacity:.08}
  *     .wrap{cursor:grab}
  *     .wrap.is-panning{cursor:grabbing}
  *
@@ -30,13 +34,17 @@
  *
  * Click-to-focus normally highlights the clicked card plus everything that
  * causally led to it (walking data-from backwards from data-to), i.e. its
- * upstream ancestors. Trigger UI copies are the deliberate exception: because
- * they are the first element in a slice and therefore have no ancestors,
- * clicking one walks forward from its own "triggers" edge through the command,
- * event, read models, automations, and output UIs in that represented slice.
+ * upstream ancestors. Everything outside that connected set is REMOVED from
+ * the diagram (not dimmed): EM_RENDER re-renders the table and the SVG arrow
+ * overlay containing only the visible cards, re-flowing rows and columns so
+ * no gaps remain where hidden cards were. Trigger UI copies are the
+ * deliberate exception: because they are the first element in a slice and
+ * therefore have no ancestors, clicking one walks forward from its own
+ * "triggers" edge through the command, event, read models, automations, and
+ * output UIs in that represented slice.
  * The same forward rule applies to External Events ("translates") and to
  * Translators ("translates-cmd"): they are start-of-slice nodes, so clicking
- * one lights up the whole translated slice instead of dimming everything.
+ * one shows the whole translated slice instead of hiding everything.
  *
  * UI cards are treated as TERMINAL ancestors: a UI reached as an ancestor
  * of some other card is included in the upstream set (via the "triggers"
@@ -46,15 +54,15 @@
  * displays is a separate, unrelated causal chain from what command that UI
  * triggers, so walking backward through "displays" would incorrectly pull
  * in an unconnected upstream slice. Concretely: clicking a read model
- * highlights the event that produced it, the command that produced that
+ * shows the event that produced it, the command that produced that
  * event, and the UI card(s) that trigger that command — but not whatever
  * read model those UI cards happen to display.
  *
  * EXCEPTION — the clicked card itself: when the START of the walk is an
  * output UI, its own "displays" edge IS its causal chain, so it is
- * followed. Clicking an output UI therefore highlights the read model it
+ * followed. Clicking an output UI therefore shows the read model it
  * displays, the events feeding that read model, and the commands/UIs
- * behind them — instead of dimming the entire diagram.
+ * behind them — instead of collapsing the diagram to just the UI card.
  */
 var EDGES=[];
 document.querySelectorAll('[data-from]').forEach(function(l){
@@ -98,7 +106,7 @@ function connectedSet(startId){
       // Don't walk PAST a UI's "displays" edge when the UI was merely reached
       // as an ancestor of something else. But when the clicked card IS the
       // output UI itself, its "displays" edge is exactly its own causal chain,
-      // so it must be followed — otherwise clicking an output UI dims
+      // so it must be followed — otherwise clicking an output UI would hide
       // everything, including its genuine upstream read model/events/commands.
       if(e[2]==='displays' && id!==startId) return;
       if(!seen[e[0]]){seen[e[0]]=true;queue.push(e[0]);}
@@ -107,25 +115,41 @@ function connectedSet(startId){
   return seen;
 }
 function refresh(){
+  // The connected set is the visibility map: cards in it survive, everything
+  // else is REMOVED and the diagram re-flows around the survivors (no gaps).
+  // EM_RENDER rebuilds the table + SVG from the card registry in EM_MODEL —
+  // EDGES above stays the FULL graph (captured once at load), so the walk
+  // still sees hidden cards' connections.
   var set = focused ? connectedSet(focused) : null;
+  EM_RENDER(set);
   document.querySelectorAll('.card').forEach(function(c){
-    var id=c.getAttribute('data-element');
-    c.classList.toggle('active', id===focused);
-    c.classList.toggle('dim', !!set && !set[id]);
-  });
-  document.querySelectorAll('[data-from]').forEach(function(l){
-    var from=l.getAttribute('data-from'), to=l.getAttribute('data-to');
-    var visible = !set || (set[from] && set[to]);
-    l.classList.toggle('dim', !visible);
+    c.classList.toggle('active', c.getAttribute('data-element')===focused);
   });
 }
-document.querySelectorAll('.card').forEach(function(c){
-  c.addEventListener('click',function(e){
+// Event delegation on .wrap — re-rendering (EM_RENDER) replaces the card
+// nodes on every filter change, so per-node listeners would be lost. A GWT
+// badge click wins over its hosting card (it must not toggle the focus).
+wrap.addEventListener('click',function(e){
+  var badge=e.target.closest && e.target.closest('.gwt-badge');
+  if(badge){
     e.stopPropagation();
-    var id=c.getAttribute('data-element');
+    showGwtModal(badge.getAttribute('data-gwt'));
+    return;
+  }
+  var card=e.target.closest && e.target.closest('.card');
+  if(card){
+    e.stopPropagation();
+    var id=card.getAttribute('data-element');
     focused = (focused===id) ? null : id;
     refresh();
-  });
+    return;
+  }
+  // Background click clears the focus (a completed drag already suppressed it).
+  if(suppressBackgroundClick){
+    suppressBackgroundClick=false;
+    return;
+  }
+  focused=null; refresh();
 });
 wrap.addEventListener('pointerdown',function(e){
   if(e.button!==0 || e.target.closest('.card,.gwt-modal-content,button,a,input,textarea,select')) return;
@@ -158,13 +182,6 @@ wrap.addEventListener('pointercancel',function(e){
   pan=null;
   suppressBackgroundClick=false;
   wrap.classList.remove('is-panning');
-});
-wrap.addEventListener('click',function(){
-  if(suppressBackgroundClick){
-    suppressBackgroundClick=false;
-    return;
-  }
-  focused=null; refresh();
 });
 refresh();
 
@@ -230,14 +247,8 @@ function escapeHtmlHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// Attach GWT badge click handlers
-document.querySelectorAll('.gwt-badge').forEach(function(badge) {
-  badge.addEventListener('click', function(e) {
-    e.stopPropagation();
-    var readmodelId = badge.getAttribute('data-gwt');
-    showGwtModal(readmodelId);
-  });
-});
+// GWT badge clicks are handled by the delegated .wrap click listener above
+// (per-node binding would be lost whenever EM_RENDER re-renders the cards).
 
 // Close modal on close button click
 document.getElementById('gwt-modal-close').addEventListener('click', function() {

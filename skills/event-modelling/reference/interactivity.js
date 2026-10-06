@@ -32,95 +32,72 @@
  *   translates      external event -> translator (Translation Pattern)
  *   translates-cmd  translator -> command (Translation Pattern)
  *
- * Click-to-focus normally highlights the clicked card plus everything that
- * causally led to it (walking data-from backwards from data-to), i.e. its
- * upstream ancestors. Everything outside that connected set is REMOVED from
- * the diagram (not dimmed): EM_RENDER re-renders the table and the SVG arrow
- * overlay containing only the visible cards, re-flowing rows and columns so
- * no gaps remain where hidden cards were. Trigger UI copies are the
- * deliberate exception: because they are the first element in a slice and
- * therefore have no ancestors, clicking one walks forward from its own
- * "triggers" edge through the command, event, read models, automations, and
- * output UIs in that represented slice.
- * The same forward rule applies to External Events ("translates") and to
- * Translators ("translates-cmd"): they are start-of-slice nodes, so clicking
- * one shows the whole translated slice instead of hiding everything.
+ * Click-to-focus highlights the clicked card plus its **one-hop**
+ * neighbors in both directions:
+ *   - upstream: cards that directly feed into the clicked card
+ *   - downstream: cards that the clicked card directly feeds into
  *
- * UI cards are treated as TERMINAL ancestors: a UI reached as an ancestor
- * of some other card is included in the upstream set (via the "triggers"
- * edge from that UI to the command it triggers), but traversal does NOT
- * continue backward past it through its "displays" edge (read-model -> UI,
- * i.e. "this UI happens to show that read model"). Which read model a UI
- * displays is a separate, unrelated causal chain from what command that UI
- * triggers, so walking backward through "displays" would incorrectly pull
- * in an unconnected upstream slice. Concretely: clicking a read model
- * shows the event that produced it, the command that produced that
- * event, and the UI card(s) that trigger that command — but not whatever
- * read model those UI cards happen to display.
+ * **Cumulative filtering**: each new click **adds** its neighbors to the
+ * visible set (union). Previously shown cards stay visible — they don't
+ * disappear when you click a different card. Clicking the same card again
+ * toggles *focus* off (clears `focused`) but the accumulated visible set
+ * remains until the background is clicked.
  *
- * EXCEPTION — the clicked card itself: when the START of the walk is an
- * output UI, its own "displays" edge IS its causal chain, so it is
- * followed. Clicking an output UI therefore shows the read model it
- * displays, the events feeding that read model, and the commands/UIs
- * behind them — instead of collapsing the diagram to just the UI card.
+ * EM_RENDER re-renders the table and the SVG arrow overlay containing
+ * only the visible cards, re-flowing rows and columns so no gaps remain
+ * where hidden cards were.
+ *
+ * One hop means:
+ *   - Read model → upstream: its subscribed events; downstream: its output UIs
+ *   - Command → upstream: its trigger UIs; downstream: its produced events
+ *   - Event → upstream: the producing command; downstream: subscribed read
+ *     models and automated commands
+ *   - UI → upstream: the command it triggers; downstream: none (UIs are
+ *     terminal — no "displays" edge is walked from a clicked UI)
+ *   - External event / Translator → downstream: the command(s) it produces
+ *     (they are start-of-slice nodes)
+ *   - Output UI → downstream: the read model it displays; upstream: none
  */
 var EDGES=[];
 document.querySelectorAll('[data-from]').forEach(function(l){
   EDGES.push([l.getAttribute('data-from'), l.getAttribute('data-to'), l.getAttribute('data-kind')]);
 });
 var focused=null;
+var visible=null; // accumulated visible set (cumulative union of all clicks)
 var wrap=document.querySelector('.wrap');
 var pan=null;
 var suppressBackgroundClick=false;
 function connectedSet(startId){
-  var isTriggerUi=EDGES.some(function(e){
-    return e[0]===startId && (e[2]==='triggers' || e[2]==='translates' || e[2]==='translates-cmd');
-  });
-  if(isTriggerUi){
-    var downstream={};downstream[startId]=true;
-    var forwardQueue=[startId];
-    while(forwardQueue.length){
-      var forwardId=forwardQueue.shift();
-      EDGES.forEach(function(e){
-        if(e[0]!==forwardId || downstream[e[1]]) return;
-        downstream[e[1]]=true;
-        forwardQueue.push(e[1]);
-      });
+  // One-hop neighbors: show the clicked card plus the cards directly
+  // upstream (that feed into it) and directly downstream (that it feeds
+  // into). Everything beyond one hop is hidden.
+  var visible={};
+  visible[startId]=true;
+
+  // Downstream: edges where startId is the source (startId -> X)
+  EDGES.forEach(function(e){
+    if(e[0]===startId && !visible[e[1]]){
+      visible[e[1]]=true;
     }
-    return downstream;
-  }
-  // Upstream-only: walk backwards along data-from -> data-to edges,
-  // i.e. from startId to whatever produced it (ancestors), never forwards
-  // to what it produces (descendants). A UI reached as an ancestor is a
-  // stopping point: we do not continue backward through its "displays"
-  // edge (read-model -> UI) into whatever read model feeds it, since that
-  // belongs to a separate causal chain. The clicked card is the exception:
-  // an output UI's own "displays" edge is its own causal chain and IS
-  // followed.
-  var seen={}; seen[startId]=true;
-  var queue=[startId];
-  while(queue.length){
-    var id=queue.shift();
-    EDGES.forEach(function(e){
-      if(e[1]!==id) return;
-      // Don't walk PAST a UI's "displays" edge when the UI was merely reached
-      // as an ancestor of something else. But when the clicked card IS the
-      // output UI itself, its "displays" edge is exactly its own causal chain,
-      // so it must be followed — otherwise clicking an output UI would hide
-      // everything, including its genuine upstream read model/events/commands.
-      if(e[2]==='displays' && id!==startId) return;
-      if(!seen[e[0]]){seen[e[0]]=true;queue.push(e[0]);}
-    });
-  }
-  return seen;
+  });
+
+  // Upstream: edges where startId is the target (X -> startId)
+  EDGES.forEach(function(e){
+    if(e[1]===startId && !visible[e[0]]){
+      visible[e[0]]=true;
+    }
+  });
+
+  return visible;
 }
 function refresh(){
-  // The connected set is the visibility map: cards in it survive, everything
-  // else is REMOVED and the diagram re-flows around the survivors (no gaps).
-  // EM_RENDER rebuilds the table + SVG from the card registry in EM_MODEL —
-  // EDGES above stays the FULL graph (captured once at load), so the walk
-  // still sees hidden cards' connections.
-  var set = focused ? connectedSet(focused) : null;
+  // The visible set is the union of all previously clicked cards'
+  // one-hop neighbors (accumulated across clicks).  When focused is null
+  // the user sees everything; when focused is set we merge its neighbors
+  // into the accumulated set so previously shown cards stay visible.
+  var set = focused
+    ? Object.assign(visible || {}, connectedSet(focused))
+    : null;
   EM_RENDER(set);
   document.querySelectorAll('.card').forEach(function(c){
     c.classList.toggle('active', c.getAttribute('data-element')===focused);
@@ -140,7 +117,11 @@ wrap.addEventListener('click',function(e){
   if(card){
     e.stopPropagation();
     var id=card.getAttribute('data-element');
-    focused = (focused===id) ? null : id;
+    focused = id;
+    // On first click (or after background clear), seed the
+    // accumulated visible set with this card's neighbors.
+    if(!visible) visible = connectedSet(id);
+    else Object.assign(visible, connectedSet(id));
     refresh();
     return;
   }
@@ -149,7 +130,7 @@ wrap.addEventListener('click',function(e){
     suppressBackgroundClick=false;
     return;
   }
-  focused=null; refresh();
+  focused=null; visible=null; refresh();
 });
 wrap.addEventListener('pointerdown',function(e){
   if(e.button!==0 || e.target.closest('.card,.gwt-modal-content,button,a,input,textarea,select')) return;

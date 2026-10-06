@@ -573,26 +573,33 @@ generator runs in Node), and `reference/interactivity.js` verbatim. **never
 hand-edit or rephrase the two `.js` sources; edit the files and the doc
 comments there instead.**
 
-Click-to-focus computes the clicked card's connected set (walking
-`data-from`/`data-to` edges backwards from the clicked card, i.e. upstream
-ancestors) and calls `EM_RENDER(visibleIds)`, which re-runs
-`computeGeometry`/`renderTable`/`renderArrows` over the card registry
-(`placeCards`) for just the visible cards. The effect is **removal, not
-dimming**: cards outside the connected set disappear from the diagram, their
-columns collapse to zero width, their rows drop (and surviving rows re-fit to
-their tallest visible card), so no gaps are left behind. Arrows disappear
-with their endpoints (an arrow is drawn iff both endpoint cards are visible).
-A clicked trigger UI copy is the exception to the upstream walk: because it
-starts a slice and has no upstream ancestors, the traversal follows that
-copy's outgoing trigger and the resulting command/event/view chain forward.
-A UI reached as an ancestor is still terminal (its `displays` edge into a
-read model is not walked further), while a clicked output UI follows its own
-`displays` edge backwards. The full rationale is in the comments at the top
-of `interactivity.js` — read them there if you need to change the behavior,
-don't re-derive it here.
+Click-to-focus highlights the clicked card plus its **one-hop** neighbors in
+both directions: upstream (cards that directly feed into the clicked card)
+and downstream (cards that the clicked card directly feeds into). It calls
+`EM_RENDER(visibleIds)`, which re-runs `computeGeometry`/`renderTable`/
+`renderArrows` over the card registry (`placeCards`) for just the visible
+cards. The effect is **removal, not dimming**: cards outside the visible set
+disappear from the diagram, their columns collapse to zero width, their rows
+drop (and surviving rows re-fit to their tallest visible card), so no gaps
+are left behind. Arrows disappear with their endpoints (an arrow is drawn iff
+both endpoint cards are visible).
+
+One-hop semantics:
+- **Read model** → upstream: its subscribed events; downstream: its output UIs
+- **Command** → upstream: its trigger UIs; downstream: its produced events
+- **Event** → upstream: the producing command; downstream: subscribed read
+  models and automated commands
+- **Input UI** → upstream: none (it starts a slice); downstream: the command
+  it triggers
+- **Output UI** → downstream: the read model it displays; upstream: none
+- **External event / Translator** → downstream: the command(s) it produces
+  (start-of-slice nodes)
+
 Each arrow's `data-kind` (`triggers`/`produces`/`observes`/`observes-cmd`/
 `displays`/`translates`/`translates-cmd`) is what lets the traversal
-distinguish edge semantics.
+distinguish edge semantics. The full implementation is in `connectedSet()` in
+`reference/interactivity.js` — read the comments there if you need to change
+the behavior.
 When one logical UI is rendered more than once, each visual trigger copy and
 its output/view copy use distinct `data-element` graph ids; the original
 markdown UI id remains available as `data-ui-id`.

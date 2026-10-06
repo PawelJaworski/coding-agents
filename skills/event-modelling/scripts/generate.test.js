@@ -1598,43 +1598,44 @@ test('clicking an output UI keeps its upstream chain visible (unrelated cards hi
   const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
   const { visible, hidden } = dom.clickCard('ui-policy-details');
 
-  // The whole upstream slice behind the clicked UI stays visible.
+  // One-hop downstream from output UI: the read model it displays.
   assert.deepEqual(visible, [
-    'cmd-issue-policy',
-    'evt-policy-issued',
     'rm-policy-details',
-    'ui-issue-policy',
     'ui-policy-details',
   ].sort());
 
-  // ...and only the genuinely unrelated card is hidden.
-  assert.deepEqual(hidden, ['rm-unrelated']);
+  // ...and only the genuinely unrelated cards are hidden.
+  assert.deepEqual(hidden, [
+    'cmd-issue-policy',
+    'evt-policy-issued',
+    'ui-issue-policy',
+    'rm-unrelated',
+  ].sort());
 });
 
-test('a UI reached as an ancestor is still terminal — its displays edge is not walked', () => {
+test('a read model shows its one-hop upstream event and downstream output UI', () => {
   const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
   const { visible } = dom.clickCard('rm-policy-details');
 
-  // ui-issue-policy is pulled in via its "triggers" edge, but the read model
-  // it happens to display (rm-unrelated) must NOT be.
+  // One-hop upstream: the event it subscribes to.
+  // One-hop downstream: the output UI it feeds.
   assert.deepEqual(visible, [
-    'cmd-issue-policy',
     'evt-policy-issued',
     'rm-policy-details',
-    'ui-issue-policy',
+    'ui-policy-details',
   ].sort());
 });
 
-test('clicking an input UI shows its complete downstream slice', () => {
+test('clicking an input UI shows its one-hop downstream command', () => {
   const dom = loadInteractivity(INTERACTIVITY_FIXTURE);
   const { visible } = dom.clickCard('ui-issue-policy');
 
+  // One-hop downstream: the command it triggers.
+  // One-hop upstream: rm-unrelated (via "displays" edge into this UI).
   assert.deepEqual(visible, [
     'cmd-issue-policy',
-    'evt-policy-issued',
-    'rm-policy-details',
+    'rm-unrelated',
     'ui-issue-policy',
-    'ui-policy-details',
   ].sort());
 });
 
@@ -1681,6 +1682,7 @@ test('clicking a command fed by a fan-out UI shows only its visual UI copy', () 
 
   assert.deepEqual(dom.clickCard('cmd-a').visible, [
     'cmd-a',
+    'evt-a',
     'ui-shared--triggers-cmd-a',
   ].sort());
 });
@@ -1710,8 +1712,6 @@ test('clicking one fan-out UI copy follows only that copy command slice', () => 
 
   assert.deepEqual(dom.clickCard('ui-shared--triggers-cmd-a').visible, [
     'cmd-a',
-    'evt-a',
-    'rm-a',
     'ui-shared--triggers-cmd-a',
   ].sort());
 });
@@ -2102,7 +2102,7 @@ test('computeGeometry reserves a Bots row and external-system lanes (height grow
   assert.ok(geo.height > geo.extTop); // external lanes add height at the bottom
 });
 
-test('interactivity: clicking an external event walks forward through translator → command → event (kind "translates" acts as a start)', () => {
+test('interactivity: clicking an external event shows its one-hop downstream (the translator)', () => {
   const fixture = {
     cards: [
       'ext-application-received',
@@ -2120,15 +2120,12 @@ test('interactivity: clicking an external event walks forward through translator
   };
   const dom = loadInteractivity(fixture);
   assert.deepEqual(dom.clickCard('ext-application-received').visible, [
-    'add-policy-holder',
     'ext-application-received',
-    'policy-holder-added',
-    'policy-holder-view',
     'tr-translate-application--cmd-add-policy-holder',
   ].sort());
 });
 
-test('interactivity: clicking a translator walks forward through the command/event/view it starts (kind "translates-cmd" acts as a start)', () => {
+test('interactivity: clicking a translator shows its one-hop upstream (ext event) and downstream (command)', () => {
   const fixture = {
     cards: [
       'ext-application-received',
@@ -2147,8 +2144,7 @@ test('interactivity: clicking a translator walks forward through the command/eve
   const dom = loadInteractivity(fixture);
   assert.deepEqual(dom.clickCard('tr-translate-application--cmd-add-policy-holder').visible, [
     'add-policy-holder',
-    'policy-holder-added',
-    'policy-holder-view',
+    'ext-application-received',
     'tr-translate-application--cmd-add-policy-holder',
   ].sort());
 });

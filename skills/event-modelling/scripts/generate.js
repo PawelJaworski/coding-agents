@@ -1163,9 +1163,19 @@ svg{position:absolute;top:0;left:0;pointer-events:none}
 .gwt-section-content{font-size:13px;color:#333;line-height:1.4}
 .gwt-section-content ul{margin:0;padding-left:20px}
 .gwt-section-content li{margin-bottom:4px}
+/* Role filter panel */
+.role-filter{position:absolute;top:8px;left:8px;background:#fff;border:1px solid #ccc;border-radius:6px;padding:10px 14px;font-size:12px;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.role-filter-title{font-weight:700;margin-bottom:6px;color:#333}
+.role-filter-label{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;user-select:none}
+.role-filter-label input{margin:0;cursor:pointer}
+.role-filter-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:2px;vertical-align:middle}
 </style>
 </head>
 <body>
+<div class="role-filter" id="role-filter">
+  <div class="role-filter-title">Roles</div>
+  <div id="role-filter-checkboxes"></div>
+</div>
 <div class="wrap">
 ${tableHtml}
 <svg width="${geo.width}" height="${geo.height}" viewBox="0 0 ${geo.width} ${geo.height}">

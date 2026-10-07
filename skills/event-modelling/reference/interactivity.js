@@ -98,11 +98,126 @@ function refresh(){
   var set = focused
     ? Object.assign(visible || {}, connectedSet(focused))
     : null;
+  // Merge with role filter (role filtering is a base layer; click filtering
+  // adds on top).  When no roles are selected the role layer is empty and
+  // only click filtering applies (or everything if no click either).
+  var roleSet = computeRoleFilterVisible();
+  if (roleSet) {
+    set = Object.assign(set || {}, roleSet);
+  }
   EM_RENDER(set);
   document.querySelectorAll('.card').forEach(function(c){
     c.classList.toggle('active', c.getAttribute('data-element')===focused);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Role-based swimlane filtering
+// ---------------------------------------------------------------------------
+
+var selectedRoles = new Set(); // role keys currently checked
+
+// Compute the set of card ids visible from role filtering:
+// all UI cards in selected roles' swimlanes + their one-hop neighbors.
+function computeRoleFilterVisible() {
+  if (!selectedRoles.size) return null; // no roles selected -> no role filter layer
+  var result = {};
+  var roles = EM_MODEL.roles || [];
+  var columns = EM_MODEL.columns || [];
+  var eventProducer = EM_MODEL.eventProducer || {};
+  var commandPrimaryEvent = EM_MODEL.commandPrimaryEvent || {};
+  var triggerUiForCommand = EM_MODEL.triggerUiForCommand || {};
+  var uiPlacementCol = EM_MODEL.uiPlacementCol || {};
+  var uis = EM_MODEL.uis || [];
+  var readmodels = EM_MODEL.readmodels || [];
+  var uiSources = EM_MODEL.uiSources || {};
+
+  // 1. Collect all UI card ids in selected roles (trigger UIs + output UIs)
+  roles.forEach(function(role, r) {
+    if (!selectedRoles.has(role.key)) return;
+    // Trigger UIs: for each command in this role, find its trigger UIs
+    columns.forEach(function(c, i) {
+      if (c.type !== 'event') return;
+      var cmd = eventProducer[c.eventId];
+      if (!cmd || cmd.actorKey !== role.key) return;
+      if (commandPrimaryEvent[cmd.id] !== c.eventId) return;
+      var triggerUis = triggerUiForCommand[cmd.id] || [{ id: cmd.id }];
+      triggerUis.forEach(function(ui) {
+        var eid = 'ui-' + ui.id + '--triggers-' + cmd.id;
+        result[eid] = true;
+        // One-hop downstream: the command card
+        result[cmd.id] = true;
+        // One-hop downstream: the event card
+        result[c.eventId] = true;
+      });
+    });
+    // Output UIs: find UIs in this role's swimlane
+    uis.forEach(function(ui) {
+      if (ui.actorKey !== role.key) return;
+      var placementIdx = uiPlacementCol[ui.id];
+      if (placementIdx === undefined || placementIdx < 0) return;
+      var eid = 'ui-' + ui.id + '--displays';
+      result[eid] = true;
+    });
+  });
+
+  // 2. One-hop downstream from each collected card (read models -> output UIs)
+  readmodels.forEach(function(rm) {
+    if (!result[rm.id]) return;
+    uis.forEach(function(ui) {
+      var srcs = uiSources[ui.id];
+      if (srcs && srcs.indexOf(rm.id) !== -1) {
+        var eid = 'ui-' + ui.id + '--displays';
+        result[eid] = true;
+      }
+    });
+  });
+
+  // 3. One-hop upstream from each collected card (output UIs -> read models)
+  uis.forEach(function(ui) {
+    if (!result['ui-' + ui.id + '--displays']) return;
+    var srcs = uiSources[ui.id];
+    if (srcs) {
+      srcs.forEach(function(rmId) {
+        result[rmId] = true;
+      });
+    }
+  });
+
+  return Object.keys(result).length ? result : null;
+}
+
+function renderRoleCheckboxes() {
+  var container = document.getElementById('role-filter-checkboxes');
+  if (!container) return;
+  var roles = EM_MODEL.roles || [];
+  var html = '';
+  roles.forEach(function(role, r) {
+    var dotColor = ['#ffe0ec', '#e2e9f5', '#fde7d0', '#e0f0ff', '#f0e0ff'][r % 5];
+    var actorNames = (role.actors || []).join(', ');
+    html += '<label class="role-filter-label">';
+    html += '<input type="checkbox" data-role-key="' + role.key + '" ' + (selectedRoles.has(role.key) ? 'checked' : '') + '>';
+    html += '<span class="role-filter-dot" style="background:' + dotColor + '"></span>';
+    html += escapeHtmlHtml(actorNames);
+    html += '</label>';
+  });
+  container.innerHTML = html;
+  container.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      var key = cb.getAttribute('data-role-key');
+      if (cb.checked) selectedRoles.add(key);
+      else selectedRoles.delete(key);
+      refresh();
+    });
+  });
+}
+
+var roleFilterEl = document.getElementById('role-filter');
+if (roleFilterEl) {
+  roleFilterEl.addEventListener('click', function(e) { e.stopPropagation(); });
+}
+
+// ---------------------------------------------------------------------------
 // Event delegation on .wrap — re-rendering (EM_RENDER) replaces the card
 // nodes on every filter change, so per-node listeners would be lost. A GWT
 // badge click wins over its hosting card (it must not toggle the focus).
@@ -164,6 +279,7 @@ wrap.addEventListener('pointercancel',function(e){
   suppressBackgroundClick=false;
   wrap.classList.remove('is-panning');
 });
+renderRoleCheckboxes();
 refresh();
 
 // GWT Modal functionality

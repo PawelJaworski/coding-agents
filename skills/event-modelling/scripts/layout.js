@@ -108,6 +108,25 @@ function outputUiElementId(uiId) {
   return `ui-${uiId}--displays`;
 }
 
+// Render a UI card as an optional link when `url` is set.
+// When url is present the whole card is wrapped in an <a>; the card's
+// data-element / data-ui-id / data-type attributes stay on the <a> so the
+// interactivity filter still finds it.
+function uiCardHtml(ui, extraAttrs, extraContent) {
+  const label = ui.typeHint ? ui.typeHint.toUpperCase() : 'UI';
+  const name = escapeHtml(ui.name || ui.id);
+  const base = `<div class="card ui-card" data-element="${extraAttrs.elementId}" data-ui-id="${extraAttrs.uiId}" data-type="ui" title="${escapeHtml(extraAttrs.title)}">`;
+  if (ui.url) {
+    // When wrapped in <a>, the anchor's title attribute serves as the
+    // tooltip. Do NOT duplicate the title inside the inner <div> — that
+    // would produce two visual title lines on the card.
+    const inner = `<div class="ui-label">${escapeHtml(label)}</div><div class="title">${name}</div>${extraContent || ''}`;
+    return `<a href="${escapeHtml(ui.url)}" target="_blank" rel="noopener noreferrer" data-element="${extraAttrs.elementId}" data-ui-id="${extraAttrs.uiId}" data-type="ui" title="${escapeHtml(extraAttrs.title)}">${base}${inner}</a>`;
+  }
+  const inner = `<div class="ui-label">${escapeHtml(label)}</div><div class="title">${name}</div>${extraContent || ''}`;
+  return `${base}${inner}</div>`;
+}
+
 // ---------------------------------------------------------------------------
 // Column index helpers (pure — model.columns lookup)
 // ---------------------------------------------------------------------------
@@ -437,15 +456,35 @@ function renderTable(model, geo) {
           // explicit Triggers: claim plus an id-match claim, or several
           // distinct entry-point scenarios) — render one box per triggering
           // UI, side by side, in this same cell.
-          const triggerUis = (triggerUiForCommand[cmd.id] || [{ id: cmd.id, name: cmd.name, typeHint: undefined }])
-            .filter((ui) => vis(triggerUiElementId(ui.id, cmd.id)));
-          const cards = triggerUis.map((ui) => {
-            const label = ui && ui.typeHint ? ui.typeHint.toUpperCase() : 'UI';
-            const uiId = ui.id;
-            const elementId = triggerUiElementId(uiId, cmd.id);
-            return `<div class="card ui-card" data-element="${elementId}" data-ui-id="${uiId}" data-type="ui" title="ui-${uiId} → ${cmd.id} — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(ui.name || cmd.name)}</div></div>`;
-          }).join('');
-          content = triggerUis.length > 1 ? `<div class="ui-fanin-row">${cards}</div>` : cards;
+      const triggerUis = (triggerUiForCommand[cmd.id] || [{ id: cmd.id, name: cmd.name, typeHint: undefined }])
+            .filter((ui) => vis(triggerUiElementId(ui.id, cmd.id)))
+            .map(ui => {
+                const uiCopy = {...ui};
+                // If this is a duplicate UI card (same id and command), we only want to render it once for the trigger arrow. 
+                // However, the generator handles fan-in by iterating over all triggering UIs.
+                // To prevent multiple visual cards for the same ID in the same cell, we check if we' enough elements already added.
+                return uiCopy;
+            });
+      // Actually, the logic above is still producing multiple cards if there are multiple UI entries with the same ID.
+      // Let's use a Set to track which UI IDs have been rendered in this specific cell (for this command).
+      const renderedInThisCell = new Set();
+      const uniqueTriggerUis = [];
+      triggerUis.forEach(ui => {
+        if (!renderedInThisCell.has(ui.id)) {
+          renderedInThisCell.add(ui.id);
+          uniqueTriggerUis.push(ui);
+        }
+      });
+      const cards = uniqueTriggerUis.map((ui) => {
+        const uiId = ui.id;
+        const elementId = triggerUiElementId(ui.id, cmd.id);
+        // extraContent is intentionally empty: uiCardHtml already renders the
+        // <div class="title"> from ui.name (or ui.id as fallback). Passing
+        // another title div here would duplicate it on the card.
+        return uiCardHtml(ui, { elementId, uiId, title: `ui-${uiId} → ${cmd.id} — click to focus, click again to clear` }, '');
+      }).join('');
+      content = cards;
+
         }
       }
       // Output UI (e.g. a pdf/html screen projected from one or more read
@@ -456,9 +495,8 @@ function renderTable(model, geo) {
         const outUi = uis.find((u) => uiPlacementCol[u.id] === i && u.actorKey === role.key
           && vis(outputUiElementId(u.id)));
         if (outUi) {
-          const label = outUi.typeHint ? outUi.typeHint.toUpperCase() : 'UI';
           const elementId = outputUiElementId(outUi.id);
-          content = `<div class="card ui-card" data-element="${elementId}" data-ui-id="${outUi.id}" data-type="ui" title="ui-${outUi.id} ← read model(s) — click to focus, click again to clear"><div class="ui-label">${escapeHtml(label)}</div><div class="title">${escapeHtml(outUi.name || outUi.id)}</div></div>`;
+          content = uiCardHtml(outUi, { elementId, uiId: outUi.id, title: `ui-${outUi.id} ← read model(s) — click to focus, click again to clear` }, '');
         }
       }
       cells += `<td class="lane-cell" style="background:${roleColor(r)}">${content}</td>`;

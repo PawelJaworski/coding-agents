@@ -244,6 +244,12 @@ function parseMdText(text) {
         case 'consistsof':
           cur.consistsOf = val.split(',').map((s) => s.trim()).filter(Boolean);
           break;
+        case 'url':
+          // Optional external URL — when present the UI card on the diagram
+          // is rendered as a clickable link to this address (see layout.js
+          // renderTable for the rendering logic).
+          cur.url = val;
+          break;
         default: break; // unknown "key: value" — ignore
       }
       continue;

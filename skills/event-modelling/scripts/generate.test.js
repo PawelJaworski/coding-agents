@@ -2384,3 +2384,111 @@ test('the table fragment is self-describing: inline width, no baked CSS width (r
   assert.ok(fhtml.startsWith(`<table style="width:${fgeo.width}px">`));
   assert.ok(fgeo.width < geo.width, 'filtered table is narrower');
 });
+
+// ---------------------------------------------------------------------------
+// Url: attribute on UIs
+// ---------------------------------------------------------------------------
+
+test('parseMdText parses an optional Url: on a UI entry', () => {
+  const items = parseMdText(`
+## policy-dashboard
+Name: Policy Dashboard
+Actor: Insurance Agent
+Type: html
+Url: https://example.com/dashboard
+`);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, 'policy-dashboard');
+  assert.equal(items[0].url, 'https://example.com/dashboard');
+});
+
+test('parseMdText leaves url undefined when Url: is absent', () => {
+  const items = parseMdText(`
+## some-ui
+Name: Some UI
+Actor: Clerk
+Type: html
+`);
+  assert.equal(items[0].url, undefined);
+});
+
+test('renderTable renders a trigger UI card as a link when Url: is set', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Clerk
+Type: html
+Url: https://example.com/form
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  // The UI card should be wrapped in an <a> with href
+  assert.match(html, /<a href="https:\/\/example.com\/form"/);
+  // data-element and data-ui-id stay on the <a> (not nested inside a <div>)
+  assert.match(html, /data-element="ui-add-policy-holder--triggers-add-policy-holder"/);
+  assert.match(html, /data-ui-id="add-policy-holder"/);
+  // Still has the card class and title
+  assert.match(html, /class="card ui-card"/);
+  assert.ok(html.includes('Add Policy Holder Form'));
+});
+
+test('renderTable renders an output UI card as a link when Url: is set', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Clerk
+
+## policy-holder-view
+Name: Policy Holder View Screen
+Actor: Clerk
+Type: html
+Url: https://example.com/view
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  // The output UI card should be wrapped in an <a> with href
+  assert.match(html, /<a href="https:\/\/example.com\/view"/);
+  assert.match(html, /data-element="ui-policy-holder-view--displays"/);
+  assert.ok(html.includes('Policy Holder View Screen'));
+});
+
+test('renderTable renders a UI card as a plain div when Url: is absent', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Clerk
+Type: html
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  // Should NOT contain an <a> wrapping the card
+  assert.doesNotMatch(html, /<a href="/);
+  // Should have the card as a plain <div>
+  assert.match(html, /<div class="card ui-card"/);
+});
+
+test('renderTable escapes HTML entities in Url: to prevent injection', () => {
+  const dir = baseFixture({
+    uis: `
+## add-policy-holder
+Name: Add Policy Holder Form
+Actor: Clerk
+Type: html
+Url: https://example.com?q=<script>alert(1)</script>
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  // The URL should be HTML-escaped in the href attribute
+  assert.match(html, /<a href="https:\/\/example.com\?q=&lt;script&gt;alert\(1\)&lt;\/script&gt;"/);
+});

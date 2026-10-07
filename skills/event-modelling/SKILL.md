@@ -126,6 +126,14 @@ Type: html
 Name: Order Dashboard
 Actor: Ops Manager
 ConsistsOf: order-summary, stock-levels
+Url: https://example.com/dashboard
+
+## order-intake-form
+Type: html
+Name: Order Intake Form
+Actor: Customer
+Triggers: create-order
+Url: https://figma.com/file/mockup
 ```
 
 `external-events.md` (optional — **Translation Pattern**): facts that happen
@@ -230,6 +238,11 @@ Produces: submit-policy-application
 - `ConsistsOf:` (`uis.md` only, comma-separated read model ids) — for a UI
   that's projected from **more than one** read model (e.g. a dashboard
   combining several views). See `uis.md` linkage below.
+- `Url:` (`uis.md` only, a single URL string) — when present the UI card on
+  the diagram is rendered as a clickable link to this address (opens in a new
+  tab with `rel="noopener noreferrer"`). Absent → the card stays a plain card.
+  This is useful for linking a UI card to an external design mock-up, a
+  running instance, or any other reference page.
 - Accept `- key: value` bullets as an alternative to `key: value`.
 - A bare bullet with **no colon** (`* field name` / `- field name`) is a
   **field/parameter** of that element (command payload, event payload, or
@@ -342,6 +355,10 @@ views):
   `## order-dashboard` with `ConsistsOf: order-summary, stock-levels` draws
   two incoming arrows, from `order-summary` and `stock-levels`, even though
   `order-dashboard` itself isn't a read model id.
+- A `Url:` on any UI card (trigger or output) is rendered as a clickable link
+  on the diagram card itself — it does not affect linkage or wiring in any
+  way. A fan-out UI (one `## heading` with `Triggers:` to multiple commands)
+  renders one card per target command, each carrying the same `Url:`.
 - The output UI card is placed in the column of its **rightmost** source
   read model (same "never left of an event/view it depends on" convention
   as read-model placement itself). A source in that same column gets a

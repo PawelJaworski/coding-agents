@@ -29,6 +29,7 @@ Type: html
 Name: Agent Dashboard
 Actor: Insurance Agent, Policy Holder
 ConsistsOf: policy-status, underwriting-queue
+Url: https://example.com/agent/dashboard
 
 The entry below is intentionally left unwired: its id matches neither a
 command nor a read model, and it has no Triggers/ConsistsOf. It documents a

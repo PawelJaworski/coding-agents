@@ -72,11 +72,21 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+// Nested "* *" fields carry ONE leading space per nesting level (see the
+// bullet parser in generate.js). HTML collapses plain whitespace and
+// stripDoubleQuestion() trims the name, so re-emit that indent as
+// non-breaking spaces: the diagram shows each inner (list) attribute
+// visibly indented — one space per nesting level (a list inside a list
+// adds one more space per level).
+function fieldIndentHtml(f) {
+  return '&nbsp;'.repeat(String(f).match(/^ */)[0].length);
+}
+
 function fieldsHtml(fields) {
   if (!fields || !fields.length) return '';
   const capped = fields.length > MAX_FIELDS;
   const style = capped ? ` style="max-height:${MAX_FIELDS * FIELD_LINE_H}px;overflow-y:auto"` : '';
-  return `<div class="fields"${style}><ul>${fields.map((f) => `<li>${escapeHtml(stripDoubleQuestion(f))}</li>`).join('')}</ul></div>`;
+  return `<div class="fields"${style}><ul>${fields.map((f) => `<li>${fieldIndentHtml(f)}${escapeHtml(stripDoubleQuestion(f))}</li>`).join('')}</ul></div>`;
 }
 
 // Like fieldsHtml but splits the field list into two groups separated by a

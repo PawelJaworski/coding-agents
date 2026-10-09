@@ -25,6 +25,7 @@ const {
   parseGwtContent,
   discoverGwtFiles,
 } = require('./generate.js');
+const { fieldsHtml } = require('./layout.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -118,11 +119,21 @@ Produces: policy-issued
 * * addresses (list)
 * * * street
 `);
-  assert.deepEqual(item.fields, ['insured parties (list)', '  name', '  addresses (list)', '    street']);
+  // ONE leading space per nesting level (visible as one space per level on
+  // the diagram card — see the fieldsHtml test below).
+  assert.deepEqual(item.fields, ['insured parties (list)', ' name', ' addresses (list)', '  street']);
   assert.equal(item.fieldTrees[0].name, 'insured parties');
   assert.equal(item.fieldTrees[0].list, true);
   assert.equal(item.fieldTrees[0].children[1].list, true);
   assert.equal(item.fieldTrees[0].children[1].children[0].name, 'street');
+});
+
+test('fieldsHtml renders nested fields indented — one visible space per nesting level (list-in-list adds one more)', () => {
+  const html = fieldsHtml(['insured parties (list)', ' name', ' addresses (list)', '  street']);
+  assert.match(html, /<li>insured parties \(list\)<\/li>/); // root fields stay flush
+  assert.match(html, /<li>&nbsp;name<\/li>/); // depth 2: one space
+  assert.match(html, /<li>&nbsp;addresses \(list\)<\/li>/);
+  assert.match(html, /<li>&nbsp;&nbsp;street<\/li>/); // depth 3 (list in list): one more space
 });
 
 test('parseMdText parses an events.md-shaped entry with {aggregateName}:Id', () => {

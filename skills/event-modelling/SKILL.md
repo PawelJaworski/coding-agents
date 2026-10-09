@@ -263,6 +263,10 @@ Produces: submit-policy-application
   the bullet marker nests its attributes: `* product (List)`, `* * name`, and
   `* * description` generate `Product` and a `List<Product> productList`
   payload member. A nested field without `(List)` generates one object member.
+  On the diagram card, each nested attribute renders **indented** — one visible
+  space per nesting level — so `* * name` shows one space in from its parent and
+  a list inside a list (`* * * street`) adds one more space per level; the
+  hierarchy stays readable instead of collapsing into a flat bullet list.
   The notation is valid on commands, events, and read models. A
   direct command→event or event→read-model mapping is valid if the
   field name, list marker, child order, and every nested child match exactly.

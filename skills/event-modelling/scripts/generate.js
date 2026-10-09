@@ -286,7 +286,11 @@ function parseMdText(text) {
         }
         parent.children.push(tree);
       }
-      (cur.fields || (cur.fields = [])).push(`${'  '.repeat(depth - 1)}${fieldName}`);
+      // The flat fields list carries ONE leading space per nesting level;
+      // fieldsHtml re-emits them as visible spaces so nested (list)
+      // attributes read as an indented tree on the diagram card (a list
+      // inside a list adds one more space per level).
+      (cur.fields || (cur.fields = [])).push(`${' '.repeat(depth - 1)}${fieldName}`);
     }
     // Read-model-only: a standalone "---" line (horizontal-rule syntax) acts
     // as a request/response divider.  It is stored as a sentinel in BOTH

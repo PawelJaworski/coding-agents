@@ -54,11 +54,21 @@ function parseSections(text) {
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('## ')) {
-      current = { id: line.slice(3).trim(), props: {}, fields: [], searchOnlyFields: [], headerLines: [], aggregate: null, mode: null, keyed: false };
+      current = { id: line.slice(3).trim(), props: {}, fields: [], searchOnlyFields: [], headerLines: [], aggregate: null, mode: null, keyed: false, requestFieldCount: null };
       sections.push(current);
       continue;
     }
     if (!current || !line || line.startsWith('#')) continue;
+
+    // A standalone "---" line is the request/response divider (read-model only).
+    // Fields before it are request attributes (caller-provided input); fields
+    // after it are response attributes (the computed result). The split point
+    // is recorded as `requestFieldCount` on the section; parseModel splits the
+    // decorated field list at that index for query-style read models.
+    if (line === '---') {
+      current.requestFieldCount = current.fields.length;
+      continue;
+    }
 
     const field = line.match(/^(\*(?:\s+\*)*)\s+(.+)$/);
     if (field) {
@@ -633,6 +643,36 @@ export function parseModel({ modelDir, basePackage }) {
 
     const decoratedFields = decorate(s.fields);
     const subscribedAggregates = new Set(subscribes.map((id) => eventById.get(id).aggregate));
+
+    // Query mode: a "---" divider splits request attributes (caller input) from
+    // response attributes (the computed result). No persistence, no hydrate —
+    // the generated code is a query handler with request/response records and a
+    // calculation seam (decider), similar to a state projector but without the
+    // event-stream fold or repository save.
+    if (s.requestFieldCount != null) {
+      const requestFields = decoratedFields.slice(0, s.requestFieldCount);
+      const responseFields = decoratedFields.slice(s.requestFieldCount);
+      const isClassic = s.headerLines.length === 1 && subscribedAggregates.has(s.headerLines[0].name);
+      const collection = isClassic && s.headerLines[0].mode === 'RowKey';
+      return {
+        id: s.id,
+        name: s.props.name || s.id,
+        aggregate: isClassic ? s.headerLines[0].name : null,
+        projection: 'query',
+        isQuery: true,
+        onDemand: false,
+        keyed: false,
+        collection,
+        subscribes,
+        requestFields,
+        responseFields,
+        fields: responseFields,
+        keyFields: [],
+        searchOnlyFields: [],
+        ...naming.readModel(basePackage, s.id, { collection, isQuery: true }),
+      };
+    }
+
     // Exactly one header line naming the subscribed aggregate is the classic form;
     // anything else — a second line, or a name that is not the aggregate — is a
     // named-key-attribute read model instead (see resolveKeyAttributePath above).

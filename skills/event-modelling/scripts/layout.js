@@ -79,6 +79,22 @@ function fieldsHtml(fields) {
   return `<div class="fields"${style}><ul>${fields.map((f) => `<li>${escapeHtml(stripDoubleQuestion(f))}</li>`).join('')}</ul></div>`;
 }
 
+// Like fieldsHtml but splits the field list into two groups separated by a
+// visible horizontal rule (used for read-model request/response divider).
+function fieldsHtmlWithSeparator(requestFields, responseFields) {
+  let html = '';
+  if (requestFields && requestFields.length) {
+    html += fieldsHtml(requestFields);
+  }
+  if (responseFields && responseFields.length) {
+    if (requestFields && requestFields.length) {
+      html += '<div class="fields-separator"></div>';
+    }
+    html += fieldsHtml(responseFields);
+  }
+  return html;
+}
+
 // Read-model-only: stacked bold lines directly under the title — the
 // aggregate-id line first (if present), then each key line in the order
 // written in the markdown. Each key line renders with its own suffix
@@ -348,7 +364,7 @@ const EMLayout = {
   // helpers
   fieldsBlockHeight, cardHeight, rowHeightFor,
   isDoubleQuestionField, stripDoubleQuestion, escapeHtml,
-  fieldsHtml, idKeyLinesHtml, actorsHtml,
+  fieldsHtml, fieldsHtmlWithSeparator, idKeyLinesHtml, actorsHtml,
   triggerUiElementId, outputUiElementId, translatorElementId,
   colIndexForEvent, colIndexForView, colIndexForExt,
   // layout
@@ -522,7 +538,10 @@ function renderTable(model, geo) {
     } else if (occ && occ.type === 'view' && vis(occ.id)) {
       const rm = readmodels.find((rr) => rr.id === occ.id);
       const gwtBadge = rm.gwt ? `<div class="gwt-badge" data-gwt="${rm.id}" title="Click to view GWT scenarios">GWT</div>` : '';
-      content = `<div class="card view-card" style="height:${rm._h}px" data-element="${rm.id}" data-type="view" title="${rm.id} — click to focus, click again to clear"><div class="title">${escapeHtml(rm.name)}</div>${idKeyLinesHtml(rm)}${fieldsHtml(rm.fields)}${gwtBadge}</div>`;
+      const fieldsContent = rm.requestFields && rm.requestFields.length
+        ? fieldsHtmlWithSeparator(rm.requestFields, rm.responseFields)
+        : fieldsHtml(rm.fields);
+      content = `<div class="card view-card" style="height:${rm._h}px" data-element="${rm.id}" data-type="view" title="${rm.id} — click to focus, click again to clear"><div class="title">${escapeHtml(rm.name)}</div>${idKeyLinesHtml(rm)}${fieldsContent}${gwtBadge}</div>`;
     }
     midCells += `<td class="lane-cell mid-cell">${content}</td>`;
   });

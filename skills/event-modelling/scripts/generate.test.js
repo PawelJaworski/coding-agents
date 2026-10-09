@@ -2492,3 +2492,174 @@ Url: https://example.com?q=<script>alert(1)</script>
   // The URL should be HTML-escaped in the href attribute
   assert.match(html, /<a href="https:\/\/example.com\?q=&lt;script&gt;alert\(1\)&lt;\/script&gt;"/);
 });
+
+// ---------------------------------------------------------------------------
+// Read-model request/response split (--- divider)
+// ---------------------------------------------------------------------------
+
+test('parseMdText stores a standalone "---" line as a sentinel in fields', () => {
+  const items = parseMdText(`
+## query-policy
+policy:Id
+Name: Query Policy
+Subscribes: policy-issued
+* policy key
+---
+* policy holder
+* policy coverage
+`);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, 'query-policy');
+  assert.deepEqual(items[0].fields, ['policy key', '---', 'policy holder', 'policy coverage']);
+});
+
+test('parseMdText does NOT add a sentinel for "---" in non-read-model files (commands.md)', () => {
+  const items = parseMdText(`
+## some-command
+Name: Some Command
+Produced: some-event
+* name
+---
+* other
+`);
+  // "---" is silently stored as a sentinel (same as read models) — but for
+  // commands.md it has no semantic meaning.  The sentinel is simply ignored
+  // during buildModel because only read models split on it.
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].fields, ['name', '---', 'other']);
+});
+
+test('buildModel splits read-model fields into requestFields and responseFields at "---"', () => {
+  const dir = baseFixture({
+    readmodels: `
+## query-policy
+Name: Query Policy
+Subscribes: policy-holder-added
+policyHolderId:Key
+* policy key
+---
+* name
+* address
+`,
+  });
+  const model = buildModel(dir);
+  const rm = model.readmodels.find((r) => r.id === 'query-policy');
+  assert.deepEqual(rm.requestFields, ['policy key']);
+  assert.deepEqual(rm.responseFields, ['name', 'address']);
+  assert.equal(rm.requestFieldTrees.length, 1);
+  assert.equal(rm.requestFieldTrees[0].name, 'policy key');
+  assert.equal(rm.responseFieldTrees.length, 2);
+});
+
+test('buildModel sets requestFields/responseFields to empty when no "---" divider', () => {
+  const dir = baseFixture(); // base fixture has no ---
+  const model = buildModel(dir);
+  const rm = model.readmodels.find((r) => r.id === 'policy-holder-view');
+  assert.deepEqual(rm.requestFields, []);
+  assert.deepEqual(rm.responseFields, ['name', 'address']);
+  assert.deepEqual(rm.requestFieldTrees, []);
+  assert.deepEqual(rm.responseFieldTrees, rm.fieldTrees);
+});
+
+test('buildModel allows request fields with no matching upstream event field (no passthrough check)', () => {
+  const dir = baseFixture({
+    readmodels: `
+## query-policy
+Name: Query Policy
+Subscribes: policy-holder-added
+policyHolderId:Key
+* arbitrary-request-param
+* another-field
+---
+* name
+`,
+  });
+  // Should NOT throw — request fields are unconstrained.
+  assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('buildModel still checks response fields for passthrough even when request fields exist', () => {
+  const dir = baseFixture({
+    readmodels: `
+## query-policy
+Name: Query Policy
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name
+---
+* name
+* missing-response-field
+`,
+  });
+  assert.throws(
+    () => buildModel(dir),
+    /read model 'query-policy' field "missing-response-field" has no matching field in any subscribed event/
+  );
+});
+
+test('buildModel still allows bracketed response fields with no matching upstream event', () => {
+  const dir = baseFixture({
+    readmodels: `
+## query-policy
+Name: Query Policy
+Subscribes: policy-holder-added
+policyHolderId:Key
+* name
+---
+* name
+* [computed-field]
+`,
+  });
+  assert.doesNotThrow(() => buildModel(dir));
+});
+
+test('renderTable renders a separator line when a read model has request fields', () => {
+  const dir = baseFixture({
+    readmodels: `
+## query-policy
+Name: Query Policy
+Subscribes: policy-holder-added
+policyHolderId:Key
+* policy key
+---
+* name
+* address
+`,
+  });
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  assert.match(html, /class="fields-separator"/);
+});
+
+test('renderTable does NOT render a separator when there is no "---" divider', () => {
+  const dir = baseFixture();
+  const model = buildModel(dir);
+  const geo = computeGeometry(model);
+  const html = renderTable(model, geo);
+  assert.doesNotMatch(html, /fields-separator/);
+});
+
+test('fieldsHtmlWithSeparator renders both groups with separator', () => {
+  const { fieldsHtmlWithSeparator } = require('./layout.js');
+  const html = fieldsHtmlWithSeparator(['req1', 'req2'], ['resp1', 'resp2']);
+  assert.ok(html.includes('req1'));
+  assert.ok(html.includes('req2'));
+  assert.ok(html.includes('fields-separator'));
+  assert.ok(html.includes('resp1'));
+  assert.ok(html.includes('resp2'));
+});
+
+test('fieldsHtmlWithSeparator renders only response when no request fields', () => {
+  const { fieldsHtmlWithSeparator } = require('./layout.js');
+  const html = fieldsHtmlWithSeparator([], ['resp1']);
+  assert.ok(html.includes('resp1'));
+  assert.doesNotMatch(html, /fields-separator/);
+});
+
+test('fieldsHtmlWithSeparator renders only request when no response fields', () => {
+  const { fieldsHtmlWithSeparator } = require('./layout.js');
+  const html = fieldsHtmlWithSeparator(['req1'], []);
+  assert.ok(html.includes('req1'));
+  assert.doesNotMatch(html, /fields-separator/);
+});

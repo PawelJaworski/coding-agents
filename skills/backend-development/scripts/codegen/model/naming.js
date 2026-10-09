@@ -88,15 +88,17 @@ const naming = {
   // path variable, since it spans aggregates) returning rows. A single-record read
   // model — on-demand (`:Id`) or persisting (`:Key`) — takes the {aggregateId}
   // path variable and serves exactly one row.
-  readModel: (base, id, { collection = false } = {}) => ({
+  readModel: (base, id, { collection = false, isQuery = false } = {}) => ({
     className: pascal(id),
     package: `${base}.${slicePackage(id)}`,
     projectorClassName: `${pascal(id)}Projector`,
     deciderClassName: `${pascal(id)}ProjectionDecider`,
     abilityClassName: `${pascal(id)}ProjectorAbility`,
     getterMethod: `get${pascal(id)}`,
-    getMapping: collection ? id : `${id}/{aggregateId}`,
+    getMapping: isQuery || collection ? id : `${id}/{aggregateId}`,
     dslMethod: `expect_${words(id).join('_')}`,
+    // query-only names (request/response read models)
+    ...(isQuery ? { requestClassName: `${pascal(id)}Request` } : {}),
     // persisting-only names
     entityClassName: `${pascal(id)}Entity`,
     idClassName: `${pascal(id)}Key`,

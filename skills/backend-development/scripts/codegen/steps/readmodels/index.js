@@ -24,6 +24,10 @@ import {
   readModelInMemoryRepository,
   persistingProjector,
   persistingProjectorAbility,
+  requestRecord,
+  queryProjector,
+  queryProjectionDecider,
+  queryProjectorAbility,
 } from './emit.js';
 
 export {
@@ -38,6 +42,10 @@ export {
   readModelInMemoryRepository,
   persistingProjector,
   persistingProjectorAbility,
+  requestRecord,
+  queryProjector,
+  queryProjectionDecider,
+  queryProjectorAbility,
 };
 
 export const ReadModelStep = {
@@ -53,6 +61,17 @@ export const ReadModelPlugin = {
     const files = [];
 
     for (const rm of model.readModels) {
+      // Query read model (request/response, "---" divider): request record +
+      // query projector + decider + ability. No entity, no repository, no
+      // PersistingProjector — just the calculation seam.
+      if (rm.isQuery) {
+        const p = queryProjector(rm, ctx);
+        files.push(readModel(rm), requestRecord(rm), p);
+        files.push(...ctx.collaboratorScaffolds(p.collaborators));
+        files.push(queryProjectorAbility(rm, ctx, p.collaborators));
+        continue;
+      }
+
       if (rm.keyed) {
         const p = persistingProjector(rm, ctx.eventsById, ctx);
         files.push(

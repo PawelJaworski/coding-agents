@@ -288,6 +288,14 @@ function parseMdText(text) {
       }
       (cur.fields || (cur.fields = [])).push(`${'  '.repeat(depth - 1)}${fieldName}`);
     }
+    // Read-model-only: a standalone "---" line (horizontal-rule syntax) acts
+    // as a request/response divider.  It is stored as a sentinel in BOTH
+    // `fields` and `fieldTrees` so that buildModel can split each list at the
+    // same marker.  For non-read-model files the sentinel is never consulted.
+    if (/^---\s*$/.test(line.trim())) {
+      (cur.fields || (cur.fields = [])).push('---');
+      (cur.fieldTrees || (cur.fieldTrees = [])).push({ name: '---', list: false, children: [] });
+    }
   }
 
   function lastFieldAtDepth(fields, depth) {
@@ -661,6 +669,28 @@ function buildModel(inputDir) {
   });
   readmodels.forEach((r) => {
     if (!r.name) r.name = r.id;
+    // Split fields at the "---" sentinel (request/response divider).
+    // Fields before --- → request fields (no passthrough check).
+    // Fields after --- → response fields (same passthrough rules as before).
+    const dividerIdx = (r.fields || []).indexOf('---');
+    if (dividerIdx !== -1) {
+      r.requestFields = (r.fields || []).slice(0, dividerIdx);
+      r.responseFields = (r.fields || []).slice(dividerIdx + 1);
+      // Also split fieldTrees at the divider.
+      const treeDividerIdx = (r.fieldTrees || []).findIndex((t) => t.name === '---');
+      if (treeDividerIdx !== -1) {
+        r.requestFieldTrees = (r.fieldTrees || []).slice(0, treeDividerIdx);
+        r.responseFieldTrees = (r.fieldTrees || []).slice(treeDividerIdx + 1);
+      } else {
+        r.requestFieldTrees = [];
+        r.responseFieldTrees = r.fieldTrees || [];
+      }
+    } else {
+      r.requestFields = [];
+      r.responseFields = r.fields || [];
+      r.requestFieldTrees = [];
+      r.responseFieldTrees = r.fieldTrees || [];
+    }
     const idKeyLines = (r.aggregateId ? 1 : 0) + (r.keys ? r.keys.length : 0);
     r._h = cardHeight(VIEW_H + idKeyLines * AGG_ID_H, r.fields);
   });
@@ -836,9 +866,12 @@ function buildModel(inputDir) {
   // Sanity: every non-bracketed read-model field must trace back to the same
   // field on at least one of its subscribed events, OR be a transformation of
   // a special :Id/:Key attribute (e.g., "policy id" matches "policy:Id").
+  // Fields before a "---" divider are request fields — they are caller-provided
+  // input and are NOT subject to the passthrough check.
   readmodels.forEach((rm) => {
     const subEvents = (rm.subscribes || []).map((id) => events.find((e) => e.id === id)).filter(Boolean);
-    (rm.fieldTrees || []).forEach((f) => {
+    // Only check response fields (after the "---" divider).
+    (rm.responseFieldTrees || []).forEach((f) => {
       if (isBracketedField(f.name)) return;
       if (isDoubleQuestionField(f.name)) return;
       if (hasMatchingStructuredField(f, subEvents.map((e) => e.fieldTrees))) return;
@@ -1148,6 +1181,7 @@ td{padding:0;vertical-align:middle;text-align:center;border:none}
 .fields ul{list-style:none;margin:0;padding:0}
 .fields li{font-size:10px;line-height:14px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fields li::before{content:'•';margin-right:5px;opacity:.6}
+.fields-separator{height:1px;margin:4px 0;background:#bbb;border:none}
 .sys-badge{position:absolute;top:-10px;font-size:9px;background:#5E35B1;color:#fff;padding:2px 6px;border-radius:10px}
 .tr-badge{position:absolute;top:-10px;font-size:9px;background:#004d40;color:#fff;padding:2px 6px;border-radius:10px}
 .gwt-badge{position:absolute;bottom:-10px;font-size:9px;background:#2196F3;color:#fff;padding:2px 6px;border-radius:10px;cursor:pointer;z-index:10}

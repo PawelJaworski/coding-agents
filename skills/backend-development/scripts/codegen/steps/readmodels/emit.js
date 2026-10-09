@@ -814,3 +814,193 @@ ${dsl}
   };
 }
 
+// --- query read models (request/response, "---" divider) --------------------
+// A query read model is a request -> runtime calculation -> response pattern:
+// caller-provided request attributes in, computed response attributes out, no
+// application state changed. Generated code is similar to a state projector's
+// apply() seam but WITHOUT hydrate (no event-stream fold) and WITHOUT
+// persisting (no repository, no entity, no PersistingProjector). The
+// calculation lives in a projection decider whose stubs throw until a GWT
+// scenario drives them out.
+
+export function requestRecord(rm) {
+  const imports = importBlock(rm.requestFields.flatMap((f) => f.imports));
+  return {
+    package: rm.package,
+    className: rm.requestClassName,
+    overwrite: true,
+    content: `package ${rm.package};
+
+${imports ? imports + '\n\n' : ''}public record ${rm.requestClassName}(${components(rm.requestFields)}) {
+}
+`,
+  };
+}
+
+export function queryProjector(rm, ctx) {
+  const base = ctx.basePackage;
+  const extraImports = [];
+
+  const decider = collaborator({
+    fieldName: 'decider',
+    className: rm.deciderClassName,
+    testInstantiation: `new ${rm.deciderClassName}()`,
+    scaffold: () => queryProjectionDecider(rm, base),
+  });
+
+  // Map each response field: name-match a request field -> request.field(),
+  // [bracketed]/unmappable -> decider, anything else -> decider (no automatic
+  // source without hydrate).
+  let delegated = false;
+  const args = rm.responseFields.map((f) => {
+    const r = resolveArg(f, {
+      sourceFields: rm.requestFields,
+      sourceExpr: 'request',
+      delegate: { ...decider, args: 'request' },
+      fallback: (field) => `decider.${field.name}(request)`,
+    });
+    if (r.delegated) delegated = true;
+    extraImports.push(...r.imports);
+    return r.expr;
+  });
+
+  const collaborators = [decider];
+
+  // REST endpoint: one @RequestParam per request field (none = no params).
+  const requestParams = rm.requestFields
+    .map((f) => `@RequestParam ${f.javaType} ${f.name}`)
+    .join(', ');
+  const requestArgs = rm.requestFields.map((f) => f.name).join(', ');
+  const responseType = rm.collection ? `List<${rm.className}>` : rm.className;
+
+  const imports = importBlock([
+    ...(rm.collection ? ['java.util.List'] : []),
+    'lombok.RequiredArgsConstructor',
+    'org.springframework.stereotype.Component',
+    'org.springframework.web.bind.annotation.GetMapping',
+    'org.springframework.web.bind.annotation.RequestParam',
+    'org.springframework.web.bind.annotation.RestController',
+    ...collaboratorImports(collaborators),
+    ...extraImports,
+    ...rm.requestFields.flatMap((f) => f.imports),
+    ...rm.responseFields.flatMap((f) => f.imports),
+  ]);
+
+  // Single-response: build the record from mapped fields. Collection: the
+  // calculation may return any number of rows — generate a stub the developer
+  // implements (same spirit as a [bracketed] decider stub).
+  const applyBody = rm.collection
+    ? `        throw new UnsupportedOperationException(
+                "Query '${rm.id}' has no implementation yet");`
+    : `        return new ${rm.className}(
+${args.map((a) => `                ${a}`).join(',\n')});`;
+
+  return {
+    package: rm.package,
+    className: rm.projectorClassName,
+    overwrite: true,
+    logic: true,
+    collaborators,
+    content: `package ${rm.package};
+
+${imports}
+
+@RestController
+@Component
+@RequiredArgsConstructor
+public class ${rm.projectorClassName} {
+
+${fieldDeclarations(collaborators)}
+
+    @GetMapping("${rm.getMapping}")
+    public ${responseType} ${rm.getterMethod}(${requestParams}) {
+        return apply(new ${rm.requestClassName}(${requestArgs}));
+    }
+
+    public ${responseType} apply(${rm.requestClassName} request) {
+${applyBody}
+    }
+}
+`,
+  };
+}
+
+// Decider stubs for a query read model. Stubs take (request) — there is no
+// state or event to pass. Every response field that is not a request
+// pass-through gets a stub: [bracketed] decisions, unmappable structured
+// fields, and fields with no matching request field (no automatic source).
+export function queryProjectionDecider(rm, base) {
+  const methods = [];
+  const imports = ['org.springframework.stereotype.Component'];
+  const requestType = rm.requestClassName;
+  const requestNames = new Set(rm.requestFields.map((f) => f.name));
+
+  for (const f of rm.responseFields) {
+    // A field that matches a request field is auto-mapped (request.field())
+    // and needs no stub — unless it is [bracketed] or unmappable, which
+    // override the name match and always delegate.
+    const isPassThrough = requestNames.has(f.name) && !f.bracketed && !f.unmappable;
+    if (isPassThrough) continue;
+    if (f.convention) continue; // convention fields are auto-generated
+    imports.push(...f.imports);
+    const reason = f.bracketed
+      ? `"[${f.label}]" on read model '${rm.id}' is a calculation decision with no GWT scenario yet`
+      : f.unmappable
+        ? `"Unsupported structured-field mapping: ${f.unmappable.reason}. Add a more detailed mapping prompt, then implement this method by hand."`
+        : `"Response field '${f.label}' on read model '${rm.id}' has no matching request field — implement this calculation by hand."`;
+    methods.push(`    public ${f.javaType} ${f.name}(${requestType} request) {
+        throw new UnsupportedOperationException(
+                ${reason});
+    }`);
+  }
+
+  return {
+    package: rm.package,
+    className: rm.deciderClassName,
+    once: true,
+    version: SCAFFOLD_VERSION,
+    content: `package ${rm.package};
+
+${importBlock(imports)}
+
+@Component
+public class ${rm.deciderClassName} {
+
+${methods.join('\n\n')}
+}
+`,
+  };
+}
+
+export function queryProjectorAbility(rm, ctx, collaborators) {
+  const responseType = rm.collection ? `List<${rm.className}>` : rm.className;
+  const dsl = `    default boolean ${rm.dslMethod}(${rm.requestClassName} request, Predicate<${responseType}> testCase) {
+        return testCase.test(get${rm.projectorClassName}().apply(request));
+    }`;
+  return {
+    test: true,
+    package: rm.package,
+    className: rm.abilityClassName,
+    overwrite: true,
+    content: `package ${rm.package};
+
+${importBlock([
+  ...(rm.collection ? ['java.util.List'] : []),
+  'java.util.function.Predicate',
+])}
+
+public interface ${rm.abilityClassName} {
+
+    ${rm.projectorClassName} INSTANCE =
+            new ${rm.projectorClassName}(${constructorArgs(collaborators)});
+
+    default ${rm.projectorClassName} get${rm.projectorClassName}() {
+        return ${rm.abilityClassName}.INSTANCE;
+    }
+
+${dsl}
+}
+`,
+  };
+}
+

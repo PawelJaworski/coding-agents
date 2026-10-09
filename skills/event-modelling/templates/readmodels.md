@@ -25,6 +25,34 @@ regular bullet points. Both `:Key` and `:RowKey` inject an identity named
 `attribute key` (never `attribute row key`) — the `Row` marker speaks about
 cardinality, not the name of the key.
 
+### Request / Response split
+
+A read model can represent a **request → runtime calculation → response**
+pattern (a read operation that does not change application state).  Use a
+standalone `---` line to separate request fields from response fields:
+
+```
+## get-policy-by-key
+policy:Id
+Name: Get Policy By Key
+Subscribes: policy-issued
+* policy key                 # ← request attribute (caller-provided input)
+---
+* policy holder              # ← response attribute (output, passthrough-checked)
+* policy coverage
+* [policy number]            # ← calculated (bracketed)
+```
+
+- Fields **before** `---` are **request fields** — they are caller-provided
+  input and are **not** subject to the event passthrough consistency check.
+- Fields **after** `---` are **response fields** — they follow the same
+  passthrough rules as before (must trace back to a subscribed event, or be
+  `[bracketed]` for calculated values).
+- The diagram renders a visible horizontal separator line between the two
+  groups.
+- If there is no `---` line, all fields are treated as response fields
+  (backward-compatible with existing models).
+
 ## underwriting-queue
 policy:Id
 Name: Underwriting Queue
@@ -60,3 +88,13 @@ Subscribes: policy-issued
 * policy id                  # Normal field (bullet) — transformation of policy:Id
 * policy holder
 * coverage period
+
+## get-policy-by-key
+policy:Id
+Name: Get Policy By Key
+Subscribes: policy-issued
+* policy key                 # Request attribute (input to the read operation)
+---
+* policy holder              # Response attribute (output of the read operation)
+* policy coverage
+* [policy number]            # Calculated/system-generated

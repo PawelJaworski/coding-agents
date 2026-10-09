@@ -345,9 +345,11 @@ views):
   `Actor:`. This is the mirror image of the fan-in case above: one UI fans
   **out** to several different commands, while fan-in is several UIs feeding
   **into** the same command — both are legitimate and can be combined freely.
-  Each visual box is a separate interaction node, so clicking one fan-out
-  copy focuses only the command connection represented by that copy rather
-  than merging all commands triggered by the logical UI.
+  Each visual box is a distinct graph node (distinct `data-element`), but they
+  all share the original markdown UI id as `data-ui-id` — so as an
+  *interaction* they are ONE logical UI: clicking any one fan-out copy keeps
+  every copy of that `## heading` visible, together with each copy's own
+  one-hop neighbors (see "Interactivity" below).
 
 - A UI whose id matches a **read model** id, and/or lists read model ids in
   `ConsistsOf:`, is that view's (or views') rendered **output** (e.g. a pdf
@@ -605,25 +607,43 @@ drop (and surviving rows re-fit to their tallest visible card), so no gaps
 are left behind. Arrows disappear with their endpoints (an arrow is drawn iff
 both endpoint cards are visible).
 
-One-hop semantics:
+**Logical UI family.** Clicking a **UI** card does not stop at that one visual
+card. One `uis.md` `## heading` (e.g. `## agent-portal`) can render as several
+cards — a fan-out UI (`Triggers: a, b, c`) gets one copy per command, and an
+entry that is both an input and an output gets a trigger copy plus a
+`--displays` copy. All copies of one heading share `data-ui-id` (the heading
+id). Clicking **any** copy filters to the **whole logical UI**: every copy of
+that `## heading` stays visible, and so does each copy's own one-hop
+neighborhood. The focus outline likewise marks the whole family, not just the
+clicked copy. Non-UI cards — and UI cards rendered only once (including
+standalone UIs, which carry no `data-ui-id`) — keep plain one-hop semantics,
+so e.g. clicking a command still shows only the fan-out copy that triggers
+*that* command. The family rule is scoped to `data-type="ui"`: a translator's
+`data-ui-id` is its `translators.md` id, not a `uis.md` heading, and is not
+expanded.
+
+One-hop semantics (the walk is symmetric — upstream and downstream are both
+followed from every card in the clicked card's family):
 - **Read model** → upstream: its subscribed events; downstream: its output UIs
 - **Command** → upstream: its trigger UIs; downstream: its produced events
 - **Event** → upstream: the producing command; downstream: subscribed read
   models and automated commands
-- **Input UI** → upstream: none (it starts a slice); downstream: the command
-  it triggers
-- **Output UI** → downstream: the read model it displays; upstream: none
+- **Input UI** → upstream: the read model(s) it also displays (if any);
+  downstream: the command it triggers
+- **Output UI** → upstream: the read model(s) it displays; downstream: the
+  command it triggers (if it is an input UI too)
 - **External event / Translator** → downstream: the command(s) it produces
   (start-of-slice nodes)
 
 Each arrow's `data-kind` (`triggers`/`produces`/`observes`/`observes-cmd`/
 `displays`/`translates`/`translates-cmd`) is what lets the traversal
-distinguish edge semantics. The full implementation is in `connectedSet()` in
-`reference/interactivity.js` — read the comments there if you need to change
-the behavior.
+distinguish edge semantics. The full implementation is in `connectedSet()` and
+`familyOf()` in `reference/interactivity.js` — read the comments there if you
+need to change the behavior.
 When one logical UI is rendered more than once, each visual trigger copy and
 its output/view copy use distinct `data-element` graph ids; the original
-markdown UI id remains available as `data-ui-id`.
+markdown UI id remains available as `data-ui-id` and is what groups the copies
+into one logical UI for filtering.
 
 Because `EM_RENDER` replaces the table/SVG nodes, all click handling is
 **event delegation** on `.wrap` (`.card` and `.gwt-badge` resolved via

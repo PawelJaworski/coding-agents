@@ -37,6 +37,17 @@
  *   - upstream: cards that directly feed into the clicked card
  *   - downstream: cards that the clicked card directly feeds into
  *
+ * **Logical UI family**: clicking a UI card does NOT stop at that one visual
+ * card. One uis.md `## heading` (e.g. `## agent-portal`) can render as
+ * several cards — a fan-out UI (`Triggers: a, b, c`) gets one copy per
+ * command, and an entry that is both an input and an output gets a trigger
+ * copy plus a `--displays` copy. All copies of one heading share
+ * `data-ui-id` (the heading id). Clicking ANY copy filters to the WHOLE
+ * logical UI: every copy of that `## heading` stays visible, and so does
+ * each copy's own one-hop neighborhood. Non-UI cards — and UI cards
+ * rendered only once (including standalone UIs, which carry no
+ * `data-ui-id`) — keep plain one-hop semantics.
+ *
  * **Cumulative filtering**: each new click **adds** its neighbors to the
  * visible set (union). Previously shown cards stay visible — they don't
  * disappear when you click a different card. Clicking the same card again
@@ -47,45 +58,78 @@
  * only the visible cards, re-flowing rows and columns so no gaps remain
  * where hidden cards were.
  *
- * One hop means:
+ * One hop means (the walk is symmetric — upstream and downstream are both
+ * followed from every card in the clicked card's family):
  *   - Read model → upstream: its subscribed events; downstream: its output UIs
  *   - Command → upstream: its trigger UIs; downstream: its produced events
  *   - Event → upstream: the producing command; downstream: subscribed read
  *     models and automated commands
- *   - UI → upstream: the command it triggers; downstream: none (UIs are
- *     terminal — no "displays" edge is walked from a clicked UI)
+ *   - Input UI → upstream: the read model(s) it also displays (if any);
+ *     downstream: the command it triggers
+ *   - Output UI → upstream: the read model(s) it displays; downstream: the
+ *     command it triggers (if it is an input UI too)
  *   - External event / Translator → downstream: the command(s) it produces
  *     (they are start-of-slice nodes)
- *   - Output UI → downstream: the read model it displays; upstream: none
  */
 var EDGES=[];
 document.querySelectorAll('[data-from]').forEach(function(l){
   EDGES.push([l.getAttribute('data-from'), l.getAttribute('data-to'), l.getAttribute('data-kind')]);
 });
+// Logical UI -> the visual card ids it renders as (see "Logical UI family"
+// above). One uis.md `## heading` can produce several cards, and every copy
+// carries that heading id in `data-ui-id`. Only `data-type="ui"` cards take
+// part in the family — a translator's `data-ui-id` is its translators.md id,
+// not a uis.md heading, and is out of scope here. Standalone UIs carry no
+// `data-ui-id` at all and are a family of one.
+var UI_FAMILY={};
+document.querySelectorAll('.card').forEach(function(c){
+  if(c.getAttribute('data-type')!=='ui') return;
+  var eid=c.getAttribute('data-element');
+  if(!eid) return;
+  var key=c.getAttribute('data-ui-id')||eid;
+  if(!UI_FAMILY[key]) UI_FAMILY[key]=[];
+  if(UI_FAMILY[key].indexOf(eid)===-1) UI_FAMILY[key].push(eid);
+});
+// The set of visual card ids that together form the clicked card's logical
+// UI (its uis.md `## heading`). Non-UI cards and single-copy UIs map to
+// themselves, so plain one-hop semantics are preserved for them.
+function familyOf(id){
+  var keys=Object.keys(UI_FAMILY);
+  for(var i=0;i<keys.length;i++){
+    if(UI_FAMILY[keys[i]].indexOf(id)!==-1) return UI_FAMILY[keys[i]];
+  }
+  return [id];
+}
 var focused=null;
 var visible=null; // accumulated visible set (cumulative union of all clicks)
 var wrap=document.querySelector('.wrap');
 var pan=null;
 var suppressBackgroundClick=false;
 function connectedSet(startId){
-  // One-hop neighbors: show the clicked card plus the cards directly
-  // upstream (that feed into it) and directly downstream (that it feeds
-  // into). Everything beyond one hop is hidden.
+  // One-hop neighbors of EVERY card in the clicked card's logical-UI family
+  // (see "Logical UI family" above). A UI card is not an individual
+  // interaction node when its uis.md `## heading` renders as several visual
+  // copies — a fan-out UI, or an entry that is both an input and an output.
+  // Clicking any one of its copies therefore keeps every copy of that
+  // heading visible, and adds each copy's own one-hop neighbors (upstream +
+  // downstream). Everything beyond one hop is hidden.
   var visible={};
-  visible[startId]=true;
+  familyOf(startId).forEach(function(id){
+    visible[id]=true;
 
-  // Downstream: edges where startId is the source (startId -> X)
-  EDGES.forEach(function(e){
-    if(e[0]===startId && !visible[e[1]]){
-      visible[e[1]]=true;
-    }
-  });
+    // Downstream: edges where id is the source (id -> X)
+    EDGES.forEach(function(e){
+      if(e[0]===id && !visible[e[1]]){
+        visible[e[1]]=true;
+      }
+    });
 
-  // Upstream: edges where startId is the target (X -> startId)
-  EDGES.forEach(function(e){
-    if(e[1]===startId && !visible[e[0]]){
-      visible[e[0]]=true;
-    }
+    // Upstream: edges where id is the target (X -> id)
+    EDGES.forEach(function(e){
+      if(e[1]===id && !visible[e[0]]){
+        visible[e[0]]=true;
+      }
+    });
   });
 
   return visible;
@@ -106,8 +150,12 @@ function refresh(){
     set = Object.assign(set || {}, roleSet);
   }
   EM_RENDER(set);
+  // The focus outline marks the whole logical-UI family of the clicked card,
+  // not just the one visual copy that was clicked — the copies are one card
+  // in the model (`## heading`), so they focus as one.
+  var activeIds = focused ? familyOf(focused) : [];
   document.querySelectorAll('.card').forEach(function(c){
-    c.classList.toggle('active', c.getAttribute('data-element')===focused);
+    c.classList.toggle('active', activeIds.indexOf(c.getAttribute('data-element'))!==-1);
   });
 }
 

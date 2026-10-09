@@ -1471,11 +1471,18 @@ test('renderPage includes GWT modal CSS styles', () => {
  * built from a list of cards and arrows, then returns a helper to click a card
  * and read back which cards survived the filter (the visible set passed to
  * the EM_RENDER stub). Filtering HIDES non-connected cards entirely.
+ *
+ * Each entry of `cards` is either a plain id string, or `{ id, uiId, type }`
+ * for a card that also carries a logical-UI identity (`data-ui-id` — the
+ * uis.md `## heading` it belongs to) and/or a card kind (`data-type`, e.g.
+ * `'ui'`). Several cards sharing one `uiId` are the visual copies of a single
+ * logical UI (fan-out `Triggers:` copies, plus an output `--displays` copy).
  */
 function loadInteractivity({ cards, arrows }) {
   const vm = require('node:vm');
   const scrollCalls = [];
-  let lastVisible = [...cards]; // EM_RENDER(null) = everything visible
+  const cardIds = cards.map((spec) => (typeof spec === 'string' ? spec : spec.id));
+  let lastVisible = [...cardIds]; // EM_RENDER(null) = everything visible
 
   const mkNode = (attrs) => {
     const classes = new Set();
@@ -1494,6 +1501,8 @@ function loadInteractivity({ cards, arrows }) {
       addEventListener: function (ev, fn) {
         (handlers[ev] ||= []).push(fn);
       },
+      // Role-filter/GWT chrome queries its own subtree; the stub has none.
+      querySelectorAll: () => [],
       dispatch: function (ev, event = {}) {
         const fullEvent = {
           stopPropagation() {},
@@ -1511,8 +1520,14 @@ function loadInteractivity({ cards, arrows }) {
     };
   };
 
-  const cardNodes = cards.map((id) => {
-    const n = mkNode({ 'data-element': id });
+  const cardNodes = cards.map((spec) => {
+    const id = typeof spec === 'string' ? spec : spec.id;
+    const attrs = { 'data-element': id };
+    if (typeof spec !== 'string') {
+      if (spec.uiId) attrs['data-ui-id'] = spec.uiId;
+      if (spec.type) attrs['data-type'] = spec.type;
+    }
+    const n = mkNode(attrs);
     // Delegated clicks resolve the card via e.target.closest('.card').
     n.closest = (sel) => (sel === '.card' ? n : null);
     return n;
@@ -1538,14 +1553,22 @@ function loadInteractivity({ cards, arrows }) {
   // The browser glue calls EM_RENDER(visibleIdsOrNull) on every filter
   // change; the stub records the surviving card ids instead of re-rendering.
   function EM_RENDER(visibleIds) {
-    lastVisible = visibleIds ? cards.filter((c) => visibleIds[c]) : [...cards];
+    lastVisible = visibleIds ? cardIds.filter((c) => visibleIds[c]) : [...cardIds];
   }
+
+  // interactivity.js's role-filter layer reads the model that generate.js
+  // embeds as `EM_MODEL` (roles/columns/uis/readmodels/... lookups). The
+  // focus filter under test here needs none of it, so pass an empty model:
+  // no roles => renderRoleCheckboxes() renders nothing and
+  // computeRoleFilterVisible() returns null, leaving click filtering alone.
+  const EM_MODEL = { roles: [], columns: [], uis: [], readmodels: [] };
 
   const src = fs.readFileSync(
     path.join(__dirname, '..', 'reference', 'interactivity.js'), 'utf8');
   vm.runInNewContext(src, {
     document,
     EM_RENDER,
+    EM_MODEL,
     window: {
       scrollBy(x, y) { scrollCalls.push([x, y]); },
     },
@@ -1554,8 +1577,8 @@ function loadInteractivity({ cards, arrows }) {
   const visibleNow = () => [...lastVisible].sort();
   return {
     clickCard(id) {
-      wrap.dispatch('click', { target: cardNodes[cards.indexOf(id)] });
-      return { visible: visibleNow(), hidden: cards.filter((c) => !lastVisible.includes(c)).sort() };
+      wrap.dispatch('click', { target: cardNodes[cardIds.indexOf(id)] });
+      return { visible: visibleNow(), hidden: cardIds.filter((c) => !lastVisible.includes(c)).sort() };
     },
     clickBackground() {
       wrap.dispatch('click', { target: noop });
@@ -1669,10 +1692,12 @@ test('clicking the diagram background without dragging still clears focus', () =
 
 test('clicking a command fed by a fan-out UI shows only its visual UI copy', () => {
   const fixture = {
+    // Three visual cards of one logical UI (`## shared`): two fan-out trigger
+    // copies (Triggers: cmd-a, cmd-b) plus its output copy.
     cards: [
-      'ui-shared--triggers-cmd-a',
-      'ui-shared--triggers-cmd-b',
-      'ui-shared--displays',
+      { id: 'ui-shared--triggers-cmd-a', uiId: 'shared', type: 'ui' },
+      { id: 'ui-shared--triggers-cmd-b', uiId: 'shared', type: 'ui' },
+      { id: 'ui-shared--displays', uiId: 'shared', type: 'ui' },
       'cmd-a',
       'cmd-b',
       'evt-a',
@@ -1691,6 +1716,9 @@ test('clicking a command fed by a fan-out UI shows only its visual UI copy', () 
   };
   const dom = loadInteractivity(fixture);
 
+  // A command is not a logical UI, so it keeps plain one-hop semantics: only
+  // the fan-out copy that actually triggers THIS command is its neighbor —
+  // its sibling copies stay hidden.
   assert.deepEqual(dom.clickCard('cmd-a').visible, [
     'cmd-a',
     'evt-a',
@@ -1698,11 +1726,12 @@ test('clicking a command fed by a fan-out UI shows only its visual UI copy', () 
   ].sort());
 });
 
-test('clicking one fan-out UI copy follows only that copy command slice', () => {
+test('clicking one fan-out UI copy keeps every copy of the same uis.md heading visible', () => {
   const fixture = {
+    // One logical UI (`## shared`) rendered as two fan-out trigger copies.
     cards: [
-      'ui-shared--triggers-cmd-a',
-      'ui-shared--triggers-cmd-b',
+      { id: 'ui-shared--triggers-cmd-a', uiId: 'shared', type: 'ui' },
+      { id: 'ui-shared--triggers-cmd-b', uiId: 'shared', type: 'ui' },
       'cmd-a',
       'cmd-b',
       'evt-a',
@@ -1721,9 +1750,111 @@ test('clicking one fan-out UI copy follows only that copy command slice', () => 
   };
   const dom = loadInteractivity(fixture);
 
+  // Clicking ANY copy of `## shared` filters to the WHOLE logical UI: both
+  // fan-out copies, plus each copy's one-hop neighbor (its command). The
+  // produced events stay hidden — they are two hops from the UI card.
   assert.deepEqual(dom.clickCard('ui-shared--triggers-cmd-a').visible, [
-    'cmd-a',
     'ui-shared--triggers-cmd-a',
+    'ui-shared--triggers-cmd-b',
+    'cmd-a',
+    'cmd-b',
+  ].sort());
+
+  // ...and the sibling copy filters to the identical set.
+  assert.deepEqual(dom.clickCard('ui-shared--triggers-cmd-b').visible, [
+    'ui-shared--triggers-cmd-a',
+    'ui-shared--triggers-cmd-b',
+    'cmd-a',
+    'cmd-b',
+  ].sort());
+});
+
+test('a UI entry that is both input and output shows its trigger and displays copies together', () => {
+  const fixture = {
+    // One logical UI (`## shared`) with Triggers: cmd-a AND a read-model
+    // source, so it renders a trigger copy plus a --displays copy.
+    cards: [
+      { id: 'ui-shared--triggers-cmd-a', uiId: 'shared', type: 'ui' },
+      { id: 'ui-shared--displays', uiId: 'shared', type: 'ui' },
+      'cmd-a',
+      'evt-a',
+      'rm-shared',
+    ],
+    arrows: [
+      ['ui-shared--triggers-cmd-a', 'cmd-a', 'triggers'],
+      ['cmd-a', 'evt-a', 'produces'],
+      ['evt-a', 'rm-shared', 'observes'],
+      ['rm-shared', 'ui-shared--displays', 'displays'],
+    ],
+  };
+  const dom = loadInteractivity(fixture);
+
+  // Clicking the trigger copy still drags in the --displays copy of the same
+  // `## heading`, and vice versa — one logical UI, one focus.
+  assert.deepEqual(dom.clickCard('ui-shared--triggers-cmd-a').visible, [
+    'ui-shared--triggers-cmd-a',
+    'ui-shared--displays',
+    'cmd-a',
+    'rm-shared',
+  ].sort());
+
+  assert.deepEqual(dom.clickCard('ui-shared--displays').visible, [
+    'ui-shared--triggers-cmd-a',
+    'ui-shared--displays',
+    'cmd-a',
+    'rm-shared',
+  ].sort());
+});
+
+test('cards of two different uis.md headings never merge into one family', () => {
+  const fixture = {
+    cards: [
+      { id: 'ui-portal--triggers-cmd-a', uiId: 'agent-portal', type: 'ui' },
+      { id: 'ui-portal--triggers-cmd-b', uiId: 'agent-portal', type: 'ui' },
+      { id: 'ui-form--triggers-cmd-b', uiId: 'policy-application-form', type: 'ui' },
+      'cmd-a',
+      'cmd-b',
+    ],
+    arrows: [
+      ['ui-portal--triggers-cmd-a', 'cmd-a', 'triggers'],
+      ['ui-portal--triggers-cmd-b', 'cmd-b', 'triggers'],
+      ['ui-form--triggers-cmd-b', 'cmd-b', 'triggers'],
+    ],
+  };
+  const dom = loadInteractivity(fixture);
+
+  // `## agent-portal` fans out over cmd-a and cmd-b; `##
+  // policy-application-form` is a separate logical UI that also triggers
+  // cmd-b. Clicking the portal copy must NOT pull in the form's card —
+  // the shared command is reached, its other trigger UI is not.
+  assert.deepEqual(dom.clickCard('ui-portal--triggers-cmd-a').visible, [
+    'ui-portal--triggers-cmd-a',
+    'ui-portal--triggers-cmd-b',
+    'cmd-a',
+    'cmd-b',
+  ].sort());
+});
+
+test('translator fan-out copies do NOT form a logical UI family', () => {
+  const fixture = {
+    // Translators carry data-ui-id too (their translators.md id), but that is
+    // not a uis.md heading — the family rule is scoped to data-type="ui".
+    cards: [
+      { id: 'tr-bot--cmd-a', uiId: 'bot', type: 'tr' },
+      { id: 'tr-bot--cmd-b', uiId: 'bot', type: 'tr' },
+      'cmd-a',
+      'cmd-b',
+    ],
+    arrows: [
+      ['tr-bot--cmd-a', 'cmd-a', 'translates-cmd'],
+      ['tr-bot--cmd-b', 'cmd-b', 'translates-cmd'],
+    ],
+  };
+  const dom = loadInteractivity(fixture);
+
+  assert.deepEqual(dom.clickCard('tr-bot--cmd-a').visible, [
+    'tr-bot--cmd-a',
+    'cmd-a',
   ].sort());
 });
 
